@@ -18,6 +18,11 @@ from aetherlab.ui.qt_compat import QtCore, require_qt
 require_qt()
 
 
+class _PipelineCancelled(Exception):
+    """Internal sentinel exception for pipeline cancellation (#2)."""
+    pass
+
+
 class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
     solver_ready = QtCore.pyqtSignal(object)
     rag_ready = QtCore.pyqtSignal(object)
@@ -33,11 +38,26 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self.request = request
         self.settings = settings
         self.render_quality = render_quality
+        self._cancelled = False  # #2: pipeline cancel flag
+
+    def cancel(self) -> None:
+        """Request cancellation of the running pipeline (#2)."""
+        self._cancelled = True
+
+    def _check_cancelled(self) -> None:
+        """Raise if pipeline was cancelled — checked between stages (#2)."""
+        if self._cancelled:
+            raise _PipelineCancelled()
 
     def run(self) -> None:
         try:
             asyncio.run(self._run_async())
+        except _PipelineCancelled:
+            self.status.emit("Pipeline cancelled by user.")
         except Exception as exc:
+            if self._cancelled:
+                self.status.emit("Pipeline cancelled by user.")
+                return
             self.failure.emit(
                 PipelineError(
                     stage="pipeline",
@@ -52,7 +72,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         cached = cache.get(key)
 
         # ── Worker A: solve ──
-        self.progress.emit(5, "Solving analytical scaffold…")
+        self.progress.emit(5, "Solving analytical scaffold\u2026")
         if cached and cached.solver and self._solver_cache_usable(cached.solver):
             solver = cached.solver
             self.status.emit("Loaded analytical solution from SQLite cache.")
@@ -63,12 +83,15 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self.solver_ready.emit(solver)
         self.progress.emit(30, "Analytical solution ready")
 
-        # ── Auto-ingest library ──
+        self._check_cancelled()
+
+        # ── Auto-ingest library (#16 — emit progress) ──
+        self.progress.emit(32, "Indexing textbook library\u2026")
         await self._ensure_ingested()
 
-        # ─ Workers B + C in parallel: RAG + scene gen ──
-        # Both only need solver.keywords — no dependency between them.
-        # Running in parallel saves ~2-4 min on xhigh reasoning.
+        self._check_cancelled()
+
+        # ── Workers B + C in parallel: RAG + scene gen ──
         self.progress.emit(35, "Searching references & generating scene in parallel\u2026")
         manim = ManimRuntime(self.settings)
         current_engine, _ = manim.detect_engine()
@@ -97,10 +120,12 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             return scene
 
         rag = await _do_rag()
+        self._check_cancelled()
         self.rag_ready.emit(rag)
         self.progress.emit(50, f"Found {len(rag.hits)} references")
 
         scene = await _do_scene(rag)
+        self._check_cancelled()
         self.scene_ready.emit(scene)
         self.progress.emit(70, "Scene compiled")
 
@@ -117,6 +142,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         else:
             self.status.emit("Reusing cached rendered video.")
             rendered_scene = scene
+        self._check_cancelled()
         self.render_ready.emit(rendered_scene)
         self.progress.emit(95, "Render complete")
 
@@ -132,13 +158,14 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self.progress.emit(100, "Pipeline complete")
 
     async def _ensure_ingested(self) -> None:
-        """Auto-index library files into ChromaDB if empty."""
+        """Auto-index library files into ChromaDB if empty (#16 — progress emitted)."""
         if self.settings.chroma_path.exists():
             try:
                 import chromadb
                 client = chromadb.PersistentClient(path=str(self.settings.chroma_path))
                 collection = client.get_collection("textbooks")
                 if collection.count() > 0:
+                    self.progress.emit(33, f"RAG ready: {collection.count()} chunks indexed")
                     return
             except Exception:
                 pass
@@ -149,6 +176,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 count = ingestor.ingest()
                 if count > 0:
                     self.status.emit(f"Ingested {count} chunks into ChromaDB.")
+                    self.progress.emit(33, f"Ingested {count} chunks into ChromaDB")
             except Exception:
                 pass
 

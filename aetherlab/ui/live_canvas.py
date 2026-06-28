@@ -173,6 +173,7 @@ class LiveCanvas(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(400, 300)
+        self.setMouseTracking(True)
         self._state: CanvasState | None = None
         self._tracer_t = 0.0
         self._trail: deque[QtCore.QPointF] = deque(maxlen=TRAIL_LENGTH)
@@ -185,12 +186,23 @@ class LiveCanvas(QtWidgets.QWidget):
         self._cache_key: tuple | None = None
         self._cached_points: dict[str, list[QtCore.QPointF]] = {}
 
+        # Zoom/pan state (#11)
+        self._zoom_factor = 1.0
+        self._pan_offset = QtCore.QPointF(0.0, 0.0)
+        self._dragging = False
+        self._drag_start = QtCore.QPoint()
+        self._hover_pos: QtCore.QPointF | None = None
+        self._hover_coords: tuple[float, float] | None = None
+
     def set_state(self, state: CanvasState) -> None:
         self._state = state
         self._cache_key = None  # invalidate cache
         self._cached_points.clear()
         self._tracer_t = state.curves[0].t_range[0] if state.curves else 0.0
         self._trail.clear()
+        # Reset zoom/pan on new state
+        self._zoom_factor = 1.0
+        self._pan_offset = QtCore.QPointF(0.0, 0.0)
         if not self._anim_timer.isActive():
             self._anim_timer.start()
         self.update()
@@ -205,6 +217,101 @@ class LiveCanvas(QtWidgets.QWidget):
 
     def stop(self) -> None:
         self._anim_timer.stop()
+
+    # ── Zoom/pan helpers (#11) ──
+
+    def _effective_ranges(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Return (x_range, y_range) adjusted for zoom and pan."""
+        if not self._state:
+            return (-4.0, 4.0), (-3.0, 3.0)
+        x_min, x_max = self._state.x_range
+        y_min, y_max = self._state.y_range
+        x_center = (x_min + x_max) / 2 + self._pan_offset.x()
+        y_center = (y_min + y_max) / 2 + self._pan_offset.y()
+        x_half = (x_max - x_min) / 2 / self._zoom_factor
+        y_half = (y_max - y_min) / 2 / self._zoom_factor
+        return (x_center - x_half, x_center + x_half), (y_center - y_half, y_center + y_half)
+
+    def _pixel_to_data(self, px: float, py: float, plot_rect: QtCore.QRectF) -> tuple[float, float]:
+        """Convert pixel coordinates to data coordinates using effective ranges."""
+        x_range, y_range = self._effective_ranges()
+        x_min, x_max = x_range
+        y_min, y_max = y_range
+        x = x_min + (px - plot_rect.left()) / plot_rect.width() * (x_max - x_min)
+        y = y_max - (py - plot_rect.top()) / plot_rect.height() * (y_max - y_min)
+        return x, y
+
+    def reset_view(self) -> None:
+        """Reset zoom and pan to defaults."""
+        self._zoom_factor = 1.0
+        self._pan_offset = QtCore.QPointF(0.0, 0.0)
+        self._cache_key = None
+        self._cached_points.clear()
+        self.update()
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._zoom_factor *= 1.15
+        elif delta < 0:
+            self._zoom_factor = max(0.1, self._zoom_factor / 1.15)
+        self._zoom_factor = min(self._zoom_factor, 50.0)
+        self._cache_key = None
+        self._cached_points.clear()
+        self.update()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_start = event.pos()
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if self._dragging and self._state:
+            dx = event.pos().x() - self._drag_start.x()
+            dy = event.pos().y() - self._drag_start.y()
+            self._drag_start = event.pos()
+            x_range, y_range = self._effective_ranges()
+            rect = self.rect()
+            m = self._margin
+            pw = rect.width() - m["left"] - m["right"]
+            ph = rect.height() - m["top"] - m["bottom"]
+            if pw > 0 and ph > 0:
+                data_dx = -dx / pw * (x_range[1] - x_range[0])
+                data_dy = dy / ph * (y_range[1] - y_range[0])
+                self._pan_offset += QtCore.QPointF(data_dx, data_dy)
+                self._cache_key = None
+                self._cached_points.clear()
+            self.update()
+
+        # Hover coordinate readout
+        self._hover_pos = QtCore.QPointF(event.pos())
+        if self._state and self._state.curves:
+            rect = self.rect()
+            m = self._margin
+            plot_rect = QtCore.QRectF(
+                m["left"], m["top"],
+                rect.width() - m["left"] - m["right"],
+                rect.height() - m["top"] - m["bottom"],
+            )
+            if plot_rect.contains(self._hover_pos):
+                self._hover_coords = self._pixel_to_data(
+                    self._hover_pos.x(), self._hover_pos.y(), plot_rect
+                )
+            else:
+                self._hover_coords = None
+        self.update()
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # noqa: N802
+        self._hover_pos = None
+        self._hover_coords = None
+        self.update()
+        super().leaveEvent(event)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
@@ -226,6 +333,29 @@ class LiveCanvas(QtWidgets.QWidget):
         if self._tracer_t > t_max:
             self._tracer_t = t_min
             self._trail.clear()
+
+        # Compute tracer position and append to trail (fixes dead trail bug)
+        try:
+            t_arr = np.array([self._tracer_t])
+            x = float(curve.x_fn(t_arr, self._state.params)[0])
+            y = float(curve.y_fn(t_arr, self._state.params)[0])
+            if np.isfinite(x) and np.isfinite(y):
+                rect = self.rect()
+                m = self._margin
+                plot_rect = QtCore.QRectF(
+                    m["left"], m["top"],
+                    rect.width() - m["left"] - m["right"],
+                    rect.height() - m["top"] - m["bottom"],
+                )
+                # Use effective ranges for zoom/pan-aware trail
+                eff_x, eff_y = self._effective_ranges()
+                eff_state = CanvasState(
+                    x_range=eff_x, y_range=eff_y, params=self._state.params,
+                )
+                self._trail.append(self._map_to_plot(x, y, plot_rect, eff_state))
+        except Exception:
+            pass
+
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
@@ -243,8 +373,21 @@ class LiveCanvas(QtWidgets.QWidget):
         painter.fillRect(rect, bg_gradient)
 
         if not self._state or not self._state.curves:
+            # Empty state with onboarding hint (#12)
             painter.setPen(QtGui.QColor("#64748B"))
-            painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "No curve data")
+            painter.setFont(QtGui.QFont("Segoe UI", 14))
+            painter.drawText(
+                rect.adjusted(0, -40, 0, 0),
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                "No curve data",
+            )
+            painter.setPen(QtGui.QColor("#475569"))
+            painter.setFont(QtGui.QFont("Segoe UI", 11))
+            painter.drawText(
+                rect.adjusted(0, 20, 0, 0),
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                "Enter a physics problem below and press Run to get started.",
+            )
             return
 
         state = self._state
@@ -253,6 +396,19 @@ class LiveCanvas(QtWidgets.QWidget):
             m["left"], m["top"],
             rect.width() - m["left"] - m["right"],
             rect.height() - m["top"] - m["bottom"],
+        )
+
+        # Apply zoom/pan to ranges (#11) — create a paint-time state copy
+        eff_x, eff_y = self._effective_ranges()
+        paint_state = CanvasState(
+            title=state.title,
+            x_label=state.x_label,
+            y_label=state.y_label,
+            x_range=eff_x,
+            y_range=eff_y,
+            params=state.params,
+            curves=state.curves,
+            show_phase_portrait=state.show_phase_portrait,
         )
 
         # Title
@@ -265,30 +421,64 @@ class LiveCanvas(QtWidgets.QWidget):
         )
 
         # Grid + axes
-        self._draw_grid(painter, plot_rect, state)
-        self._draw_axes(painter, plot_rect, state)
+        self._draw_grid(painter, plot_rect, paint_state)
+        self._draw_axes(painter, plot_rect, paint_state)
 
-        # Precompute or fetch cached curve points
-        ck = self._build_cache_key(state)
+        # Precompute or fetch cached curve points (uses paint_state for zoom/pan)
+        ck = self._build_cache_key(paint_state)
         if ck != self._cache_key:
             self._cached_points.clear()
-            for curve in state.curves:
-                self._cached_points[curve.name] = self._compute_points(curve, state, plot_rect)
+            for curve in paint_state.curves:
+                self._cached_points[curve.name] = self._compute_points(curve, paint_state, plot_rect)
             self._cache_key = ck
 
         # Curves (with glow)
-        for curve in state.curves:
-            self._draw_curve_glow(painter, plot_rect, state, curve)
+        for curve in paint_state.curves:
+            self._draw_curve_glow(painter, plot_rect, paint_state, curve)
 
         # Trail
-        self._draw_trail(painter, plot_rect, state)
+        self._draw_trail(painter, plot_rect, paint_state)
 
         # Tracer
-        if state.curves:
-            self._draw_tracer(painter, plot_rect, state, state.curves[0])
+        if paint_state.curves:
+            self._draw_tracer(painter, plot_rect, paint_state, paint_state.curves[0])
 
         # Legend
-        self._draw_legend(painter, plot_rect, state)
+        self._draw_legend(painter, plot_rect, paint_state)
+
+        # Hover coordinate readout (#11)
+        if self._hover_coords and self._hover_pos and plot_rect.contains(self._hover_pos):
+            hx, hy = self._hover_coords
+            # Crosshair
+            cross_pen = QtGui.QPen(QtGui.QColor("#334155"), 1, QtCore.Qt.PenStyle.DotLine)
+            painter.setPen(cross_pen)
+            painter.drawLine(
+                QtCore.QPointF(self._hover_pos.x(), plot_rect.top()),
+                QtCore.QPointF(self._hover_pos.x(), plot_rect.bottom()),
+            )
+            painter.drawLine(
+                QtCore.QPointF(plot_rect.left(), self._hover_pos.y()),
+                QtCore.QPointF(plot_rect.right(), self._hover_pos.y()),
+            )
+            # Coord label
+            coord_font = QtGui.QFont("Cascadia Code", 9)
+            painter.setFont(coord_font)
+            label = f"({hx:.3f}, {hy:.3f})"
+            lx = min(self._hover_pos.x() + 14, plot_rect.right() - 100)
+            ly = max(self._hover_pos.y() - 22, plot_rect.top() + 16)
+            painter.setPen(QtGui.QColor("#94A3B8"))
+            painter.drawText(QtCore.QRectF(lx, ly, 120, 16), QtCore.Qt.AlignmentFlag.AlignLeft, label)
+
+        # Zoom indicator
+        if abs(self._zoom_factor - 1.0) > 0.01:
+            zoom_font = QtGui.QFont("Cascadia Code", 9)
+            painter.setFont(zoom_font)
+            painter.setPen(QtGui.QColor("#475569"))
+            painter.drawText(
+                QtCore.QRectF(plot_rect.right() - 80, plot_rect.top() + 4, 76, 16),
+                QtCore.Qt.AlignmentFlag.AlignRight,
+                f"{self._zoom_factor:.1f}x",
+            )
 
     def _build_cache_key(self, state: CanvasState) -> tuple:
         return (

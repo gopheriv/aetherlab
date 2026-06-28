@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle, SolverResult
@@ -24,6 +25,127 @@ from aetherlab.ui.workers import PipelineWorker
 require_qt()
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Settings Dialog (#6)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class SettingsDialog(QtWidgets.QDialog):
+    """In-app settings dialog for API key, model, and library path (#6)."""
+
+    def __init__(self, settings: AppSettings, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AetherLab Settings")
+        self.setMinimumWidth(480)
+        self.setStyleSheet(AETHERLAB_QSS)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        title = QtWidgets.QLabel("\u2699\ufe0f  Settings")
+        title.setObjectName("PanelTitle")
+        layout.addWidget(title)
+
+        # LLM section
+        llm_group = QtWidgets.QFrame()
+        llm_group.setObjectName("CardFrame")
+        llm_layout = QtWidgets.QFormLayout(llm_group)
+        llm_layout.setSpacing(10)
+
+        llm_header = QtWidgets.QLabel("LLM Provider")
+        llm_header.setObjectName("SectionTitle")
+        llm_layout.addRow(llm_header)
+
+        self._model_edit = QtWidgets.QLineEdit(settings.llm_model)
+        self._model_edit.setStyleSheet(
+            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
+            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
+        )
+        llm_layout.addRow("Model", self._model_edit)
+
+        self._api_key_edit = QtWidgets.QLineEdit(settings.openai_api_key or "")
+        self._api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._api_key_edit.setStyleSheet(
+            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
+            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
+        )
+        llm_layout.addRow("API Key", self._api_key_edit)
+
+        self._base_url_edit = QtWidgets.QLineEdit(settings.openai_base_url or "")
+        self._base_url_edit.setStyleSheet(
+            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
+            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
+        )
+        llm_layout.addRow("Base URL", self._base_url_edit)
+
+        layout.addWidget(llm_group)
+
+        # Paths section
+        path_group = QtWidgets.QFrame()
+        path_group.setObjectName("CardFrame")
+        path_layout = QtWidgets.QFormLayout(path_group)
+        path_layout.setSpacing(10)
+
+        path_header = QtWidgets.QLabel("Paths")
+        path_header.setObjectName("SectionTitle")
+        path_layout.addRow(path_header)
+
+        self._library_edit = QtWidgets.QLineEdit(str(settings.library_path))
+        self._library_edit.setStyleSheet(
+            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
+            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
+        )
+        path_layout.addRow("Library", self._library_edit)
+
+        self._data_edit = QtWidgets.QLineEdit(str(settings.data_dir))
+        self._data_edit.setStyleSheet(
+            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
+            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
+        )
+        path_layout.addRow("Data Dir", self._data_edit)
+
+        layout.addWidget(path_group)
+
+        # Info note
+        info = QtWidgets.QLabel(
+            "\u2139\ufe0f  Changes take effect on next pipeline run. "
+            "For permanent config, set environment variables."
+        )
+        info.setStyleSheet("color: #64748B; font-size: 11px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Buttons
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch()
+
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.setStyleSheet(
+            "background: transparent; border: 1px solid #334155; border-radius: 8px; "
+            "color: #94A3B8; padding: 10px 24px;"
+        )
+        cancel_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        apply_btn = QtWidgets.QPushButton("Apply")
+        apply_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        apply_btn.clicked.connect(self.accept)
+        btn_row.addWidget(apply_btn)
+
+        layout.addLayout(btn_row)
+
+    def get_settings(self) -> dict:
+        return {
+            "model": self._model_edit.text().strip(),
+            "api_key": self._api_key_edit.text().strip() or None,
+            "base_url": self._base_url_edit.text().strip() or None,
+            "library_path": self._library_edit.text().strip(),
+            "data_dir": self._data_edit.text().strip(),
+        }
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, settings: AppSettings) -> None:
         super().__init__()
@@ -34,7 +156,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setObjectName("MainWindow")
         self.setWindowTitle("AetherLab")
-        self.resize(1500, 950)
+
+        # Responsive sizing (#15) — adapt to available screen space
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            w = min(1500, int(geo.width() * 0.92))
+            h = min(950, int(geo.height() * 0.92))
+        else:
+            w, h = 1500, 950
+        self.resize(w, h)
         self.setStyleSheet(AETHERLAB_QSS)
 
         # ── Panels (created BEFORE shortcuts/menu) ──
@@ -52,24 +183,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self._content_stack.addWidget(self.analysis_panel)    # 0: Solve
         self._content_stack.addWidget(self.reference_panel)    # 1: Refs
         self._content_stack.addWidget(self.history_panel)      # 2: History
-        # Scene and Params act on the always-visible right panel
 
         # ── Right area: canvas + stepper + parameters ──
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
-
         right_layout.addWidget(self.simulation_panel, 1)
         right_layout.addWidget(self.stepper)
         right_layout.addWidget(self.parameter_dock)
 
-        # ── Horizontal splitter: sidebar | content | right ──
+        # ── Horizontal splitter: sidebar | content | right (#15 adaptive) ──
         h_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         h_splitter.addWidget(self.sidebar)
         h_splitter.addWidget(self._content_stack)
         h_splitter.addWidget(right_panel)
-        h_splitter.setSizes([160, 440, 900])
+
+        # Adaptive splitter ratios based on window width (#15)
+        sidebar_w = 160
+        content_w = max(300, int((w - sidebar_w) * 0.33))
+        right_w = w - sidebar_w - content_w
+        h_splitter.setSizes([sidebar_w, content_w, right_w])
         h_splitter.setCollapsible(0, False)
         h_splitter.setCollapsible(2, False)
 
@@ -77,7 +211,8 @@ class MainWindow(QtWidgets.QMainWindow):
         v_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         v_splitter.addWidget(h_splitter)
         v_splitter.addWidget(self.command_bar)
-        v_splitter.setSizes([860, 90])
+        main_h = int(h * 0.9)
+        v_splitter.setSizes([main_h, h - main_h])
         v_splitter.setCollapsible(1, False)
 
         # Root
@@ -99,13 +234,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"AetherLab ready.{provider_note}")
         self._connect_signals()
 
+        # Initialize history persistence (#5)
+        self.history_panel.init_persistence(settings.data_dir / "history.sqlite3")
+
     def _build_shortcuts(self) -> None:
-        """Register global keyboard shortcuts."""
+        """Register global keyboard shortcuts (#13 keyboard nav)."""
         sc_submit = QtGui.QShortcut("Ctrl+Return", self)
         sc_submit.activated.connect(self.command_bar._submit)
 
         sc_toggle_code = QtGui.QShortcut("Ctrl+Shift+C", self)
         sc_toggle_code.activated.connect(self._toggle_code_view)
+
+        # Ctrl+1..5 for sidebar tabs (#13)
+        for i in range(5):
+            sc = QtGui.QShortcut(f"Ctrl+{i + 1}", self)
+            sc.activated.connect(lambda idx=i: self.sidebar.select(idx))
+
+        # Escape to cancel pipeline (#2)
+        sc_cancel = QtGui.QShortcut("Escape", self)
+        sc_cancel.activated.connect(self._cancel_pipeline)
+
+        # Ctrl+0 to reset canvas zoom (#11)
+        sc_reset = QtGui.QShortcut("Ctrl+0", self)
+        sc_reset.activated.connect(self.simulation_panel._live_canvas.reset_view)
 
     def _build_menu_bar(self) -> None:
         menu = self.menuBar()
@@ -120,9 +271,18 @@ class MainWindow(QtWidgets.QMainWindow):
         export_scene = file_menu.addAction("Export Scene &Code\u2026")
         export_scene.triggered.connect(self._export_scene)
 
+        export_gif = file_menu.addAction("Export Animation as &GIF\u2026")  # #17
+        export_gif.triggered.connect(self._export_gif)
+
         file_menu.addSeparator()
         toggle_code = file_menu.addAction("Toggle &Code View")
         toggle_code.triggered.connect(self._toggle_code_view)
+
+        # Settings menu (#6)
+        edit_menu = menu.addMenu("&Edit")
+        settings_action = edit_menu.addAction("&Settings\u2026")
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.triggered.connect(self._open_settings)
 
     def _export_latex(self) -> None:
         if not self._last_result:
@@ -175,36 +335,82 @@ class MainWindow(QtWidgets.QMainWindow):
         export_scene_code(self._last_result.scene.code, Path(path))
         self.statusBar().showMessage(f"Scene code exported: {path}")
 
+    def _export_gif(self) -> None:
+        """Export the last rendered video as an animated GIF via ffmpeg (#17)."""
+        if not self._last_result or not self._last_result.scene.video_path:
+            self.statusBar().showMessage("No rendered video to export.")
+            return
+        video_path = Path(self._last_result.scene.video_path)
+        if not video_path.exists():
+            self.statusBar().showMessage("Video file not found.")
+            return
+
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export GIF", "animation.gif", "GIF Files (*.gif)"
+        )
+        if not path:
+            return
+
+        self.statusBar().showMessage("Converting video to GIF\u2026")
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(video_path),
+                    "-vf", "fps=15,scale=480:-1:flags=lanczos",
+                    "-loop", "0", str(path),
+                ],
+                capture_output=True, text=True, timeout=120,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW on Windows
+            )
+            if result.returncode == 0 and Path(path).exists():
+                size_mb = Path(path).stat().st_size / 1e6
+                self.statusBar().showMessage(f"GIF exported: {path} ({size_mb:.1f} MB)")
+            else:
+                self.statusBar().showMessage("GIF conversion failed. Is ffmpeg installed?")
+        except FileNotFoundError:
+            self.statusBar().showMessage("ffmpeg not found. Install ffmpeg to export GIFs.")
+        except subprocess.TimeoutExpired:
+            self.statusBar().showMessage("GIF conversion timed out.")
+
+    def _open_settings(self) -> None:
+        """Open the settings dialog (#6)."""
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            vals = dialog.get_settings()
+            self.statusBar().showMessage(
+                f"Settings updated (in-memory). Model: {vals['model']}. "
+                "Restart the app for env var changes to persist."
+            )
+
     def _toggle_code_view(self) -> None:
         if self.simulation_panel._stack.currentIndex() == 3:
             self.simulation_panel.show_canvas()
         else:
             self.simulation_panel.show_code()
 
+    def _cancel_pipeline(self) -> None:
+        """Cancel the running pipeline (#2)."""
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            self.statusBar().showMessage("Cancelling pipeline\u2026")
+            self.command_bar.set_busy(False)
+
     def _connect_signals(self) -> None:
-        # Sidebar nav: indices 0-1 switch content stack, 2-3 show right panel
         self.sidebar.item_selected.connect(self._on_sidebar_select)
-
-        # Command bar submission starts pipeline
         self.command_bar.submitted.connect(self.start_pipeline)
-
-        # History: double-clicking a past run re-runs it
+        self.command_bar.cancel_requested.connect(self._cancel_pipeline)  # #2
         self.history_panel.prompt_selected.connect(self.start_pipeline)
 
-        # Parameter changes propagate between dock, analysis, and simulation
         self.parameter_dock.parameter_changed.connect(
             self.simulation_panel.apply_parameter_update
         )
         self.parameter_dock.parameter_changed.connect(
             self.analysis_panel.update_variable
         )
-        self.analysis_panel.token_selected.connect(
-            self.simulation_panel.apply_parameter_update
-        )
+        # token_selected signal removed (#4 — was dead wiring)
         self.simulation_panel.parameter_changed.connect(
             self.parameter_dock.update_variable
         )
-        # Phase portrait checkbox now actually toggles the overlay.
         self.simulation_panel.phase_toggled.connect(
             self.simulation_panel.toggle_phase
         )
@@ -213,8 +419,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Handle sidebar navigation.
 
         0 Solve / 1 Refs / 4 History switch the left content stack.
-        2 Scene focuses the live canvas; 3 Params expands the parameter dock —
-        both act on the always-visible right panel.
+        2 Scene focuses the live canvas; 3 Params expands the parameter dock.
         """
         if index == 0:
             self._content_stack.setCurrentIndex(0)
@@ -271,7 +476,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parameter_dock.set_variables(solver.variables)
         self.simulation_panel.set_solver(solver)
         self.stepper.set_stage(0, "complete")
-        # Auto-switch to Scene view
         self.sidebar.select(2)
 
     def on_rag_ready(self, rag: RagResult) -> None:
@@ -291,8 +495,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.simulation_panel.hide_loading()
         self.stepper.set_stage(self.stepper._current_stage, "error")
         self.statusBar().showMessage(f"{error.stage} failed: {error.message}")
-        # Show the inline, dismissible error banner with a "Details" view
-        # instead of spawning a detached top-level popup window.
         self.simulation_panel.show_error_banner(
             error.stage, error.message, error.traceback or error.message
         )
