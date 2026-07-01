@@ -10,7 +10,6 @@ from collections import Counter
 from aetherlab.core.models import ProblemRequest, SolverResult
 from aetherlab.core.settings import AppSettings
 
-
 COMMON_WORDS = {
     "about",
     "after",
@@ -74,21 +73,19 @@ class AsyncLLMCoordinator:
                 timeout=max(self.settings.llm_timeout_seconds, 300),
             )
 
-        response = await self._client.chat.completions.create(
-            model=self.settings.llm_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the AetherLab analytical solver. "
-                        "Return strict JSON with keys summary, derivation_steps, "
-                        "keywords, and variables. Variables must map names to numbers."
-                    ),
-                },
-                {"role": "user", "content": request.prompt},
-            ],
-            temperature=0.2,
-        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the AetherLab analytical solver. "
+                    "Return strict JSON with keys summary, derivation_steps, "
+                    "keywords, and variables. Variables must map names to numbers."
+                ),
+            },
+            {"role": "user", "content": request.prompt},
+        ]
+
+        response = await self._create_completion(messages)
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)
         return SolverResult(
@@ -99,6 +96,29 @@ class AsyncLLMCoordinator:
             model_name=self.settings.llm_model,
             raw_response=content,
         )
+
+    async def _create_completion(self, messages: list[dict[str, str]]):
+        """Call the chat endpoint, requesting a strict JSON object when supported.
+
+        Some OpenAI-compatible servers reject ``response_format``; when the
+        request fails *because of that parameter* we transparently retry without
+        it and rely on the regex fallback in :meth:`_parse_json`. Other errors
+        (auth, network) propagate so the caller can fall back deterministically.
+        """
+        base_kwargs = {
+            "model": self.settings.llm_model,
+            "messages": messages,
+            "temperature": 0.2,
+        }
+        try:
+            return await self._client.chat.completions.create(
+                **base_kwargs,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:  # noqa: BLE001 — narrow via message inspection
+            if not _is_response_format_unsupported(exc):
+                raise
+            return await self._client.chat.completions.create(**base_kwargs)
 
     def _parse_json(self, content: str) -> dict[str, object]:
         try:
@@ -137,6 +157,21 @@ class AsyncLLMCoordinator:
             model_name="deterministic-fallback",
             raw_response=note,
         )
+
+
+def _is_response_format_unsupported(exc: Exception) -> bool:
+    """Heuristically decide whether an error was caused by ``response_format``.
+
+    We only want to retry-without-the-param when the server specifically
+    complained about it — not on auth/network failures, which would waste a
+    second call before the deterministic fallback kicks in.
+    """
+    text = str(exc).lower()
+    if "response_format" in text or "response format" in text:
+        return True
+    # Generic "unknown/unsupported/invalid parameter" style rejections.
+    param_words = ("unsupported", "unknown", "not supported", "invalid", "unrecognized")
+    return "param" in text and any(word in text for word in param_words)
 
 
 def extract_keywords(prompt: str, limit: int = 8) -> list[str]:
