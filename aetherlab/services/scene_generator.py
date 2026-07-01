@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
+from aetherlab.services.error_learner import preventive_pitfalls_block
 
 log = logging.getLogger(__name__)
 
@@ -71,13 +71,23 @@ class SceneGenerator:
         solver: SolverResult,
         rag: RagResult,
         class_name: str = "AetherLabScene",
+        *,
+        feedback: str | None = None,
+        previous_code: str | None = None,
     ) -> str:
-        """Generate Manim scene code using the LLM."""
+        """Generate Manim scene code using the LLM.
+
+        When ``feedback`` (and optionally ``previous_code``) is supplied, the
+        prompt asks the model to *repair* the previous attempt using the real
+        error text — this powers the error-aware self-heal loop.
+        """
         if not self.settings.openai_api_key:
             return self._fallback_scene(class_name, solver)
 
         try:
-            return await self._generate_remote(request, solver, rag, class_name)
+            return await self._generate_remote(
+                request, solver, rag, class_name, feedback=feedback, previous_code=previous_code
+            )
         except Exception as exc:
             log.warning("LLM scene generation failed, using fallback: %s", exc)
             return self._fallback_scene(class_name, solver)
@@ -88,6 +98,9 @@ class SceneGenerator:
         solver: SolverResult,
         rag: RagResult,
         class_name: str,
+        *,
+        feedback: str | None = None,
+        previous_code: str | None = None,
     ) -> str:
         from openai import AsyncOpenAI
 
@@ -112,7 +125,11 @@ class SceneGenerator:
             rag_lines.append(f"- {hit.source_name}: {hit.excerpt[:200]}")
         rag_context = "\n".join(rag_lines) if rag_lines else "No local references."
 
-        system = SCENE_GENERATION_SYSTEM_PROMPT.format(class_name=class_name)
+        system = (
+            SCENE_GENERATION_SYSTEM_PROMPT.format(class_name=class_name)
+            + "\n\n"
+            + preventive_pitfalls_block()
+        )
         user = SCENE_GENERATION_USER_TEMPLATE.format(
             prompt=request.prompt,
             summary=solver.summary,
@@ -121,6 +138,9 @@ class SceneGenerator:
             rag_count=len(rag.hits),
             rag_context=rag_context,
         )
+
+        if feedback:
+            user += _repair_addendum(feedback, previous_code)
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,
@@ -135,7 +155,7 @@ class SceneGenerator:
         return self._extract_code(content, class_name)
 
     def _extract_code(self, content: str, class_name: str) -> str:
-        """Strip markdown fences and validate the extracted code."""
+        """Strip markdown fences and normalize the extracted code."""
         code = content.strip()
 
         # Strip markdown fences if present
@@ -143,17 +163,14 @@ class SceneGenerator:
         if fence_match:
             code = fence_match.group(1).strip()
 
-        # Ensure the class name matches
+        # Ensure the scene class is named exactly `class_name`, preserving its
+        # base class. This must match ANY base (Scene, ThreeDScene,
+        # MovingCameraScene, PolarPlane-based, etc.), not only `(Scene)`.
         if f"class {class_name}" not in code:
-            # Try to rename
-            code = re.sub(
-                r"class \w+\(Scene\)",
-                f"class {class_name}(Scene)",
-                code,
-                count=1,
-            )
+            code = _rename_scene_class(code, class_name)
 
-        # Ensure import
+        # Ensure imports so the scene is self-contained even if the model
+        # omitted them (or we prepended a rename onto a bare body).
         if "from manim import" not in code and "import manim" not in code:
             code = "from manim import *\nimport numpy as np\n\n" + code
 
@@ -161,11 +178,9 @@ class SceneGenerator:
 
     def _fallback_scene(self, class_name: str, solver: SolverResult) -> str:
         """Deterministic fallback that uses solver variables."""
-        import math
 
         damping = solver.variables.get("damping", 0.15)
         stiffness = solver.variables.get("stiffness", 1.0)
-        mass = solver.variables.get("mass", 1.0)
         title = solver.summary[:70] if solver.summary else "Physics Simulation"
 
         return f'''from manim import *
@@ -212,6 +227,38 @@ class {class_name}(Scene):
         )
         self.wait(2)
 '''.strip() + "\n"
+
+
+def _rename_scene_class(code: str, class_name: str) -> str:
+    """Rename the scene's class to ``class_name`` while preserving its base.
+
+    Matches ``class <Name>(<AnyBase>)`` for any base class. When several classes
+    are present the one whose base mentions ``Scene`` is preferred (that is the
+    actual Manim scene); otherwise the first class definition is renamed.
+    """
+    pattern = re.compile(r"class\s+(\w+)\s*\(([^)]*)\)")
+    matches = list(pattern.finditer(code))
+    if not matches:
+        return code
+
+    target = next((m for m in matches if "Scene" in m.group(2)), matches[0])
+    base = target.group(2)
+    start, end = target.span()
+    return code[:start] + f"class {class_name}({base})" + code[end:]
+
+
+def _repair_addendum(feedback: str, previous_code: str | None) -> str:
+    """Build the repair instruction appended to the user prompt on a retry."""
+    parts = [
+        "\n\n## Repair Request",
+        "Your previous scene failed. Fix it and return the COMPLETE corrected "
+        "scene (full file, not a diff). The exact failure was:",
+        f"```\n{feedback.strip()}\n```",
+    ]
+    if previous_code:
+        parts.append("Your previous (broken) scene was:")
+        parts.append(f"```python\n{previous_code.strip()}\n```")
+    return "\n".join(parts)
 
 
 def _escape(text: str) -> str:

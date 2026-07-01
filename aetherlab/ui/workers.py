@@ -137,7 +137,11 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             scene.status == "rendered" and not (scene.video_path and Path(scene.video_path).exists())
         )
         if needs_render:
-            rendered_scene = manim.render_scene(scene, self.settings, quality=self.render_quality)
+            # render_scene_with_repair adds the error-aware self-heal loop (WP2b);
+            # it needs request/solver/rag to regenerate on a code-level failure.
+            rendered_scene = await manim.render_scene_with_repair(
+                scene, self.request, solver, rag, self.settings, quality=self.render_quality
+            )
             cache.store_scene(key, rendered_scene)
         else:
             self.status.emit("Reusing cached rendered video.")
