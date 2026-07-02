@@ -8,6 +8,7 @@ import re
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.error_learner import preventive_pitfalls_block
+from aetherlab.services.scene_templates import build_scene, detect_domain
 
 log = logging.getLogger(__name__)
 
@@ -177,56 +178,17 @@ class SceneGenerator:
         return code
 
     def _fallback_scene(self, class_name: str, solver: SolverResult) -> str:
-        """Deterministic fallback that uses solver variables."""
-
-        damping = solver.variables.get("damping", 0.15)
-        stiffness = solver.variables.get("stiffness", 1.0)
+        """Deterministic, domain-aware fallback built from solver output (WP7)."""
+        domain = detect_domain(solver.keywords, solver.variables)
         title = solver.summary[:70] if solver.summary else "Physics Simulation"
-
-        return f'''from manim import *
-import numpy as np
-
-
-class {class_name}(Scene):
-    def construct(self):
-        title = Text("{_escape(title)}", font_size=32)
-        title.to_edge(UP)
-
-        axes = Axes(
-            x_range=[-3, 3, 1],
-            y_range=[-2, 2, 1],
-            axis_config={{"include_numbers": True}},
-        ).scale(0.65).shift(DOWN * 0.5)
-
-        damping = ValueTracker({damping})
-        stiffness = ValueTracker({stiffness})
-
-        def get_curve():
-            d = damping.get_value()
-            k = stiffness.get_value()
-            return axes.plot(
-                lambda x: np.exp(-d * (x + 3)) * np.sin(k * x * 2),
-                color=BLUE,
-            )
-
-        curve = always_redraw(get_curve)
-
-        dot = always_redraw(lambda: Dot(
-            axes.c2p(3, np.exp(-damping.get_value() * 6) * np.sin(stiffness.get_value() * 6)),
-            color=YELLOW, radius=0.06,
-        ))
-
-        self.play(Write(title), run_time=1)
-        self.play(Create(axes), run_time=1)
-        self.play(Create(curve), FadeIn(dot), run_time=2)
-        self.wait(2)
-        self.play(
-            damping.animate.set_value({damping * 3}),
-            run_time=3,
-            rate_func=there_and_back,
+        return build_scene(
+            class_name=class_name,
+            domain=domain,
+            title=title,
+            summary=solver.summary or "",
+            steps=solver.derivation_steps,
+            variables=solver.variables,
         )
-        self.wait(2)
-'''.strip() + "\n"
 
 
 def _rename_scene_class(code: str, class_name: str) -> str:
@@ -260,7 +222,3 @@ def _repair_addendum(feedback: str, previous_code: str | None) -> str:
         parts.append(f"```python\n{previous_code.strip()}\n```")
     return "\n".join(parts)
 
-
-def _escape(text: str) -> str:
-    """Escape string for embedding in Python source."""
-    return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
