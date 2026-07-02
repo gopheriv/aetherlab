@@ -5,9 +5,20 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle, SolverResult
+from aetherlab.core.models import (
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+    SolverResult,
+)
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.pdf import compile_latex_to_pdf, export_derivation_to_latex, export_scene_code
+from aetherlab.services.pdf import (
+    compile_latex_to_pdf,
+    export_derivation_to_latex,
+    export_scene_code,
+)
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
 from aetherlab.ui.style import AETHERLAB_QSS
 from aetherlab.ui.widgets import (
@@ -303,24 +314,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._last_result:
             self.statusBar().showMessage("No pipeline result to export.")
             return
+        # Ask for the destination BEFORE compiling — no wasted pdflatex run
+        # when the user cancels the dialog (#F72).
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
         import tempfile
         tmp = Path(tempfile.gettempdir()) / "aetherlab_export" / "derivation.tex"
         solver = self._last_result.solver
         export_derivation_to_latex(
             solver.summary, solver.derivation_steps, solver.variables, tmp
         )
+        self.statusBar().showMessage("Compiling PDF…")
         pdf = compile_latex_to_pdf(tmp)
         if pdf and pdf.exists():
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
-            )
-            if path:
-                import shutil
-                shutil.copy2(pdf, path)
-                self.statusBar().showMessage(f"PDF exported: {path}")
+            import shutil
+            shutil.copy2(pdf, path)
+            self.statusBar().showMessage(f"PDF exported: {path}")
         else:
             self.statusBar().showMessage(
-                "pdflatex not found or compilation failed. LaTeX file saved instead."
+                "pdflatex not found or compilation failed. Use 'Export as LaTeX' instead."
             )
 
     def _export_scene(self) -> None:
@@ -376,11 +391,30 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open the settings dialog (#6)."""
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            vals = dialog.get_settings()
-            self.statusBar().showMessage(
-                f"Settings updated (in-memory). Model: {vals['model']}. "
-                "Restart the app for env var changes to persist."
-            )
+            self._apply_settings(dialog.get_settings())
+
+    def _apply_settings(self, vals: dict) -> None:
+        """Apply dialog values to the live settings used by the next run (#F71).
+
+        AppSettings is frozen, so build a replacement. Environment variables are
+        untouched; this is an in-memory override for the current session.
+        """
+        from dataclasses import replace
+
+        self.settings = replace(
+            self.settings,
+            llm_model=vals["model"] or self.settings.llm_model,
+            openai_api_key=vals["api_key"],
+            openai_base_url=vals["base_url"],
+            library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
+            data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
+        )
+        provider_note = (
+            f" {self.settings.llm_model}" if self.settings.openai_api_key else " No API key"
+        )
+        self.statusBar().showMessage(
+            f"Settings applied for the next pipeline run.{provider_note}"
+        )
 
     def _toggle_code_view(self) -> None:
         if self.simulation_panel._stack.currentIndex() == 3:
@@ -389,11 +423,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.simulation_panel.show_code()
 
     def _cancel_pipeline(self) -> None:
-        """Cancel the running pipeline (#2)."""
+        """Cancel the running pipeline (#2).
+
+        Run stays disabled until the worker thread actually finishes (its
+        finished signal calls set_busy(False)); re-enabling it here would
+        mislead while the current stage is still winding down (#F73).
+        """
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.statusBar().showMessage("Cancelling pipeline\u2026")
-            self.command_bar.set_busy(False)
+            self.command_bar.set_cancelling()
 
     def _connect_signals(self) -> None:
         self.sidebar.item_selected.connect(self._on_sidebar_select)
@@ -404,9 +443,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parameter_dock.parameter_changed.connect(
             self.simulation_panel.apply_parameter_update
         )
-        self.parameter_dock.parameter_changed.connect(
-            self.analysis_panel.update_variable
-        )
+        # analysis_panel.update_variable connection removed (#F63 — was a no-op)
         # token_selected signal removed (#4 — was dead wiring)
         self.simulation_panel.parameter_changed.connect(
             self.parameter_dock.update_variable

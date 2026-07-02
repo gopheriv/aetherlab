@@ -529,6 +529,19 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.setText("\u23f3  Running\u2026" if busy else "\u25b6  Run")
         self.input.setDisabled(busy)
         self.cancel_button.setVisible(busy)
+        # Restore cancel button state (may have been put in 'Cancelling' mode).
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.setText("\u2715  Cancel")
+
+    def set_cancelling(self) -> None:
+        """Cancel requested: keep Run disabled until the worker actually finishes.
+
+        Re-enabling Run immediately would mislead - the pipeline thread may
+        still be finishing its current stage. The worker's finished signal
+        calls set_busy(False), which restores everything.
+        """
+        self.cancel_button.setDisabled(True)
+        self.cancel_button.setText("\u23f3  Cancelling\u2026")
 
     def _on_example_selected(self, index: int) -> None:
         if index > 0:
@@ -559,7 +572,9 @@ class ParameterDock(QtWidgets.QWidget):
         super().__init__(parent)
         # (slider, spinbox, value_label, original_value)
         self._sliders: dict[str, tuple[QtWidgets.QSlider, QtWidgets.QDoubleSpinBox, QtWidgets.QLabel, float]] = {}
-        self._spans: dict[str, float] = {}
+        # Per-parameter (lo, hi) slider/spinbox range. lo is negative when the
+        # original value is negative so e.g. charge=-1.0 is representable (#F62).
+        self._ranges: dict[str, tuple[float, float]] = {}
         self._collapsed = False
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -605,26 +620,32 @@ class ParameterDock(QtWidgets.QWidget):
     def _span_for(self, value: float) -> float:
         return max(abs(float(value)) * 2.0, 1.0)
 
+    def _range_for(self, value: float) -> tuple[float, float]:
+        """Slider/spinbox range: [0, span] for non-negative values, symmetric
+        [-span, span] when the value is negative so it stays representable (#F62)."""
+        span = self._span_for(value)
+        return (-span if value < 0 else 0.0, span)
+
     def set_variables(self, variables: dict[str, float]) -> None:
         self._clear()
         for name, value in sorted(variables.items()):
             value = float(value)
-            span = self._span_for(value)
-            self._spans[name] = span
+            lo, hi = self._range_for(value)
+            self._ranges[name] = (lo, hi)
 
             slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
             slider.setRange(0, self._SLIDER_TICKS)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.valueChanged.connect(
                 lambda raw, key=name: self._on_slider_change(key, raw)
             )
 
             # Spin box for precise numeric input (#7)
             spinbox = QtWidgets.QDoubleSpinBox()
-            spinbox.setRange(0, span)
+            spinbox.setRange(lo, hi)
             spinbox.setValue(value)
             spinbox.setDecimals(4)
-            spinbox.setSingleStep(span / 100)
+            spinbox.setSingleStep((hi - lo) / 100)
             spinbox.setFixedWidth(90)
             spinbox.setStyleSheet(
                 "QDoubleSpinBox { background-color: #0F0F17; border: 1px solid #1E293B; "
@@ -661,8 +682,8 @@ class ParameterDock(QtWidgets.QWidget):
             self._container_layout.addRow(name, row_widget)
 
     def _on_slider_change(self, name: str, raw: int) -> None:
-        span = self._spans.get(name, 1.0)
-        value = raw / self._SLIDER_TICKS * span
+        lo, hi = self._ranges.get(name, (0.0, 1.0))
+        value = lo + raw / self._SLIDER_TICKS * (hi - lo)
         if name in self._sliders:
             _, spinbox, _, _ = self._sliders[name]
             spinbox.blockSignals(True)
@@ -670,47 +691,51 @@ class ParameterDock(QtWidgets.QWidget):
             spinbox.blockSignals(False)
         self.parameter_changed.emit(name, value)
 
+    def _grow_range(self, name: str, value: float) -> tuple[float, float]:
+        """Expand the stored range so ``value`` fits; sync the spinbox limits."""
+        lo, hi = self._ranges.get(name, self._range_for(value))
+        if value > hi or value < lo:
+            span = self._span_for(value)
+            lo = min(lo, -span if value < 0 else lo)
+            hi = max(hi, span)
+            self._ranges[name] = (lo, hi)
+            if name in self._sliders:
+                self._sliders[name][1].setRange(lo, hi)
+        return self._ranges.get(name, (lo, hi))
+
     def _on_spinbox_change(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, _, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(value))
-            if value > span:
-                span = self._span_for(value)
-                self._spans[name] = span
-                spinbox = self._sliders[name][1]
-                spinbox.setRange(0, span)
+            lo, hi = self._grow_range(name, value)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.blockSignals(False)
         self.parameter_changed.emit(name, value)
 
     def _reset_param(self, name: str, original_value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(original_value))
+            lo, hi = self._ranges.get(name, self._range_for(original_value))
             spinbox.blockSignals(True)
             spinbox.setValue(original_value)
             spinbox.blockSignals(False)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(original_value, span))
+            slider.setValue(self._value_to_tick(original_value, lo, hi))
             slider.blockSignals(False)
             self.parameter_changed.emit(name, original_value)
 
-    def _value_to_tick(self, value: float, span: float) -> int:
-        if span <= 0:
+    def _value_to_tick(self, value: float, lo: float, hi: float) -> int:
+        if hi <= lo:
             return 0
-        return max(0, min(self._SLIDER_TICKS, int(value / span * self._SLIDER_TICKS)))
+        tick = int((value - lo) / (hi - lo) * self._SLIDER_TICKS)
+        return max(0, min(self._SLIDER_TICKS, tick))
 
     def update_variable(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(value))
-            if value > span:
-                span = self._span_for(value)
-                self._spans[name] = span
-                spinbox.setRange(0, span)
+            lo, hi = self._grow_range(name, value)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.blockSignals(False)
             spinbox.blockSignals(True)
             spinbox.setValue(value)
@@ -720,7 +745,7 @@ class ParameterDock(QtWidgets.QWidget):
         while self._container_layout.rowCount():
             self._container_layout.removeRow(0)
         self._sliders.clear()
-        self._spans.clear()
+        self._ranges.clear()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -919,9 +944,6 @@ class AnalysisPanel(QtWidgets.QWidget):
             widget = _CollapsibleStepWidget(index, step)
             self._steps_vbox.insertWidget(self._steps_vbox.count() - 1, widget)
             self._step_widgets.append(widget)
-
-    def update_variable(self, name: str, value: float) -> None:
-        pass  # Parameters now live in ParameterDock
 
 
 # ────────────────────────────────────────────────────────────────────────────

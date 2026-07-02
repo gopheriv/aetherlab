@@ -103,8 +103,8 @@ def _pendulum_curves(params: dict[str, float]) -> list[CurveSpec]:
 
     def y_fn(t, p):
         g = p.get("gravity", 9.81)
-        L = p.get("length", 1.0)
-        omega = math.sqrt(g / max(L, 0.01))
+        length = p.get("length", 1.0)
+        omega = math.sqrt(g / max(length, 0.01))
         return np.sin(omega * t) * 0.8
 
     return [CurveSpec(name="\u03b8(t)", x_fn=x_fn, y_fn=y_fn, color="#8B5CF6", width=2.5)]
@@ -112,8 +112,6 @@ def _pendulum_curves(params: dict[str, float]) -> list[CurveSpec]:
 
 def _generic_curves(params: dict[str, float]) -> list[CurveSpec]:
     names = sorted(params.keys())
-    a = params.get(names[0], 1.0) if names else 1.0
-    b = params.get(names[1], 1.0) if len(names) > 1 else 0.5
 
     def x_fn(t, p):
         freq_a = p.get(names[0], 1.0) if names else 1.0
