@@ -8,7 +8,7 @@ import re
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.error_learner import preventive_pitfalls_block
-from aetherlab.services.scene_templates import build_scene, detect_domain
+from aetherlab.services.scene_templates import build_scene, detect_domain, load_scene_palette
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +130,7 @@ class SceneGenerator:
             SCENE_GENERATION_SYSTEM_PROMPT.format(class_name=class_name)
             + "\n\n"
             + preventive_pitfalls_block()
+            + _palette_prompt_hint(load_scene_palette(getattr(self.settings, "data_dir", None)))
         )
         user = SCENE_GENERATION_USER_TEMPLATE.format(
             prompt=request.prompt,
@@ -181,6 +182,7 @@ class SceneGenerator:
         """Deterministic, domain-aware fallback built from solver output (WP7)."""
         domain = detect_domain(solver.keywords, solver.variables)
         title = solver.summary[:70] if solver.summary else "Physics Simulation"
+        data_dir = getattr(self.settings, "data_dir", None)
         return build_scene(
             class_name=class_name,
             domain=domain,
@@ -188,7 +190,22 @@ class SceneGenerator:
             summary=solver.summary or "",
             steps=solver.derivation_steps,
             variables=solver.variables,
+            palette=load_scene_palette(data_dir),
         )
+
+
+def _palette_prompt_hint(palette: dict[str, str] | None) -> str:
+    """Ask the LLM to match the user's theme colors, so generated scenes look
+    consistent with the deterministic templates and the app."""
+    if not palette:
+        return ""
+    return (
+        "\n\n## Theme"
+        f"\nUse `config.background_color = \"{palette['background']}\"` and prefer "
+        f"these colors: primary curves `{palette['curve']}`, highlights "
+        f"`{palette['accent']}`, secondary `{palette['secondary']}`, text "
+        f"`{palette['text']}`. Pass them as hex strings to `color=`."
+    )
 
 
 def _rename_scene_class(code: str, class_name: str) -> str:

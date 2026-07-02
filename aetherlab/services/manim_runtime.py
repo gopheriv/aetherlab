@@ -16,7 +16,7 @@ from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, Solver
 from aetherlab.services.code_safety import validate_code_safety
 from aetherlab.services.error_learner import ErrorLearner
 from aetherlab.services.scene_generator import SceneGenerator
-from aetherlab.services.scene_templates import build_scene, detect_domain
+from aetherlab.services.scene_templates import build_scene, detect_domain, load_scene_palette
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -394,6 +394,7 @@ class ManimRuntime:
         """
         detection_terms = [*solver.keywords, request.normalized_prompt()]
         domain = detect_domain(detection_terms, solver.variables)
+        data_dir = getattr(self._settings, "data_dir", None)
         return build_scene(
             class_name=class_name,
             domain=domain,
@@ -401,6 +402,7 @@ class ManimRuntime:
             summary=solver.summary,
             steps=solver.derivation_steps,
             variables=solver.variables,
+            palette=load_scene_palette(data_dir),
         )
 
 

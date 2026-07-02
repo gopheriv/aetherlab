@@ -22,10 +22,23 @@ from typing import Any
 import numpy as np
 
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
+from aetherlab.ui.theme import current_theme
 
 require_qt()
 
 TRAIL_LENGTH = 24  # number of trail points to keep
+
+
+def _resolve_color(color: str) -> str:
+    """CurveSpec.color may be a theme role name ('curve1') or a raw hex.
+
+    Resolving at paint time means a live theme switch recolors existing
+    curves without rebuilding the canvas state.
+    """
+    if color.startswith("#"):
+        return color
+    return getattr(current_theme(), color, color)
+
 
 
 @dataclass
@@ -34,7 +47,7 @@ class CurveSpec:
     name: str
     x_fn: Any
     y_fn: Any
-    color: str = "#06B6D4"
+    color: str = "curve1"
     width: float = 2.0
     t_range: tuple[float, float] = (-3.0, 3.0)
     t_steps: int = 500
@@ -65,7 +78,7 @@ def _damped_oscillator_curves(params: dict[str, float]) -> list[CurveSpec]:
         stif = p.get("stiffness", 1.0)
         return np.exp(-damp * (t + 3)) * np.sin(stif * t * 2)
 
-    return [CurveSpec(name="x(t)", x_fn=x_fn, y_fn=y_fn, color="#06B6D4", width=2.5)]
+    return [CurveSpec(name="x(t)", x_fn=x_fn, y_fn=y_fn, color="curve1", width=2.5)]
 
 
 def _phase_portrait_curves(params: dict[str, float]) -> list[CurveSpec]:
@@ -89,7 +102,7 @@ def _phase_portrait_curves(params: dict[str, float]) -> list[CurveSpec]:
             name="phase",
             x_fn=x_fn,
             y_fn=y_fn,
-            color="#10B981",
+            color="curve2",
             width=1.5,
             t_range=(-3.0, 3.0),
             t_steps=600,
@@ -107,7 +120,7 @@ def _pendulum_curves(params: dict[str, float]) -> list[CurveSpec]:
         omega = math.sqrt(g / max(length, 0.01))
         return np.sin(omega * t) * 0.8
 
-    return [CurveSpec(name="\u03b8(t)", x_fn=x_fn, y_fn=y_fn, color="#8B5CF6", width=2.5)]
+    return [CurveSpec(name="\u03b8(t)", x_fn=x_fn, y_fn=y_fn, color="curve3", width=2.5)]
 
 
 def _generic_curves(params: dict[str, float]) -> list[CurveSpec]:
@@ -121,7 +134,7 @@ def _generic_curves(params: dict[str, float]) -> list[CurveSpec]:
         freq_b = p.get(names[1], 0.5) if len(names) > 1 else 0.5
         return np.cos(freq_b * t * 3)
 
-    return [CurveSpec(name="parametric", x_fn=x_fn, y_fn=y_fn, color="#F59E0B", width=2.5)]
+    return [CurveSpec(name="parametric", x_fn=x_fn, y_fn=y_fn, color="curve4", width=2.5)]
 
 
 _DOMAIN_MAP = {
@@ -162,14 +175,9 @@ class LiveCanvas(QtWidgets.QWidget):
     Performance: precomputes curve points, caches fonts, minimizes QPainter state changes.
     """
 
-    # Cached fonts — zero allocation per paint event
-    _TITLE_FONT = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Weight.Bold)
-    _LABEL_FONT = QtGui.QFont("Segoe UI", 9)
-    _GRID_FONT = QtGui.QFont("Cascadia Code", 8)
-    _TRACER_FONT = QtGui.QFont("Cascadia Code", 9)
-
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._build_fonts()
         self.setMinimumSize(400, 300)
         self.setMouseTracking(True)
         self._state: CanvasState | None = None
@@ -191,6 +199,21 @@ class LiveCanvas(QtWidgets.QWidget):
         self._drag_start = QtCore.QPoint()
         self._hover_pos: QtCore.QPointF | None = None
         self._hover_coords: tuple[float, float] | None = None
+
+    def _build_fonts(self) -> None:
+        """Cache fonts once per theme - zero allocation per paint event."""
+        theme = current_theme()
+        self._TITLE_FONT = QtGui.QFont(theme.font_ui, 12, QtGui.QFont.Weight.Bold)
+        self._LABEL_FONT = QtGui.QFont(theme.font_ui, 9)
+        self._GRID_FONT = QtGui.QFont(theme.font_mono, 8)
+        self._TRACER_FONT = QtGui.QFont(theme.font_mono, 9)
+
+    def refresh_theme(self) -> None:
+        """Re-read the current theme: fonts + cached curve points + repaint."""
+        self._build_fonts()
+        self._cache_key = None
+        self._cached_points.clear()
+        self.update()
 
     def set_state(self, state: CanvasState) -> None:
         self._state = state
@@ -366,21 +389,22 @@ class LiveCanvas(QtWidgets.QWidget):
         bg_gradient = QtGui.QRadialGradient(
             rect.center(), max(rect.width(), rect.height()) * 0.7
         )
-        bg_gradient.setColorAt(0, QtGui.QColor("#0F1520"))
-        bg_gradient.setColorAt(1, QtGui.QColor("#0A0A0F"))
+        theme = current_theme()
+        bg_gradient.setColorAt(0, QtGui.QColor(theme.bg_deep))
+        bg_gradient.setColorAt(1, QtGui.QColor(theme.bg))
         painter.fillRect(rect, bg_gradient)
 
         if not self._state or not self._state.curves:
             # Empty state with onboarding hint (#12)
-            painter.setPen(QtGui.QColor("#64748B"))
-            painter.setFont(QtGui.QFont("Segoe UI", 14))
+            painter.setPen(QtGui.QColor(theme.text_muted))
+            painter.setFont(QtGui.QFont(theme.font_ui, 14))
             painter.drawText(
                 rect.adjusted(0, -40, 0, 0),
                 QtCore.Qt.AlignmentFlag.AlignCenter,
                 "No curve data",
             )
-            painter.setPen(QtGui.QColor("#475569"))
-            painter.setFont(QtGui.QFont("Segoe UI", 11))
+            painter.setPen(QtGui.QColor(theme.text_faint))
+            painter.setFont(QtGui.QFont(theme.font_ui, 11))
             painter.drawText(
                 rect.adjusted(0, 20, 0, 0),
                 QtCore.Qt.AlignmentFlag.AlignCenter,
@@ -410,7 +434,7 @@ class LiveCanvas(QtWidgets.QWidget):
         )
 
         # Title
-        painter.setPen(QtGui.QColor("#F8FAFC"))
+        painter.setPen(QtGui.QColor(theme.text_bright))
         painter.setFont(self._TITLE_FONT)
         painter.drawText(
             QtCore.QRectF(m["left"], 6, plot_rect.width(), m["top"] - 6),
@@ -448,7 +472,7 @@ class LiveCanvas(QtWidgets.QWidget):
         if self._hover_coords and self._hover_pos and plot_rect.contains(self._hover_pos):
             hx, hy = self._hover_coords
             # Crosshair
-            cross_pen = QtGui.QPen(QtGui.QColor("#334155"), 1, QtCore.Qt.PenStyle.DotLine)
+            cross_pen = QtGui.QPen(QtGui.QColor(theme.border_strong), 1, QtCore.Qt.PenStyle.DotLine)
             painter.setPen(cross_pen)
             painter.drawLine(
                 QtCore.QPointF(self._hover_pos.x(), plot_rect.top()),
@@ -459,19 +483,17 @@ class LiveCanvas(QtWidgets.QWidget):
                 QtCore.QPointF(plot_rect.right(), self._hover_pos.y()),
             )
             # Coord label
-            coord_font = QtGui.QFont("Cascadia Code", 9)
-            painter.setFont(coord_font)
+            painter.setFont(self._TRACER_FONT)
             label = f"({hx:.3f}, {hy:.3f})"
             lx = min(self._hover_pos.x() + 14, plot_rect.right() - 100)
             ly = max(self._hover_pos.y() - 22, plot_rect.top() + 16)
-            painter.setPen(QtGui.QColor("#94A3B8"))
+            painter.setPen(QtGui.QColor(theme.text_dim))
             painter.drawText(QtCore.QRectF(lx, ly, 120, 16), QtCore.Qt.AlignmentFlag.AlignLeft, label)
 
         # Zoom indicator
         if abs(self._zoom_factor - 1.0) > 0.01:
-            zoom_font = QtGui.QFont("Cascadia Code", 9)
-            painter.setFont(zoom_font)
-            painter.setPen(QtGui.QColor("#475569"))
+            painter.setFont(self._TRACER_FONT)
+            painter.setPen(QtGui.QColor(theme.text_faint))
             painter.drawText(
                 QtCore.QRectF(plot_rect.right() - 80, plot_rect.top() + 4, 76, 16),
                 QtCore.Qt.AlignmentFlag.AlignRight,
@@ -520,6 +542,7 @@ class LiveCanvas(QtWidgets.QWidget):
     def _draw_grid(
         self, painter: QtGui.QPainter, plot_rect: QtCore.QRectF, state: CanvasState
     ) -> None:
+        theme = current_theme()
         painter.setFont(self._GRID_FONT)
         x_min, x_max = state.x_range
         y_min, y_max = state.y_range
@@ -529,13 +552,13 @@ class LiveCanvas(QtWidgets.QWidget):
         while x <= x_max:
             pt = self._map_to_plot(x, 0, plot_rect, state)
             is_zero = abs(x) < x_step * 0.01
-            color = "#334155" if is_zero else "#1E293B"
+            color = theme.border_strong if is_zero else theme.border
             painter.setPen(QtGui.QColor(color))
             painter.drawLine(
                 QtCore.QPointF(pt.x(), plot_rect.top()),
                 QtCore.QPointF(pt.x(), plot_rect.bottom()),
             )
-            painter.setPen(QtGui.QColor("#475569"))
+            painter.setPen(QtGui.QColor(theme.text_faint))
             painter.drawText(
                 QtCore.QRectF(pt.x() - 22, plot_rect.bottom() + 2, 44, 16),
                 QtCore.Qt.AlignmentFlag.AlignCenter,
@@ -548,13 +571,13 @@ class LiveCanvas(QtWidgets.QWidget):
         while y <= y_max:
             pt = self._map_to_plot(0, y, plot_rect, state)
             is_zero = abs(y) < y_step * 0.01
-            color = "#334155" if is_zero else "#1E293B"
+            color = theme.border_strong if is_zero else theme.border
             painter.setPen(QtGui.QColor(color))
             painter.drawLine(
                 QtCore.QPointF(plot_rect.left(), pt.y()),
                 QtCore.QPointF(plot_rect.right(), pt.y()),
             )
-            painter.setPen(QtGui.QColor("#475569"))
+            painter.setPen(QtGui.QColor(theme.text_faint))
             painter.drawText(
                 QtCore.QRectF(plot_rect.left() - 52, pt.y() - 8, 48, 16),
                 QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
@@ -565,11 +588,12 @@ class LiveCanvas(QtWidgets.QWidget):
     def _draw_axes(
         self, painter: QtGui.QPainter, plot_rect: QtCore.QRectF, state: CanvasState
     ) -> None:
-        painter.setPen(QtGui.QColor("#334155"))
+        theme = current_theme()
+        painter.setPen(QtGui.QColor(theme.border_strong))
         painter.drawRect(plot_rect)
 
         painter.setFont(self._LABEL_FONT)
-        painter.setPen(QtGui.QColor("#64748B"))
+        painter.setPen(QtGui.QColor(theme.text_muted))
         painter.drawText(
             QtCore.QRectF(plot_rect.left(), plot_rect.bottom() + 4, plot_rect.width(), 20),
             QtCore.Qt.AlignmentFlag.AlignCenter,
@@ -597,7 +621,7 @@ class LiveCanvas(QtWidgets.QWidget):
             return
 
         # Glow layer (thick, low opacity) — single draw call
-        glow_color = QtGui.QColor(curve.color)
+        glow_color = QtGui.QColor(_resolve_color(curve.color))
         glow_color.setAlphaF(0.15)
         glow_pen = QtGui.QPen(glow_color, curve.width * 4)
         glow_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
@@ -606,7 +630,7 @@ class LiveCanvas(QtWidgets.QWidget):
         painter.drawPolyline(points)
 
         # Main curve — single draw call
-        painter.setPen(QtGui.QPen(QtGui.QColor(curve.color), curve.width))
+        painter.setPen(QtGui.QPen(QtGui.QColor(_resolve_color(curve.color)), curve.width))
         painter.drawPolyline(points)
 
     def _draw_trail(
@@ -623,9 +647,10 @@ class LiveCanvas(QtWidgets.QWidget):
         curve = self._state.curves[0]
         # Batch draw trail with gradient alpha
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        base = _resolve_color(curve.color)
         for i, pt in enumerate(self._trail):
             alpha = (i + 1) / n
-            color = QtGui.QColor(curve.color)
+            color = QtGui.QColor(base)
             color.setAlphaF(alpha * 0.4)
             painter.setBrush(color)
             painter.drawEllipse(pt, 2 + alpha * 3, 2 + alpha * 3)
@@ -650,23 +675,24 @@ class LiveCanvas(QtWidgets.QWidget):
         pt = self._map_to_plot(x, y, plot_rect, state)
 
         # Outer glow — simple filled ellipse, no gradient
-        painter.setBrush(QtGui.QColor(curve.color + "30"))
+        base = _resolve_color(curve.color)
+        painter.setBrush(QtGui.QColor(base + "30"))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(pt, 12, 12)
 
         # Inner ring
-        painter.setPen(QtGui.QPen(QtGui.QColor(curve.color), 1.5))
+        painter.setPen(QtGui.QPen(QtGui.QColor(base), 1.5))
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.drawEllipse(pt, 10, 10)
 
         # Core dot
-        painter.setBrush(QtGui.QColor(curve.color))
+        painter.setBrush(QtGui.QColor(base))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(pt, 5, 5)
 
         # Coordinate label
         painter.setFont(self._TRACER_FONT)
-        painter.setPen(QtGui.QColor("#94A3B8"))
+        painter.setPen(QtGui.QColor(current_theme().text_dim))
         painter.drawText(
             QtCore.QRectF(pt.x() + 14, pt.y() - 18, 140, 16),
             QtCore.Qt.AlignmentFlag.AlignLeft,
@@ -681,14 +707,15 @@ class LiveCanvas(QtWidgets.QWidget):
     ) -> None:
         if len(state.curves) <= 1:
             return
-        painter.setFont(QtGui.QFont("Segoe UI", 9))
+        painter.setFont(self._LABEL_FONT)
         x = plot_rect.right() - 12
         y = plot_rect.top() + 10
         for curve in reversed(state.curves):
-            painter.setBrush(QtGui.QColor(curve.color))
+            resolved = QtGui.QColor(_resolve_color(curve.color))
+            painter.setBrush(resolved)
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.drawRoundedRect(int(x - 88), int(y - 2), 10, 10, 2, 2)
-            painter.setPen(QtGui.QColor(curve.color))
+            painter.setPen(resolved)
             painter.drawText(
                 QtCore.QRectF(x - 76, y - 2, 76, 14),
                 QtCore.Qt.AlignmentFlag.AlignRight,

@@ -110,3 +110,54 @@ def test_set_cancelling_keeps_run_disabled(qapp):
     assert bar.run_button.isEnabled()
     assert bar.cancel_button.isEnabled()
     assert "Cancel" in bar.cancel_button.text()
+
+
+# ── WP8: live theme switching restyles app + canvas + persists ──────────────
+
+
+def test_apply_theme_live_switch_and_persist(qapp, tmp_path):
+    import json
+
+    from aetherlab.ui.live_canvas import _resolve_color
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.theme import current_theme, get_preset
+
+    window = MainWindow(settings=_settings(tmp_path))
+    try:
+        assert "#06B6D4" in window.styleSheet()  # default accent
+        light = get_preset("Solar Light")
+        window._apply_theme(light)
+
+        assert current_theme().name == "Solar Light"
+        assert light.accent in window.styleSheet()
+        assert "#06B6D4" not in window.styleSheet()
+        # Canvas curve role now resolves to the new palette.
+        assert _resolve_color("curve1") == light.curve1
+        # Persisted for next launch, including the scene palette for renders.
+        prefs = json.loads((tmp_path / "ui_prefs.json").read_text(encoding="utf-8"))
+        assert prefs["theme"]["accent"] == light.accent
+        assert prefs["scene_palette"]["background"] == light.bg
+    finally:
+        window.close()
+
+
+def test_startup_loads_persisted_theme(qapp, tmp_path):
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.theme import get_preset, save_theme
+
+    save_theme(get_preset("Emerald"), tmp_path)
+    window = MainWindow(settings=_settings(tmp_path))
+    try:
+        assert get_preset("Emerald").accent in window.styleSheet()
+    finally:
+        window.close()
+
+
+def test_appearance_editor_round_trip(qapp):
+    from aetherlab.ui.main_window import AppearanceEditor
+    from aetherlab.ui.theme import get_preset
+
+    editor = AppearanceEditor(get_preset("Nebula"))
+    theme = editor.theme()
+    assert theme.accent == get_preset("Nebula").accent
+    assert theme.name == "Nebula"

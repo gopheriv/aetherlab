@@ -65,6 +65,49 @@ def test_unknown_domain_falls_back_to_oscillator():
     assert "damping" in code  # oscillator body
 
 
+@pytest.mark.parametrize("domain", DOMAINS)
+def test_custom_palette_colors_the_scene(domain):
+    palette = {
+        "background": "#F8FAFC", "curve": "#0284C7", "accent": "#D97706",
+        "text": "#0F172A", "secondary": "#059669", "muted": "#64748B",
+    }
+    code = build_scene(
+        "AetherLabScene", domain, "t", "s", ["a"],
+        {"gravity": 9.8, "length": 1.0, "eccentricity": 0.5}, palette=palette,
+    )
+    safe, issues = validate_code_safety(code)
+    assert safe, issues
+    compile(code, f"<{domain}>", "exec")
+    assert 'config.background_color = "#F8FAFC"' in code
+    assert "#0F172A" in code  # themed text color used by every domain
+    # at least one non-background palette color is threaded into the scene body
+    assert any(c in code for c in ("#0284C7", "#D97706", "#059669")), domain
+
+
+def test_default_palette_is_aether_dark():
+    code = build_scene("AetherLabScene", "wave", "t", "s", [], {})
+    assert 'config.background_color = "#0A0A0F"' in code
+
+
+def test_load_scene_palette_reads_ui_prefs(tmp_path):
+    import json
+
+    from aetherlab.services.scene_templates import load_scene_palette
+    assert load_scene_palette(tmp_path) is None  # no prefs yet
+    (tmp_path / "ui_prefs.json").write_text(
+        json.dumps({"scene_palette": {"background": "#123456", "curve": "#abcdef"}}),
+        encoding="utf-8",
+    )
+    pal = load_scene_palette(tmp_path)
+    assert pal["background"] == "#123456"
+
+
+def test_load_scene_palette_corrupt_is_none(tmp_path):
+    from aetherlab.services.scene_templates import load_scene_palette
+    (tmp_path / "ui_prefs.json").write_text("{ broken", encoding="utf-8")
+    assert load_scene_palette(tmp_path) is None
+
+
 # ── integration: both fallback paths pick the right domain ──────────────────
 
 

@@ -19,6 +19,53 @@ Standard library + zero project imports, like the other leaf modules.
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
+# Default video palette — matches the "Aether Dark" UI theme.
+DEFAULT_SCENE_PALETTE: dict[str, str] = {
+    "background": "#0A0A0F",
+    "curve": "#06B6D4",
+    "accent": "#F59E0B",
+    "text": "#F8FAFC",
+    "secondary": "#10B981",
+    "muted": "#94A3B8",
+}
+
+_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _resolve_palette(palette: dict[str, str] | None) -> dict[str, str]:
+    """Merge a user palette over the defaults, keeping only valid hexes."""
+    resolved = dict(DEFAULT_SCENE_PALETTE)
+    if palette:
+        for key in resolved:
+            value = palette.get(key)
+            if isinstance(value, str) and _HEX_RE.match(value.strip()):
+                resolved[key] = value.strip()
+    return resolved
+
+
+def load_scene_palette(data_dir: Path | None) -> dict[str, str] | None:
+    """Read the scene palette persisted by the UI theme (ui_prefs.json).
+
+    Stdlib-only on purpose: services must not import ``aetherlab.ui``. Returns
+    ``None`` when there are no prefs (callers then use the defaults).
+    """
+    if not data_dir:
+        return None
+    path = Path(data_dir) / "ui_prefs.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — a broken prefs file must not break renders
+        return None
+    palette = payload.get("scene_palette") if isinstance(payload, dict) else None
+    return palette if isinstance(palette, dict) else None
+
+
 # Keyword markers per domain, checked in order (first hit wins).
 _DOMAIN_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pendulum", ("pendulum",)),
@@ -52,15 +99,20 @@ def build_scene(
     summary: str,
     steps: list[str],
     variables: dict[str, float],
+    palette: dict[str, str] | None = None,
 ) -> str:
     """Build a complete, self-contained Manim scene for ``domain``.
 
     ``title``/``summary``/``steps`` are raw strings (escaped here);
-    ``variables`` parameterize the animation where meaningful.
+    ``variables`` parameterize the animation; ``palette`` (hex strings, see
+    ``DEFAULT_SCENE_PALETTE``) colors the scene to match the UI theme.
     """
     builder = _BUILDERS.get(domain, _oscillator_scene)
+    pal = _resolve_palette(palette)
     header = _header_block(class_name, title, summary, steps)
-    return builder(header, variables).strip() + "\n"
+    header["txt"] = _lit(pal["text"])
+    header["background"] = pal["background"]
+    return builder(header, variables, pal).strip() + "\n"
 
 
 # ── shared pieces ────────────────────────────────────────────────────────────
@@ -78,6 +130,8 @@ import math
 import numpy as np
 
 from manim import *
+
+config.background_color = "{background}"
 '''
 
 
@@ -95,14 +149,15 @@ def _header_block(class_name: str, title: str, summary: str, steps: list[str]) -
 
 
 _TEXT_HEADER = '''
-        title = Text({title}).scale(0.5)
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.5)
         title.to_edge(UP)
-        summary = Text({summary}).scale(0.3)
+        summary = Text({summary}, color=TXT).scale(0.3)
         summary.next_to(title, DOWN, buff=0.15)
         steps = [
             {step_lines}
         ]
-        rows = VGroup(*[Text(f"{{i}}. {{s}}").scale(0.24) for i, s in enumerate(steps, 1)])
+        rows = VGroup(*[Text(f"{{i}}. {{s}}", color=TXT).scale(0.24) for i, s in enumerate(steps, 1)])
         rows.arrange(DOWN, aligned_edge=LEFT, buff=0.12)
         rows.next_to(summary, DOWN, buff=0.2)
         self.add(title, summary, rows)
@@ -112,10 +167,10 @@ _TEXT_HEADER = '''
 # ── oscillator (default) ─────────────────────────────────────────────────────
 
 
-def _oscillator_scene(header: dict, variables: dict[str, float]) -> str:
+def _oscillator_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
     damping = float(variables.get("damping", 0.15))
     stiffness = float(variables.get("stiffness", 1.0))
-    return _IMPORT_BLOCK.format(domain="oscillator") + f'''
+    return _IMPORT_BLOCK.format(domain="oscillator", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
     def construct(self):{_TEXT_HEADER.format(**header)}
@@ -129,8 +184,8 @@ class {header["class_name"]}(Scene):
             k = stiffness.get_value()
             fn = lambda x: math.exp(-d * (x + 3)) * math.sin(k * x * 2)
             if hasattr(axes, "plot"):
-                return axes.plot(fn, color=BLUE)
-            return axes.get_graph(fn, color=BLUE)
+                return axes.plot(fn, color={pal["curve"]!r})
+            return axes.get_graph(fn, color={pal["curve"]!r})
 
         curve = always_redraw(curve_fn)
         self.add(axes)
@@ -145,11 +200,11 @@ class {header["class_name"]}(Scene):
 # ── pendulum ─────────────────────────────────────────────────────────────────
 
 
-def _pendulum_scene(header: dict, variables: dict[str, float]) -> str:
+def _pendulum_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
     gravity = float(variables.get("gravity", 9.81))
     length = max(float(variables.get("length", 1.0)), 0.05)
     damping = float(variables.get("damping", 0.12))
-    return _IMPORT_BLOCK.format(domain="pendulum") + f'''
+    return _IMPORT_BLOCK.format(domain="pendulum", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
     def construct(self):{_TEXT_HEADER.format(**header)}
@@ -170,9 +225,9 @@ class {header["class_name"]}(Scene):
             th = theta_at(t.get_value())
             return pivot + rod_len * np.array([math.sin(th), -math.cos(th), 0.0])
 
-        rod = always_redraw(lambda: Line(pivot, bob_pos(), color=GREY_B, stroke_width=3))
-        bob = always_redraw(lambda: Dot(bob_pos(), color=YELLOW, radius=0.14))
-        anchor = Dot(pivot, color=WHITE, radius=0.05)
+        rod = always_redraw(lambda: Line(pivot, bob_pos(), color={pal["muted"]!r}, stroke_width=3))
+        bob = always_redraw(lambda: Dot(bob_pos(), color={pal["accent"]!r}, radius=0.14))
+        anchor = Dot(pivot, color=TXT, radius=0.05)
 
         axes = Axes(x_range=[0, 8, 2], y_range=[-1, 1, 0.5]).scale(0.42)
         axes.to_edge(DOWN).shift(RIGHT * 1.8)
@@ -181,11 +236,11 @@ class {header["class_name"]}(Scene):
             end = max(t.get_value(), 0.01)
             fn = lambda x: theta_at(x)
             if hasattr(axes, "plot"):
-                return axes.plot(fn, x_range=[0, end], color=TEAL)
-            return axes.get_graph(fn, x_min=0, x_max=end, color=TEAL)
+                return axes.plot(fn, x_range=[0, end], color={pal["secondary"]!r})
+            return axes.get_graph(fn, x_min=0, x_max=end, color={pal["secondary"]!r})
 
         trace = always_redraw(trace_fn)
-        label = Text("theta(t)").scale(0.3)
+        label = Text("theta(t)", color=TXT).scale(0.3)
         label.next_to(axes, UP, buff=0.1)
 
         self.add(anchor, rod, bob, axes, trace, label)
@@ -197,9 +252,9 @@ class {header["class_name"]}(Scene):
 # ── orbit ────────────────────────────────────────────────────────────────────
 
 
-def _orbit_scene(header: dict, variables: dict[str, float]) -> str:
+def _orbit_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
     ecc = min(max(float(variables.get("eccentricity", 0.55)), 0.0), 0.9)
-    return _IMPORT_BLOCK.format(domain="orbit") + f'''
+    return _IMPORT_BLOCK.format(domain="orbit", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
     def construct(self):{_TEXT_HEADER.format(**header)}
@@ -209,17 +264,17 @@ class {header["class_name"]}(Scene):
         center = np.array([0.0, -1.3, 0.0])
         focus = center + np.array([a * e, 0.0, 0.0])
 
-        orbit = Ellipse(width=2 * a, height=2 * b, color=BLUE_D)
+        orbit = Ellipse(width=2 * a, height=2 * b, color={pal["curve"]!r})
         orbit.move_to(center)
-        star = Dot(focus, color=YELLOW, radius=0.16)
+        star = Dot(focus, color={pal["accent"]!r}, radius=0.16)
         t = ValueTracker(0.0)
 
         def planet_pos():
             ang = t.get_value()
             return center + np.array([a * math.cos(ang), b * math.sin(ang), 0.0])
 
-        planet = always_redraw(lambda: Dot(planet_pos(), color=TEAL, radius=0.1))
-        radius = always_redraw(lambda: Line(focus, planet_pos(), color=GREY_B,
+        planet = always_redraw(lambda: Dot(planet_pos(), color={pal["secondary"]!r}, radius=0.1))
+        radius = always_redraw(lambda: Line(focus, planet_pos(), color={pal["muted"]!r},
                                             stroke_width=2))
 
         self.add(orbit, star, radius, planet)
@@ -231,9 +286,9 @@ class {header["class_name"]}(Scene):
 # ── wave ─────────────────────────────────────────────────────────────────────
 
 
-def _wave_scene(header: dict, variables: dict[str, float]) -> str:
+def _wave_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
     stiffness = float(variables.get("stiffness", 1.0))
-    return _IMPORT_BLOCK.format(domain="wave") + f'''
+    return _IMPORT_BLOCK.format(domain="wave", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
     def construct(self):{_TEXT_HEADER.format(**header)}
@@ -246,8 +301,8 @@ class {header["class_name"]}(Scene):
             time = t.get_value()
             fn = lambda x: math.sin(k * x - 2 * time) * math.exp(-0.06 * x)
             if hasattr(axes, "plot"):
-                return axes.plot(fn, color=BLUE)
-            return axes.get_graph(fn, color=BLUE)
+                return axes.plot(fn, color={pal["curve"]!r})
+            return axes.get_graph(fn, color={pal["curve"]!r})
 
         wave = always_redraw(wave_fn)
         self.add(axes)
