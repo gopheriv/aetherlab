@@ -5,11 +5,32 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle, SolverResult
+from aetherlab.core.models import (
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+    SolverResult,
+)
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.pdf import compile_latex_to_pdf, export_derivation_to_latex, export_scene_code
+from aetherlab.services.pdf import (
+    compile_latex_to_pdf,
+    export_derivation_to_latex,
+    export_scene_code,
+)
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
-from aetherlab.ui.style import AETHERLAB_QSS
+from aetherlab.ui.style import AETHERLAB_QSS, build_qss
+from aetherlab.ui.theme import (
+    PRESET_NAMES,
+    ROLE_LABELS,
+    Theme,
+    current_theme,
+    get_preset,
+    load_theme,
+    save_theme,
+    set_current_theme,
+)
 from aetherlab.ui.widgets import (
     AnalysisPanel,
     CommandBar,
@@ -23,6 +44,138 @@ from aetherlab.ui.widgets import (
 from aetherlab.ui.workers import PipelineWorker
 
 require_qt()
+
+
+class _SwatchButton(QtWidgets.QPushButton):
+    """A color-role editor: shows the current hex, opens QColorDialog on click."""
+
+    def __init__(self, role: str, value: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.role = role
+        self.setFixedHeight(26)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.set_value(value)
+        self.clicked.connect(self._pick)
+
+    def value(self) -> str:
+        return self._value
+
+    def set_value(self, value: str) -> None:
+        self._value = value
+        # Readable text on top of the swatch, whatever the color.
+        text_color = "#000000" if _is_light(value) else "#FFFFFF"
+        self.setText(value)
+        self.setStyleSheet(
+            f"background-color: {value}; color: {text_color}; border: 1px solid "
+            f"{current_theme().border_strong}; border-radius: 4px; "
+            "font-family: monospace; font-size: 10px; padding: 2px;"
+        )
+
+    def _pick(self) -> None:
+        initial = QtGui.QColor(self._value)
+        chosen = QtWidgets.QColorDialog.getColor(
+            initial, self, f"Choose {ROLE_LABELS.get(self.role, self.role)}"
+        )
+        if chosen.isValid():
+            self.set_value(chosen.name().upper())
+
+
+class AppearanceEditor(QtWidgets.QWidget):
+    """Full palette editor: preset picker, per-role swatches, font pickers."""
+
+    def __init__(self, theme: Theme, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._swatches: dict[str, _SwatchButton] = {}
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Preset row
+        preset_row = QtWidgets.QHBoxLayout()
+        preset_label = QtWidgets.QLabel("Preset")
+        preset_label.setObjectName("SectionTitle")
+        preset_row.addWidget(preset_label)
+        self._preset_combo = QtWidgets.QComboBox()
+        self._preset_combo.setObjectName("QualityCombo")
+        self._preset_combo.addItems(PRESET_NAMES)
+        self._preset_combo.setCurrentText(theme.name if theme.name in PRESET_NAMES else PRESET_NAMES[0])
+        self._preset_combo.activated.connect(self._load_preset)
+        preset_row.addWidget(self._preset_combo, 1)
+        layout.addLayout(preset_row)
+
+        # Color grid (scrollable — there are ~28 roles)
+        grid_host = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(4)
+        for i, role in enumerate(ROLE_LABELS):
+            row, col = divmod(i, 2)
+            label = QtWidgets.QLabel(ROLE_LABELS[role])
+            label.setObjectName("DimLabel")
+            swatch = _SwatchButton(role, getattr(theme, role))
+            self._swatches[role] = swatch
+            cell = QtWidgets.QHBoxLayout()
+            cell.setContentsMargins(0, 0, 0, 0)
+            cell.addWidget(label, 1)
+            cell.addWidget(swatch)
+            wrapper = QtWidgets.QWidget()
+            wrapper.setLayout(cell)
+            grid.addWidget(wrapper, row, col)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(grid_host)
+        scroll.setMinimumHeight(200)
+        scroll.setMaximumHeight(240)
+        layout.addWidget(scroll)
+
+        # Fonts
+        font_row = QtWidgets.QHBoxLayout()
+        self._ui_font = QtWidgets.QFontComboBox()
+        self._ui_font.setCurrentFont(QtGui.QFont(theme.font_ui))
+        self._mono_font = QtWidgets.QFontComboBox()
+        self._mono_font.setFontFilters(QtWidgets.QFontComboBox.FontFilter.MonospacedFonts)
+        self._mono_font.setCurrentFont(QtGui.QFont(theme.font_mono))
+        ui_lbl = QtWidgets.QLabel("UI font")
+        ui_lbl.setObjectName("DimLabel")
+        mono_lbl = QtWidgets.QLabel("Mono font")
+        mono_lbl.setObjectName("DimLabel")
+        font_row.addWidget(ui_lbl)
+        font_row.addWidget(self._ui_font, 1)
+        font_row.addWidget(mono_lbl)
+        font_row.addWidget(self._mono_font, 1)
+        layout.addLayout(font_row)
+
+    def _load_preset(self) -> None:
+        self.set_theme(get_preset(self._preset_combo.currentText()))
+
+    def set_theme(self, theme: Theme) -> None:
+        for role, swatch in self._swatches.items():
+            swatch.set_value(getattr(theme, role))
+        self._ui_font.setCurrentFont(QtGui.QFont(theme.font_ui))
+        self._mono_font.setCurrentFont(QtGui.QFont(theme.font_mono))
+
+    def theme(self) -> Theme:
+        values = {role: sw.value() for role, sw in self._swatches.items()}
+        return Theme(
+            name=self._preset_combo.currentText(),
+            font_ui=self._ui_font.currentFont().family(),
+            font_mono=self._mono_font.currentFont().family(),
+            **values,
+        )
+
+
+def _is_light(hex_color: str) -> bool:
+    """Perceived-luminance test to pick readable swatch text."""
+    try:
+        r = int(hex_color[1:3], 16)
+        g = int(hex_color[3:5], 16)
+        b = int(hex_color[5:7], 16)
+    except (ValueError, IndexError):
+        return False
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 150
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -58,25 +211,16 @@ class SettingsDialog(QtWidgets.QDialog):
         llm_layout.addRow(llm_header)
 
         self._model_edit = QtWidgets.QLineEdit(settings.llm_model)
-        self._model_edit.setStyleSheet(
-            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
-            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
-        )
+        self._model_edit.setObjectName("ThemedInput")
         llm_layout.addRow("Model", self._model_edit)
 
         self._api_key_edit = QtWidgets.QLineEdit(settings.openai_api_key or "")
         self._api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self._api_key_edit.setStyleSheet(
-            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
-            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
-        )
+        self._api_key_edit.setObjectName("ThemedInput")
         llm_layout.addRow("API Key", self._api_key_edit)
 
         self._base_url_edit = QtWidgets.QLineEdit(settings.openai_base_url or "")
-        self._base_url_edit.setStyleSheet(
-            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
-            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
-        )
+        self._base_url_edit.setObjectName("ThemedInput")
         llm_layout.addRow("Base URL", self._base_url_edit)
 
         layout.addWidget(llm_group)
@@ -92,27 +236,34 @@ class SettingsDialog(QtWidgets.QDialog):
         path_layout.addRow(path_header)
 
         self._library_edit = QtWidgets.QLineEdit(str(settings.library_path))
-        self._library_edit.setStyleSheet(
-            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
-            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
-        )
+        self._library_edit.setObjectName("ThemedInput")
         path_layout.addRow("Library", self._library_edit)
 
         self._data_edit = QtWidgets.QLineEdit(str(settings.data_dir))
-        self._data_edit.setStyleSheet(
-            "background-color: #0F0F17; border: 1px solid #1E293B; border-radius: 6px; "
-            "color: #E2E8F0; padding: 8px; font-family: 'Cascadia Code', monospace; font-size: 12px;"
-        )
+        self._data_edit.setObjectName("ThemedInput")
         path_layout.addRow("Data Dir", self._data_edit)
 
         layout.addWidget(path_group)
 
+        # Appearance section (#WP8 \u2014 full palette editor)
+        appearance_group = QtWidgets.QFrame()
+        appearance_group.setObjectName("CardFrame")
+        appearance_layout = QtWidgets.QVBoxLayout(appearance_group)
+        appearance_layout.setSpacing(10)
+        appearance_header = QtWidgets.QLabel("Appearance")
+        appearance_header.setObjectName("SectionTitle")
+        appearance_layout.addWidget(appearance_header)
+        self._appearance = AppearanceEditor(current_theme())
+        appearance_layout.addWidget(self._appearance)
+        layout.addWidget(appearance_group)
+
         # Info note
         info = QtWidgets.QLabel(
-            "\u2139\ufe0f  Changes take effect on next pipeline run. "
-            "For permanent config, set environment variables."
+            "\u2139\ufe0f  Model/paths take effect on the next pipeline run; theme "
+            "applies immediately and is saved. For permanent provider config, set "
+            "environment variables."
         )
-        info.setStyleSheet("color: #64748B; font-size: 11px;")
+        info.setObjectName("MutedLabel")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -121,10 +272,7 @@ class SettingsDialog(QtWidgets.QDialog):
         btn_row.addStretch()
 
         cancel_btn = QtWidgets.QPushButton("Cancel")
-        cancel_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #334155; border-radius: 8px; "
-            "color: #94A3B8; padding: 10px 24px;"
-        )
+        cancel_btn.setObjectName("DialogGhostButton")
         cancel_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -143,6 +291,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "base_url": self._base_url_edit.text().strip() or None,
             "library_path": self._library_edit.text().strip(),
             "data_dir": self._data_edit.text().strip(),
+            "theme": self._appearance.theme(),
         }
 
 
@@ -157,6 +306,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setObjectName("MainWindow")
         self.setWindowTitle("AetherLab")
 
+        # Load the persisted theme BEFORE styling anything (#WP8).
+        set_current_theme(load_theme(settings.data_dir))
+
         # Responsive sizing (#15) — adapt to available screen space
         screen = QtWidgets.QApplication.primaryScreen()
         if screen:
@@ -166,7 +318,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             w, h = 1500, 950
         self.resize(w, h)
-        self.setStyleSheet(AETHERLAB_QSS)
+        self.setStyleSheet(build_qss(current_theme()))
 
         # ── Panels (created BEFORE shortcuts/menu) ──
         self.sidebar = SidebarNav()
@@ -303,24 +455,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._last_result:
             self.statusBar().showMessage("No pipeline result to export.")
             return
+        # Ask for the destination BEFORE compiling — no wasted pdflatex run
+        # when the user cancels the dialog (#F72).
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
         import tempfile
         tmp = Path(tempfile.gettempdir()) / "aetherlab_export" / "derivation.tex"
         solver = self._last_result.solver
         export_derivation_to_latex(
             solver.summary, solver.derivation_steps, solver.variables, tmp
         )
+        self.statusBar().showMessage("Compiling PDF…")
         pdf = compile_latex_to_pdf(tmp)
         if pdf and pdf.exists():
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
-            )
-            if path:
-                import shutil
-                shutil.copy2(pdf, path)
-                self.statusBar().showMessage(f"PDF exported: {path}")
+            import shutil
+            shutil.copy2(pdf, path)
+            self.statusBar().showMessage(f"PDF exported: {path}")
         else:
             self.statusBar().showMessage(
-                "pdflatex not found or compilation failed. LaTeX file saved instead."
+                "pdflatex not found or compilation failed. Use 'Export as LaTeX' instead."
             )
 
     def _export_scene(self) -> None:
@@ -376,11 +532,48 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open the settings dialog (#6)."""
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            vals = dialog.get_settings()
-            self.statusBar().showMessage(
-                f"Settings updated (in-memory). Model: {vals['model']}. "
-                "Restart the app for env var changes to persist."
-            )
+            self._apply_settings(dialog.get_settings())
+
+    def _apply_settings(self, vals: dict) -> None:
+        """Apply dialog values to the live settings used by the next run (#F71).
+
+        AppSettings is frozen, so build a replacement. Environment variables are
+        untouched; this is an in-memory override for the current session.
+        """
+        from dataclasses import replace
+
+        self.settings = replace(
+            self.settings,
+            llm_model=vals["model"] or self.settings.llm_model,
+            openai_api_key=vals["api_key"],
+            openai_base_url=vals["base_url"],
+            library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
+            data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
+        )
+        if vals.get("theme") is not None:
+            self._apply_theme(vals["theme"])
+        provider_note = (
+            f" {self.settings.llm_model}" if self.settings.openai_api_key else " No API key"
+        )
+        self.statusBar().showMessage(
+            f"Settings applied for the next pipeline run.{provider_note}"
+        )
+
+    def _apply_theme(self, theme: Theme) -> None:
+        """Restyle the whole app live and persist the choice (#WP8).
+
+        One setStyleSheet on the window cascades to every child; the canvas
+        painter reads colors from the module-level current theme, so it just
+        needs its cached fonts rebuilt and a repaint.
+        """
+        set_current_theme(theme)
+        self.setStyleSheet(build_qss(theme))
+        self.simulation_panel._live_canvas.refresh_theme()
+        # Repolish so QSS objectName rules re-evaluate immediately.
+        for widget in self.findChildren(QtWidgets.QWidget):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        save_theme(theme, self.settings.data_dir)
 
     def _toggle_code_view(self) -> None:
         if self.simulation_panel._stack.currentIndex() == 3:
@@ -389,11 +582,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.simulation_panel.show_code()
 
     def _cancel_pipeline(self) -> None:
-        """Cancel the running pipeline (#2)."""
+        """Cancel the running pipeline (#2).
+
+        Run stays disabled until the worker thread actually finishes (its
+        finished signal calls set_busy(False)); re-enabling it here would
+        mislead while the current stage is still winding down (#F73).
+        """
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.statusBar().showMessage("Cancelling pipeline\u2026")
-            self.command_bar.set_busy(False)
+            self.command_bar.set_cancelling()
 
     def _connect_signals(self) -> None:
         self.sidebar.item_selected.connect(self._on_sidebar_select)
@@ -404,9 +602,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parameter_dock.parameter_changed.connect(
             self.simulation_panel.apply_parameter_update
         )
-        self.parameter_dock.parameter_changed.connect(
-            self.analysis_panel.update_variable
-        )
+        # analysis_panel.update_variable connection removed (#F63 — was a no-op)
         # token_selected signal removed (#4 — was dead wiring)
         self.simulation_panel.parameter_changed.connect(
             self.parameter_dock.update_variable

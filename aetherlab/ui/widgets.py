@@ -9,6 +9,7 @@ from pathlib import Path
 from aetherlab.core.models import RagResult, SceneBundle, SolverResult
 from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
+from aetherlab.ui.theme import current_theme
 
 require_qt()
 
@@ -49,13 +50,14 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
+        theme = current_theme()
         rect = self.rect()
-        painter.fillRect(rect, QtGui.QColor("#0A0A0F"))
+        painter.fillRect(rect, QtGui.QColor(theme.bg))
 
         cx, cy = rect.width() // 2, rect.height() // 2
 
         # Subtle grid
-        grid_pen = QtGui.QPen(QtGui.QColor("#13131A"), 1)
+        grid_pen = QtGui.QPen(QtGui.QColor(theme.surface), 1)
         painter.setPen(grid_pen)
         for x in range(0, rect.width(), 48):
             painter.drawLine(x, 0, x, rect.height())
@@ -63,7 +65,7 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
             painter.drawLine(0, y, rect.width(), y)
 
         # Crosshair axes
-        accent_pen = QtGui.QPen(QtGui.QColor("#164E63"), 1)
+        accent_pen = QtGui.QPen(QtGui.QColor(theme.accent_soft), 1)
         accent_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
         painter.setPen(accent_pen)
         painter.drawLine(cx, 0, cx, rect.height())
@@ -72,28 +74,28 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         # Concentric rings
         for i, radius in enumerate([40, 80, 120, 160, 200]):
             opacity = max(0.08, 0.25 - i * 0.04)
-            color = QtGui.QColor("#06B6D4")
+            color = QtGui.QColor(theme.accent)
             color.setAlphaF(opacity)
             painter.setPen(QtGui.QPen(color, 1))
             painter.drawEllipse(QtCore.QPoint(cx, cy), radius, radius)
 
         # Primary rotating arc
-        arc_pen = QtGui.QPen(QtGui.QColor("#06B6D4"), 3)
+        arc_pen = QtGui.QPen(QtGui.QColor(theme.accent), 3)
         arc_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen)
         painter.drawArc(cx - 35, cy - 35, 70, 70, int(self._angle * 16), 100 * 16)
 
         # Counter-rotating secondary arc
-        arc_pen2 = QtGui.QPen(QtGui.QColor("#10B981"), 2)
+        arc_pen2 = QtGui.QPen(QtGui.QColor(theme.success), 2)
         arc_pen2.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen2)
         painter.drawArc(cx - 55, cy - 55, 110, 110, int(-self._angle * 16), 80 * 16)
 
         # Orbiting dots
         for radius, speed, color_hex, dot_r in [
-            (80, 1.0, "#06B6D4", 4),
-            (120, -0.7, "#10B981", 3),
-            (160, 0.5, "#8B5CF6", 3),
+            (80, 1.0, theme.accent, 4),
+            (120, -0.7, theme.success, 3),
+            (160, 0.5, theme.curve3, 3),
         ]:
             angle_rad = math.radians(self._angle * speed)
             ox = cx + radius * math.cos(angle_rad)
@@ -104,10 +106,10 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Center dot with glow
         glow = QtGui.QRadialGradient(float(cx), float(cy), 16)
-        glow.setColorAt(0, QtGui.QColor("#06B6D440"))
+        glow.setColorAt(0, QtGui.QColor(theme.accent + "40"))
         glow.setColorAt(1, QtGui.QColor("#00000000"))
         painter.fillRect(cx - 16, cy - 16, 32, 32, glow)
-        painter.setBrush(QtGui.QColor("#06B6D4"))
+        painter.setBrush(QtGui.QColor(theme.accent))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(QtCore.QPoint(cx, cy), 5, 5)
 
@@ -142,16 +144,13 @@ class SidebarNav(QtWidgets.QWidget):
         # Logo
         logo = QtWidgets.QLabel("AetherLab")
         logo.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        logo.setStyleSheet(
-            "color: #06B6D4; font-size: 16pt; font-weight: 800; "
-            "letter-spacing: -0.5px; padding: 12px 0 16px 0;"
-        )
+        logo.setObjectName("SidebarLogo")
         layout.addWidget(logo)
 
         # Separator
         sep = QtWidgets.QFrame()
         sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #1E293B;")
+        sep.setObjectName("SidebarSep")
         layout.addWidget(sep)
 
         layout.addSpacing(8)
@@ -253,7 +252,7 @@ class PipelineStepper(QtWidgets.QWidget):
             if i < len(self.STAGES) - 1:
                 connector = QtWidgets.QFrame()
                 connector.setFixedHeight(2)
-                connector.setStyleSheet("background-color: #1E293B; border-radius: 1px;")
+                connector.setObjectName("StepConnector")
                 layout.addWidget(connector, 2)
 
         self._current_stage = -1
@@ -325,16 +324,13 @@ class HistoryPanel(QtWidgets.QWidget):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
 
         self._count_label = QtWidgets.QLabel("0 entries")
-        self._count_label.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._count_label.setObjectName("MutedLabel")
         bottom_layout.addWidget(self._count_label)
         bottom_layout.addStretch()
 
         clear_btn = QtWidgets.QPushButton("Clear")
         clear_btn.setFixedWidth(80)
-        clear_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #334155; "
-            "border-radius: 6px; color: #64748B; padding: 4px 12px; font-size: 11px;"
-        )
+        clear_btn.setObjectName("GhostButton")
         clear_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         clear_btn.clicked.connect(self._clear)
         bottom_layout.addWidget(clear_btn)
@@ -452,19 +448,6 @@ class CommandBar(QtWidgets.QWidget):
             label = p[:48] + "\u2026" if len(p) > 48 else p
             self._examples.addItem(label)
         self._examples.setFixedWidth(180)
-        self._examples.setStyleSheet(
-            "QComboBox#ExamplesCombo {"
-            "  background-color: #13131A; border: 1px solid #334155;"
-            "  border-radius: 8px; color: #94A3B8; padding: 8px 12px;"
-            "  font-size: 12px;"
-            "}"
-            "QComboBox#ExamplesCombo:hover { border-color: #06B6D4; color: #CBD5E1; }"
-            "QComboBox#ExamplesCombo::drop-down { border: none; }"
-            "QComboBox#ExamplesCombo QAbstractItemView {"
-            "  background-color: #13131A; border: 1px solid #334155;"
-            "  color: #CBD5E1; selection-background-color: #164E63;"
-            "}"
-        )
         self._examples.activated.connect(self._on_example_selected)
         layout.addWidget(self._examples)
 
@@ -484,19 +467,6 @@ class CommandBar(QtWidgets.QWidget):
         self._quality.setCurrentIndex(0)
         self._quality.setFixedWidth(72)
         self._quality.setToolTip("Render quality")
-        self._quality.setStyleSheet(
-            "QComboBox#QualityCombo {"
-            "  background-color: #13131A; border: 1px solid #334155;"
-            "  border-radius: 8px; color: #94A3B8; padding: 8px 8px;"
-            "  font-size: 12px; font-weight: 600;"
-            "}"
-            "QComboBox#QualityCombo:hover { border-color: #06B6D4; color: #CBD5E1; }"
-            "QComboBox#QualityCombo::drop-down { border: none; }"
-            "QComboBox#QualityCombo QAbstractItemView {"
-            "  background-color: #13131A; border: 1px solid #334155;"
-            "  color: #CBD5E1; selection-background-color: #164E63;"
-            "}"
-        )
         layout.addWidget(self._quality)
 
         # Run button
@@ -510,11 +480,6 @@ class CommandBar(QtWidgets.QWidget):
         self.cancel_button = QtWidgets.QPushButton("\u2715  Cancel")
         self.cancel_button.setObjectName("CancelButton")
         self.cancel_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.cancel_button.setStyleSheet(
-            "QPushButton#CancelButton { background-color: #7F1D1D; border: 1px solid #F43F5E; "
-            "border-radius: 12px; color: #FCA5A5; padding: 14px 20px; font-weight: 600; font-size: 13px; }"
-            "QPushButton#CancelButton:hover { background-color: #991B1B; border-color: #FB7185; }"
-        )
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
         self.cancel_button.hide()
         layout.addWidget(self.cancel_button)
@@ -529,6 +494,19 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.setText("\u23f3  Running\u2026" if busy else "\u25b6  Run")
         self.input.setDisabled(busy)
         self.cancel_button.setVisible(busy)
+        # Restore cancel button state (may have been put in 'Cancelling' mode).
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.setText("\u2715  Cancel")
+
+    def set_cancelling(self) -> None:
+        """Cancel requested: keep Run disabled until the worker actually finishes.
+
+        Re-enabling Run immediately would mislead - the pipeline thread may
+        still be finishing its current stage. The worker's finished signal
+        calls set_busy(False), which restores everything.
+        """
+        self.cancel_button.setDisabled(True)
+        self.cancel_button.setText("\u23f3  Cancelling\u2026")
 
     def _on_example_selected(self, index: int) -> None:
         if index > 0:
@@ -559,7 +537,9 @@ class ParameterDock(QtWidgets.QWidget):
         super().__init__(parent)
         # (slider, spinbox, value_label, original_value)
         self._sliders: dict[str, tuple[QtWidgets.QSlider, QtWidgets.QDoubleSpinBox, QtWidgets.QLabel, float]] = {}
-        self._spans: dict[str, float] = {}
+        # Per-parameter (lo, hi) slider/spinbox range. lo is negative when the
+        # original value is negative so e.g. charge=-1.0 is representable (#F62).
+        self._ranges: dict[str, tuple[float, float]] = {}
         self._collapsed = False
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -572,11 +552,7 @@ class ParameterDock(QtWidgets.QWidget):
         header_layout.setSpacing(8)
 
         self._toggle_btn = QtWidgets.QPushButton("\u25bc  Parameters")
-        self._toggle_btn.setStyleSheet(
-            "background: transparent; border: none; color: #64748B; "
-            "font-size: 11px; font-weight: 700; text-transform: uppercase; "
-            "letter-spacing: 1px; padding: 4px 0;"
-        )
+        self._toggle_btn.setObjectName("DockToggle")
         self._toggle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._toggle_btn.clicked.connect(self._toggle)
         header_layout.addWidget(self._toggle_btn)
@@ -605,33 +581,34 @@ class ParameterDock(QtWidgets.QWidget):
     def _span_for(self, value: float) -> float:
         return max(abs(float(value)) * 2.0, 1.0)
 
+    def _range_for(self, value: float) -> tuple[float, float]:
+        """Slider/spinbox range: [0, span] for non-negative values, symmetric
+        [-span, span] when the value is negative so it stays representable (#F62)."""
+        span = self._span_for(value)
+        return (-span if value < 0 else 0.0, span)
+
     def set_variables(self, variables: dict[str, float]) -> None:
         self._clear()
         for name, value in sorted(variables.items()):
             value = float(value)
-            span = self._span_for(value)
-            self._spans[name] = span
+            lo, hi = self._range_for(value)
+            self._ranges[name] = (lo, hi)
 
             slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
             slider.setRange(0, self._SLIDER_TICKS)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.valueChanged.connect(
                 lambda raw, key=name: self._on_slider_change(key, raw)
             )
 
             # Spin box for precise numeric input (#7)
             spinbox = QtWidgets.QDoubleSpinBox()
-            spinbox.setRange(0, span)
+            spinbox.setRange(lo, hi)
             spinbox.setValue(value)
             spinbox.setDecimals(4)
-            spinbox.setSingleStep(span / 100)
+            spinbox.setSingleStep((hi - lo) / 100)
             spinbox.setFixedWidth(90)
-            spinbox.setStyleSheet(
-                "QDoubleSpinBox { background-color: #0F0F17; border: 1px solid #1E293B; "
-                "border-radius: 4px; color: #06B6D4; padding: 2px 4px; "
-                "font-family: 'Cascadia Code', monospace; font-size: 11px; }"
-                "QDoubleSpinBox:focus { border-color: #06B6D4; }"
-            )
+            spinbox.setObjectName("ThemedSpinBox")
             spinbox.valueChanged.connect(
                 lambda val, key=name: self._on_spinbox_change(key, val)
             )
@@ -640,10 +617,7 @@ class ParameterDock(QtWidgets.QWidget):
             reset_btn = QtWidgets.QPushButton("\u21ba")
             reset_btn.setFixedWidth(28)
             reset_btn.setToolTip(f"Reset {name} to {value:g}")
-            reset_btn.setStyleSheet(
-                "background: transparent; border: 1px solid #334155; border-radius: 4px; "
-                "color: #64748B; font-size: 14px; padding: 2px;"
-            )
+            reset_btn.setObjectName("IconGhostButton")
             reset_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             reset_btn.clicked.connect(
                 lambda checked, key=name, orig=value: self._reset_param(key, orig)
@@ -661,8 +635,8 @@ class ParameterDock(QtWidgets.QWidget):
             self._container_layout.addRow(name, row_widget)
 
     def _on_slider_change(self, name: str, raw: int) -> None:
-        span = self._spans.get(name, 1.0)
-        value = raw / self._SLIDER_TICKS * span
+        lo, hi = self._ranges.get(name, (0.0, 1.0))
+        value = lo + raw / self._SLIDER_TICKS * (hi - lo)
         if name in self._sliders:
             _, spinbox, _, _ = self._sliders[name]
             spinbox.blockSignals(True)
@@ -670,47 +644,51 @@ class ParameterDock(QtWidgets.QWidget):
             spinbox.blockSignals(False)
         self.parameter_changed.emit(name, value)
 
+    def _grow_range(self, name: str, value: float) -> tuple[float, float]:
+        """Expand the stored range so ``value`` fits; sync the spinbox limits."""
+        lo, hi = self._ranges.get(name, self._range_for(value))
+        if value > hi or value < lo:
+            span = self._span_for(value)
+            lo = min(lo, -span if value < 0 else lo)
+            hi = max(hi, span)
+            self._ranges[name] = (lo, hi)
+            if name in self._sliders:
+                self._sliders[name][1].setRange(lo, hi)
+        return self._ranges.get(name, (lo, hi))
+
     def _on_spinbox_change(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, _, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(value))
-            if value > span:
-                span = self._span_for(value)
-                self._spans[name] = span
-                spinbox = self._sliders[name][1]
-                spinbox.setRange(0, span)
+            lo, hi = self._grow_range(name, value)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.blockSignals(False)
         self.parameter_changed.emit(name, value)
 
     def _reset_param(self, name: str, original_value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(original_value))
+            lo, hi = self._ranges.get(name, self._range_for(original_value))
             spinbox.blockSignals(True)
             spinbox.setValue(original_value)
             spinbox.blockSignals(False)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(original_value, span))
+            slider.setValue(self._value_to_tick(original_value, lo, hi))
             slider.blockSignals(False)
             self.parameter_changed.emit(name, original_value)
 
-    def _value_to_tick(self, value: float, span: float) -> int:
-        if span <= 0:
+    def _value_to_tick(self, value: float, lo: float, hi: float) -> int:
+        if hi <= lo:
             return 0
-        return max(0, min(self._SLIDER_TICKS, int(value / span * self._SLIDER_TICKS)))
+        tick = int((value - lo) / (hi - lo) * self._SLIDER_TICKS)
+        return max(0, min(self._SLIDER_TICKS, tick))
 
     def update_variable(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            span = self._spans.get(name, self._span_for(value))
-            if value > span:
-                span = self._span_for(value)
-                self._spans[name] = span
-                spinbox.setRange(0, span)
+            lo, hi = self._grow_range(name, value)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, span))
+            slider.setValue(self._value_to_tick(value, lo, hi))
             slider.blockSignals(False)
             spinbox.blockSignals(True)
             spinbox.setValue(value)
@@ -720,7 +698,7 @@ class ParameterDock(QtWidgets.QWidget):
         while self._container_layout.rowCount():
             self._container_layout.removeRow(0)
         self._sliders.clear()
-        self._spans.clear()
+        self._ranges.clear()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -745,37 +723,31 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         self._arrow = QtWidgets.QLabel("\u25b6")
         self._arrow.setFixedWidth(14)
-        self._arrow.setStyleSheet("color: #475569; font-size: 10px;")
+        self._arrow.setStyleSheet(
+            f"color: {current_theme().text_faint}; font-size: 10px;"
+        )
         header_layout.addWidget(self._arrow)
 
         step_num = QtWidgets.QLabel(f"Step {index}")
-        step_num.setStyleSheet(
-            "color: #06B6D4; font-size: 11px; font-weight: 700; "
-            "font-family: 'Cascadia Code', monospace;"
-        )
+        step_num.setObjectName("StepNumLabel")
         header_layout.addWidget(step_num)
 
         preview = text[:60] + "\u2026" if len(text) > 60 else text
         preview_label = QtWidgets.QLabel(preview)
-        preview_label.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        preview_label.setObjectName("DimLabel")
         header_layout.addWidget(preview_label, 1)
 
         copy_btn = QtWidgets.QPushButton("\U0001f4cb")
         copy_btn.setFixedWidth(28)
         copy_btn.setToolTip("Copy step")
-        copy_btn.setStyleSheet(
-            "background: transparent; border: none; font-size: 12px; padding: 2px;"
-        )
+        copy_btn.setObjectName("MiniIconButton")
         copy_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(lambda: _copy_to_clipboard(text))
         header_layout.addWidget(copy_btn)
 
         self._body = QtWidgets.QLabel(text)
         self._body.setWordWrap(True)
-        self._body.setStyleSheet(
-            "color: #E2E8F0; font-size: 12px; padding: 8px 8px 8px 28px; "
-            "background-color: #0F0F17; border-radius: 6px; margin-top: 4px;"
-        )
+        self._body.setObjectName("StepBody")
         self._body.hide()
 
         self._expanded = False
@@ -789,9 +761,9 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         self._expanded = not self._expanded
         self._body.setVisible(self._expanded)
         self._arrow.setText("\u25bc" if self._expanded else "\u25b6")
-        self._arrow.setStyleSheet(
-            f"color: {'#06B6D4' if self._expanded else '#475569'}; font-size: 10px;"
-        )
+        theme = current_theme()
+        color = theme.accent if self._expanded else theme.text_faint
+        self._arrow.setStyleSheet(f"color: {color}; font-size: 10px;")
 
 
 def _copy_to_clipboard(text: str) -> None:
@@ -832,10 +804,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         sh_layout.addStretch()
         copy_btn = QtWidgets.QPushButton("\U0001f4cb Copy")
         copy_btn.setFixedHeight(24)
-        copy_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #334155; border-radius: 4px; "
-            "color: #64748B; font-size: 10px; padding: 2px 8px;"
-        )
+        copy_btn.setObjectName("GhostButton")
         copy_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(lambda: _copy_to_clipboard(self.summary.toPlainText()))
         sh_layout.addWidget(copy_btn)
@@ -862,10 +831,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         sth_layout.addStretch()
         self._expand_all_btn = QtWidgets.QPushButton("Expand all")
         self._expand_all_btn.setFixedHeight(24)
-        self._expand_all_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #334155; border-radius: 4px; "
-            "color: #64748B; font-size: 10px; padding: 2px 8px;"
-        )
+        self._expand_all_btn.setObjectName("GhostButton")
         self._expand_all_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._expand_all_btn.clicked.connect(self._toggle_all_steps)
         sth_layout.addWidget(self._expand_all_btn)
@@ -874,7 +840,6 @@ class AnalysisPanel(QtWidgets.QWidget):
         self._steps_scroll = QtWidgets.QScrollArea()
         self._steps_scroll.setWidgetResizable(True)
         self._steps_scroll.setMinimumHeight(100)
-        self._steps_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._steps_container = QtWidgets.QWidget()
         self._steps_vbox = QtWidgets.QVBoxLayout(self._steps_container)
         self._steps_vbox.setContentsMargins(0, 0, 0, 0)
@@ -889,7 +854,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         )
         self._empty_label.setWordWrap(True)
         self._empty_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet("color: #475569; font-size: 12px; padding: 24px;")
+        self._empty_label.setObjectName("EmptyStateLabel")
         steps_layout.addWidget(self._empty_label)
 
         layout.addWidget(self._summary_frame, 2)
@@ -920,9 +885,6 @@ class AnalysisPanel(QtWidgets.QWidget):
             self._steps_vbox.insertWidget(self._steps_vbox.count() - 1, widget)
             self._step_widgets.append(widget)
 
-    def update_variable(self, name: str, value: float) -> None:
-        pass  # Parameters now live in ParameterDock
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Reference Panel
@@ -950,27 +912,25 @@ class _RagHitCard(QtWidgets.QFrame):
         if page:
             source_text += f" \u2022 p.{page}"
         src_label = QtWidgets.QLabel(source_text)
-        src_label.setStyleSheet(
-            "color: #06B6D4; font-size: 11px; font-weight: 600; "
-            "font-family: 'Cascadia Code', monospace;"
-        )
+        src_label.setObjectName("SourceLabel")
         h_layout.addWidget(src_label)
         h_layout.addStretch()
 
+        theme = current_theme()
         score_label = QtWidgets.QLabel(f"{score:.2f}")
-        score_color = "#10B981" if score > 0.7 else "#F59E0B" if score > 0.4 else "#64748B"
+        score_color = (
+            theme.success if score > 0.7 else theme.warning if score > 0.4 else theme.text_muted
+        )
         score_label.setStyleSheet(
             f"color: {score_color}; font-size: 11px; font-weight: 700; "
-            "font-family: 'Cascadia Code', monospace;"
+            f"font-family: '{theme.font_mono}', monospace;"
         )
         h_layout.addWidget(score_label)
 
         copy_btn = QtWidgets.QPushButton("\U0001f4cb")
         copy_btn.setFixedWidth(28)
         copy_btn.setToolTip("Copy excerpt")
-        copy_btn.setStyleSheet(
-            "background: transparent; border: none; font-size: 12px; padding: 2px;"
-        )
+        copy_btn.setObjectName("MiniIconButton")
         copy_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(lambda: _copy_to_clipboard(excerpt))
         h_layout.addWidget(copy_btn)
@@ -980,7 +940,7 @@ class _RagHitCard(QtWidgets.QFrame):
         # Excerpt
         excerpt_label = QtWidgets.QLabel(excerpt)
         excerpt_label.setWordWrap(True)
-        excerpt_label.setStyleSheet("color: #CBD5E1; font-size: 11px; line-height: 1.4;")
+        excerpt_label.setObjectName("ExcerptLabel")
         layout.addWidget(excerpt_label)
 
 
@@ -997,13 +957,12 @@ class ReferencePanel(QtWidgets.QWidget):
 
         # Backend label
         self._backend_label = QtWidgets.QLabel("")
-        self._backend_label.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._backend_label.setObjectName("MutedLabel")
         layout.addWidget(self._backend_label)
 
         # Scrollable card container (#10)
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
-        self._scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._card_container = QtWidgets.QWidget()
         self._card_layout = QtWidgets.QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
@@ -1019,7 +978,7 @@ class ReferencePanel(QtWidgets.QWidget):
         )
         self._empty_label.setWordWrap(True)
         self._empty_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet("color: #475569; font-size: 12px; padding: 24px;")
+        self._empty_label.setObjectName("EmptyStateLabel")
         layout.addWidget(self._empty_label)
 
     def set_rag_result(self, rag: RagResult) -> None:
@@ -1071,40 +1030,29 @@ class SimulationPanel(QtWidgets.QWidget):
         # ── Error banner (hidden by default) ──
         self._error_banner = QtWidgets.QFrame()
         self._error_banner.setObjectName("ErrorBanner")
-        self._error_banner.setStyleSheet(
-            "QFrame#ErrorBanner {"
-            "  background-color: #1C0A0A; border-bottom: 2px solid #F43F5E;"
-            "  padding: 0;"
-            "}"
-        )
         err_layout = QtWidgets.QHBoxLayout(self._error_banner)
         err_layout.setContentsMargins(16, 8, 16, 8)
         err_layout.setSpacing(12)
 
         self._error_icon = QtWidgets.QLabel("\u26a0\ufe0f")
-        self._error_icon.setStyleSheet("font-size: 14px; color: #F43F5E;")
+        self._error_icon.setObjectName("ErrorIcon")
         err_layout.addWidget(self._error_icon)
 
         self._error_text = QtWidgets.QLabel("")
-        self._error_text.setStyleSheet("color: #FDA4AF; font-size: 12px;")
+        self._error_text.setObjectName("ErrorText")
         self._error_text.setWordWrap(True)
         err_layout.addWidget(self._error_text, 1)
 
         self._error_detail_btn = QtWidgets.QPushButton("Details")
         self._error_detail_btn.setFixedWidth(72)
-        self._error_detail_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #F43F5E; border-radius: 6px;"
-            " color: #FDA4AF; font-size: 11px; padding: 4px 8px;"
-        )
+        self._error_detail_btn.setObjectName("ErrorGhostButton")
         self._error_detail_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._error_detail_btn.clicked.connect(self._show_error_details)
         err_layout.addWidget(self._error_detail_btn)
 
         dismiss_btn = QtWidgets.QPushButton("\u2715")
         dismiss_btn.setFixedWidth(28)
-        dismiss_btn.setStyleSheet(
-            "background: transparent; border: none; color: #64748B; font-size: 14px;"
-        )
+        dismiss_btn.setObjectName("MiniIconButton")
         dismiss_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         dismiss_btn.clicked.connect(self._error_banner.hide)
         err_layout.addWidget(dismiss_btn)
@@ -1116,24 +1064,18 @@ class SimulationPanel(QtWidgets.QWidget):
         # Top bar with pill tabs for view switching + phase portrait toggle
         top_bar = QtWidgets.QWidget()
         top_bar.setFixedHeight(48)
-        top_bar.setStyleSheet("background-color: #0D0D14; border-bottom: 1px solid #1E293B;")
+        top_bar.setObjectName("SimTopBar")
         top_layout = QtWidgets.QHBoxLayout(top_bar)
         top_layout.setContentsMargins(16, 6, 16, 6)
         top_layout.setSpacing(8)
 
         self.status = QtWidgets.QLabel("Waiting for pipeline\u2026")
         self.status.setObjectName("StatusIdle")
-        self.status.setStyleSheet("font-size: 12px;")
         top_layout.addWidget(self.status, 1)
 
         # Phase portrait toggle checkbox
         self._phase_check = QtWidgets.QCheckBox("Phase")
-        self._phase_check.setStyleSheet(
-            "QCheckBox { color: #94A3B8; font-size: 11px; font-weight: 600; spacing: 6px; }"
-            "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px;"
-            "  border: 1px solid #334155; background: #13131A; }"
-            "QCheckBox::indicator:checked { background: #06B6D4; border-color: #06B6D4; }"
-        )
+        self._phase_check.setObjectName("PhaseCheck")
         self._phase_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._phase_check.setToolTip("Toggle phase portrait overlay")
         self._phase_check.toggled.connect(self.phase_toggled.emit)
@@ -1175,18 +1117,12 @@ class SimulationPanel(QtWidgets.QWidget):
         ch_layout = QtWidgets.QHBoxLayout(code_header)
         ch_layout.setContentsMargins(0, 0, 0, 0)
         ch_label = QtWidgets.QLabel("Generated Scene Code")
-        ch_label.setStyleSheet(
-            "color: #64748B; font-size: 9pt; font-weight: 700; "
-            "text-transform: uppercase; letter-spacing: 1.2px;"
-        )
+        ch_label.setObjectName("SectionTitle")
         ch_layout.addWidget(ch_label)
         ch_layout.addStretch()
         copy_code_btn = QtWidgets.QPushButton("\U0001f4cb Copy code")
         copy_code_btn.setFixedHeight(26)
-        copy_code_btn.setStyleSheet(
-            "background: transparent; border: 1px solid #334155; border-radius: 4px; "
-            "color: #64748B; font-size: 11px; padding: 2px 10px;"
-        )
+        copy_code_btn.setObjectName("GhostButton")
         copy_code_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         copy_code_btn.clicked.connect(lambda: _copy_to_clipboard(self.code.toPlainText()))
         ch_layout.addWidget(copy_code_btn)
@@ -1228,9 +1164,7 @@ class SimulationPanel(QtWidgets.QWidget):
 
         self._video_widget = QVideoWidget()
         self._video_widget.setMinimumSize(400, 225)
-        self._video_widget.setStyleSheet(
-            "background-color: #0A0A0F; border-radius: 8px;"
-        )
+        self._video_widget.setObjectName("VideoSurface")
         container_layout.addWidget(self._video_widget, 1)
 
         # Controls
@@ -1280,9 +1214,7 @@ class SimulationPanel(QtWidgets.QWidget):
         self._speed_slider.setToolTip("Playback speed")
         self._speed_slider.setFixedWidth(80)
         speed_label = QtWidgets.QLabel("1.0x")
-        speed_label.setStyleSheet(
-            "color: #64748B; font-size: 11px; font-weight: 600;"
-        )
+        speed_label.setObjectName("MutedLabel")
 
         controls_layout.addWidget(self._prev_frame_btn)  # #14
         controls_layout.addWidget(self._play_btn)

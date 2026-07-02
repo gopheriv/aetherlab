@@ -120,5 +120,6 @@ def test_classify_render_error_taxonomy() -> None:
     assert classify_render_error("Traceback...\nNameError: name 'x' is not defined") == "code"
     assert classify_render_error("AttributeError: 'Axes' object has no attribute 'pl; '") == "code"
     assert classify_render_error("! Undefined control sequence.\nLaTeX Error") == "code"
+    assert classify_render_error("ERROR There are no scenes inside that module") == "code"
     # Unknown/empty -> conservatively infra (do not burn LLM calls).
     assert classify_render_error("") == "infra"

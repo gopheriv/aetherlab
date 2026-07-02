@@ -7,7 +7,13 @@ import traceback
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle
+from aetherlab.core.models import (
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+)
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
@@ -18,9 +24,8 @@ from aetherlab.ui.qt_compat import QtCore, require_qt
 require_qt()
 
 
-class _PipelineCancelled(Exception):
+class _PipelineCancelledError(Exception):
     """Internal sentinel exception for pipeline cancellation (#2)."""
-    pass
 
 
 class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
@@ -47,12 +52,12 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
     def _check_cancelled(self) -> None:
         """Raise if pipeline was cancelled — checked between stages (#2)."""
         if self._cancelled:
-            raise _PipelineCancelled()
+            raise _PipelineCancelledError()
 
     def run(self) -> None:
         try:
             asyncio.run(self._run_async())
-        except _PipelineCancelled:
+        except _PipelineCancelledError:
             self.status.emit("Pipeline cancelled by user.")
         except Exception as exc:
             if self._cancelled:
@@ -91,8 +96,9 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
 
         self._check_cancelled()
 
-        # ── Workers B + C in parallel: RAG + scene gen ──
-        self.progress.emit(35, "Searching references & generating scene in parallel\u2026")
+        # ── Workers B then C: RAG, then scene gen (the scene prompt uses
+        # the RAG context, so these stages are sequential by design) ──
+        self.progress.emit(35, "Searching references, then generating scene…")
         manim = ManimRuntime(self.settings)
         current_engine, _ = manim.detect_engine()
 
