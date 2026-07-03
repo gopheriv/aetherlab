@@ -1,0 +1,402 @@
+{
+  "F01": {
+    "status": "PASS",
+    "note": "MainWindow constructs; title ok=True"
+  },
+  "F02": {
+    "status": "PASS",
+    "note": "smoke exit 0; scene status line present"
+  },
+  "F03": {
+    "status": "PASS",
+    "note": "nargs='?' const + explicit prompt both parse"
+  },
+  "F04": {
+    "status": "PASS",
+    "note": "watchdog present with backoff logic"
+  },
+  "F05": {
+    "status": "PASS",
+    "note": "require_qt raises RuntimeError w/ install hint"
+  },
+  "F06": {
+    "status": "PASS",
+    "note": "model=qwen3.6-plus data_dir set timeout=60.0"
+  },
+  "F07": {
+    "status": "PASS",
+    "note": "save/load round-trip; None dropped; path honored"
+  },
+  "F08": {
+    "status": "PASS",
+    "note": "env > app-config precedence verified"
+  },
+  "F09": {
+    "status": "PASS",
+    "note": "missing\u2192{}; parsed model/baseUrl/apiKey"
+  },
+  "F10": {
+    "status": "PASS",
+    "note": "dialog keys ok; Data path persists via config (BUG-4)"
+  },
+  "F11": {
+    "status": "PASS",
+    "note": "data=AetherLab chroma=chroma"
+  },
+  "F12": {
+    "status": "PASS",
+    "note": "submit trims+emits+clears; empty guarded"
+  },
+  "F13": {
+    "status": "PASS",
+    "note": "10 examples; pick fills field"
+  },
+  "F14": {
+    "status": "PASS",
+    "note": "quality maps Draft/Standard/High\u2192l/m/h; set_quality by flag"
+  },
+  "F15": {
+    "status": "PASS",
+    "note": "Run\u2194Cancel swap + input disable"
+  },
+  "F16": {
+    "status": "PASS",
+    "note": "pipeline ran: solver=deterministic-fallback scene=rendered"
+  },
+  "F17": {
+    "status": "PASS",
+    "note": "stage transitions + reset clears timing (BUG-1)"
+  },
+  "F18": {
+    "status": "PASS",
+    "note": "cancel flag \u2192 _check_cancelled raises"
+  },
+  "F19": {
+    "status": "PASS",
+    "note": "double-run guard present"
+  },
+  "F20": {
+    "status": "PASS",
+    "note": "old worker disconnected + deleteLater"
+  },
+  "F21": {
+    "status": "PASS",
+    "note": "closeEvent cancels + waits 5s"
+  },
+  "F22": {
+    "status": "PASS",
+    "note": "remote solve path present (temp 0.2, plot key)"
+  },
+  "F23": {
+    "status": "PASS",
+    "note": "fallback: 5 steps, plot attached"
+  },
+  "F24": {
+    "status": "PASS",
+    "note": "phrases: ['navier stokes', 'navier-stokes'] / ['fourier transform', 'fourier']"
+  },
+  "F25": {
+    "status": "PASS",
+    "note": "think-strip + brace extraction"
+  },
+  "F26": {
+    "status": "PASS",
+    "note": "plot dict kept; non-dict \u2192 None"
+  },
+  "F27": {
+    "status": "PASS",
+    "note": "whitelisted expr compiles + vectorizes"
+  },
+  "F28": {
+    "status": "PASS",
+    "note": "all 6 unsafe exprs rejected; ^\u2192** works"
+  },
+  "F29": {
+    "status": "PASS",
+    "note": "fallback payload compiles; bad kind rejected"
+  },
+  "F30": {
+    "status": "PASS",
+    "note": "whitespace-normalized key c98442358635"
+  },
+  "F31": {
+    "status": "PASS",
+    "note": "independent stage storage + column whitelist"
+  },
+  "F32": {
+    "status": "PASS",
+    "note": "fallback+key rejected; wrong model rejected"
+  },
+  "F33": {
+    "status": "PASS",
+    "note": "scene reused only on engine+status match"
+  },
+  "F34": {
+    "status": "PASS",
+    "note": "_video_exists guards empty/missing"
+  },
+  "F35": {
+    "status": "PASS",
+    "note": "chromadb path scores 1/(1+dist)"
+  },
+  "F36": {
+    "status": "PASS",
+    "note": "filesystem: 1 hit(s), scores in [0,1] (BUG-3)"
+  },
+  "F37": {
+    "status": "PASS",
+    "note": "empty keywords \u2192 backend 'none'"
+  },
+  "F38": {
+    "status": "PASS",
+    "note": "reference cards render + empty state"
+  },
+  "F39": {
+    "status": "PASS",
+    "note": "auto-ingest on empty collection"
+  },
+  "F40": {
+    "status": "PASS",
+    "note": "2 pending file(s) detected"
+  },
+  "F41": {
+    "status": "PASS",
+    "note": "6 chunks from long text"
+  },
+  "F42": {
+    "status": "PASS",
+    "note": "PDF page-by-page chunking present"
+  },
+  "F43": {
+    "status": "PASS",
+    "note": "ingest upserted 4; re-run 0 (incremental)"
+  },
+  "F44": {
+    "status": "PASS",
+    "note": "library panel refresh; file_count=3"
+  },
+  "F45": {
+    "status": "PASS",
+    "note": "add-folder copies + triggers reindex"
+  },
+  "F46": {
+    "status": "PASS",
+    "note": "incremental/full reindex via background worker"
+  },
+  "F47": {
+    "status": "PASS",
+    "note": "starter dialog: 2 default-selected book(s)"
+  },
+  "F48": {
+    "status": "PASS",
+    "note": "URL fallback + free_disk_mb=216722 + skip-existing"
+  },
+  "F49": {
+    "status": "PASS",
+    "note": "extract strips think/fences+renames; context budget wired (BUG-5)"
+  },
+  "F50": {
+    "status": "PASS",
+    "note": "compile+retry path present"
+  },
+  "F51": {
+    "status": "PASS",
+    "note": "static template compiles (2234 chars)"
+  },
+  "F52": {
+    "status": "PASS",
+    "note": "dynamic fallback compiles w/ ValueTracker"
+  },
+  "F53": {
+    "status": "PASS",
+    "note": "engine=manim-community"
+  },
+  "F54": {
+    "status": "PASS",
+    "note": "render invokes manim render w/ fps+media_dir"
+  },
+  "F55": {
+    "status": "PASS",
+    "note": "tier=constrained fps=30"
+  },
+  "F56": {
+    "status": "PASS",
+    "note": "timeout_map + timeout/error statuses"
+  },
+  "F57": {
+    "status": "PASS",
+    "note": "_find_video None + _clean_old_renders safe"
+  },
+  "F58": {
+    "status": "PASS",
+    "note": "manim cmd: C:\\Python314\\python.exe -m manim"
+  },
+  "F59": {
+    "status": "PASS",
+    "note": "pill tabs map to stack pages"
+  },
+  "F60": {
+    "status": "PASS",
+    "note": "code viewer shows diagnostics prefixed with #"
+  },
+  "F61": {
+    "status": "PASS",
+    "note": "video player + time label formatting"
+  },
+  "F62": {
+    "status": "PASS",
+    "note": "toggle canvas\u2194code present"
+  },
+  "F63": {
+    "status": "PASS",
+    "note": "LiveCanvas constructs + set_state"
+  },
+  "F64": {
+    "status": "PASS",
+    "note": "plot-driven curve; bad plot falls back"
+  },
+  "F65": {
+    "status": "PASS",
+    "note": "damped/pendulum/generic all produce curves"
+  },
+  "F66": {
+    "status": "PASS",
+    "note": "phase adds curve (1\u21922)"
+  },
+  "F67": {
+    "status": "PASS",
+    "note": "reset_view restores zoom/pan"
+  },
+  "F68": {
+    "status": "PASS",
+    "note": "empty canvas safe; effective ranges default"
+  },
+  "F69": {
+    "status": "PASS",
+    "note": "negative range preserved on update_variable (BUG-2)"
+  },
+  "F70": {
+    "status": "PASS",
+    "note": "spinbox\u2192slider sync"
+  },
+  "F71": {
+    "status": "PASS",
+    "note": "collapse toggles container"
+  },
+  "F72": {
+    "status": "PASS",
+    "note": "summary banner + cache note + chips"
+  },
+  "F73": {
+    "status": "PASS",
+    "note": "collapsible steps + expand-all"
+  },
+  "F74": {
+    "status": "PASS",
+    "note": "empty hint present pre-run"
+  },
+  "F75": {
+    "status": "PASS",
+    "note": "rail select emits index"
+  },
+  "F76": {
+    "status": "PASS",
+    "note": "arrow key advances selection"
+  },
+  "F77": {
+    "status": "PASS",
+    "note": "Params gated until result"
+  },
+  "F78": {
+    "status": "PASS",
+    "note": "scene ready auto-switches to Scene"
+  },
+  "F79": {
+    "status": "PASS",
+    "note": "history persists + reloads"
+  },
+  "F80": {
+    "status": "PASS",
+    "note": "double-click emits prompt_selected"
+  },
+  "F81": {
+    "status": "PASS",
+    "note": "clear empties list + db"
+  },
+  "F82": {
+    "status": "PASS",
+    "note": "toast shows kind + details"
+  },
+  "F83": {
+    "status": "PASS",
+    "note": "error banner + deduped details window"
+  },
+  "F84": {
+    "status": "PASS",
+    "note": "failure sets stepper error + status bar"
+  },
+  "F85": {
+    "status": "PASS",
+    "note": "latex export + escaping"
+  },
+  "F86": {
+    "status": "PASS",
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_zjhkmnuf/d.pdf') (None ok if no pdflatex)"
+  },
+  "F87": {
+    "status": "PASS",
+    "note": "scene code export"
+  },
+  "F88": {
+    "status": "PASS",
+    "note": "save video copies MP4"
+  },
+  "F89": {
+    "status": "PASS",
+    "note": "gif export via ffmpeg w/ error handling"
+  },
+  "F90": {
+    "status": "PASS",
+    "note": "QSS present (11421 chars)"
+  },
+  "F91": {
+    "status": "PASS",
+    "note": "responsive sizing formula"
+  },
+  "F92": {
+    "status": "PASS",
+    "note": "title bar constructs w/ settings signal"
+  },
+  "F93": {
+    "status": "PASS",
+    "note": "empty-state status reflects key + library"
+  },
+  "F94": {
+    "status": "PASS",
+    "note": "running view stage text"
+  },
+  "F95": {
+    "status": "PASS",
+    "note": "icons render + unknown falls back"
+  },
+  "F96": {
+    "status": "PASS",
+    "note": "overlay timer idle until shown"
+  },
+  "F97": {
+    "status": "PASS",
+    "note": "corrupt/empty json \u2192 safe defaults"
+  },
+  "F98": {
+    "status": "PASS",
+    "note": "_nice_step degenerate=1.0; map guard present"
+  },
+  "F99": {
+    "status": "PASS",
+    "note": "StateBus subscribe/emit"
+  },
+  "F100": {
+    "status": "PASS",
+    "note": "sanitize + stable per-code hashing"
+  }
+}
