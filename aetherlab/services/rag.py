@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -78,7 +79,15 @@ class LocalVectorRag:
                     hits.append(hit)
 
         hits.sort(key=lambda item: item.score, reverse=True)
-        return RagResult(keywords=keywords, hits=hits[:limit], backend="filesystem")
+        top = hits[:limit]
+        # Raw scores are keyword counts (unbounded). Normalize to [0,1] against
+        # the strongest hit so the UI's score pill/label — which assume a 0-1
+        # relevance like the ChromaDB backend — stay meaningful and comparable.
+        best = top[0].score if top else 0.0
+        if best > 0:
+            for hit in top:
+                hit.score = hit.score / best
+        return RagResult(keywords=keywords, hits=top, backend="filesystem")
 
     def _score_text_file(self, path: Path, keywords: list[str]) -> RagHit | None:
         try:
@@ -100,7 +109,13 @@ class LocalVectorRag:
 
         best: RagHit | None = None
         try:
-            for index in range(min(document.page_count, 8)):
+            # Strided sampling: cover the whole book at a fixed cost ceiling
+            # (<= 40 pages). Small documents are read page-by-page as before;
+            # a 1500-page textbook is sampled every ~38th page instead of only
+            # its front matter.
+            page_count = document.page_count
+            stride = max(1, math.ceil(page_count / 40))
+            for index in range(0, page_count, stride):
                 text = document.load_page(index).get_text("text")
                 hit = _score_text(path, text, index + 1, keywords)
                 if hit and (best is None or hit.score > best.score):

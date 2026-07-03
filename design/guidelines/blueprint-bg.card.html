@@ -1,0 +1,9 @@
+<!-- @dsCard group="Brand" viewport="700x150" name="Canvas Gradient" subtitle="Simulation canvas background treatment" -->
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;}
+  .canvas{height:150px;background:linear-gradient(180deg, var(--bg-canvas-top), var(--bg-canvas-bottom));position:relative;}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(var(--border-hairline) 1px, transparent 1px), linear-gradient(90deg, var(--border-hairline) 1px, transparent 1px);background-size:24px 24px;opacity:0.5;}
+  .label{position:absolute;bottom:10px;left:14px;color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px;}
+</style>
+<div class="canvas"><div class="grid"></div><div class="label">blueprint grid · canvas-top → canvas-bottom</div></div>
