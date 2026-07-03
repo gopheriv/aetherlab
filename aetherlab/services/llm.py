@@ -82,7 +82,17 @@ class AsyncLLMCoordinator:
                     "content": (
                         "You are the AetherLab analytical solver. "
                         "Return strict JSON with keys summary, derivation_steps, "
-                        "keywords, and variables. Variables must map names to numbers."
+                        "keywords, and variables. Variables must map names to numbers. "
+                        "Optionally add a plot key describing the single curve that best "
+                        "captures the result: {\"kind\": \"explicit\"|\"parametric\", "
+                        "\"x\": expr, \"y\": expr, \"t_range\": [t0, t1], "
+                        "\"x_range\": [lo, hi], \"y_range\": [lo, hi], "
+                        "\"x_label\": str, \"y_label\": str}. "
+                        "Expressions may use only: the free variable t, names from "
+                        "variables, numeric literals, + - * / ** ( ), the functions "
+                        "sin cos tan sinh cosh tanh arcsin arccos arctan exp log log10 "
+                        "sqrt abs sign, and constants pi, e. For explicit kind, x is t. "
+                        "Omit plot if no single curve captures the result."
                     ),
                 },
                 {"role": "user", "content": request.prompt},
@@ -91,6 +101,7 @@ class AsyncLLMCoordinator:
         )
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)
+        plot = payload.get("plot")
         return SolverResult(
             summary=str(payload.get("summary", "")).strip() or "Remote solver completed.",
             derivation_steps=[str(step) for step in payload.get("derivation_steps", [])],
@@ -98,9 +109,15 @@ class AsyncLLMCoordinator:
             variables={str(k): float(v) for k, v in dict(payload.get("variables", {})).items()},
             model_name=self.settings.llm_model,
             raw_response=content,
+            # Kept as the raw dict; validation happens at canvas build so the
+            # cached payload stays faithful to what the model returned.
+            plot=plot if isinstance(plot, dict) else None,
         )
 
     def _parse_json(self, content: str) -> dict[str, object]:
+        # Reasoning models (e.g. MiniMax-M3) may wrap output in <think> blocks
+        # whose prose can contain stray braces - drop them before extraction.
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
         try:
             return json.loads(content)
         except json.JSONDecodeError:
@@ -129,6 +146,8 @@ class AsyncLLMCoordinator:
             f"steps and {len(variables)} simulation variables."
         )
         awaitable_pause()
+        from aetherlab.services.plotting import fallback_plot_payload
+
         return SolverResult(
             summary=summary,
             derivation_steps=steps,
@@ -136,6 +155,8 @@ class AsyncLLMCoordinator:
             variables=variables,
             model_name="deterministic-fallback",
             raw_response=note,
+            # Exercises the full expression-compile pipeline even without a key.
+            plot=fallback_plot_payload(),
         )
 
 
@@ -160,7 +181,11 @@ def extract_keywords(prompt: str, limit: int = 8) -> list[str]:
         "hamiltonian",
     ]
     lower = prompt.lower()
-    phrases = [phrase for phrase in phrase_patterns if phrase in lower]
+    phrases = []
+    for phrase in phrase_patterns:
+        # Match both space-separated and hyphenated forms
+        if phrase in lower or phrase.replace(" ", "-") in lower:
+            phrases.append(phrase)
     merged = phrases + [word for word in ranked if word not in phrases]
     return merged[:limit]
 

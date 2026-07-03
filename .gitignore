@@ -40,3 +40,7 @@ chroma/
 
 # Manim render cache
 media/
+
+# Generated sample artifacts (renders/exports, not source)
+*.mp4
+derivation.pdf

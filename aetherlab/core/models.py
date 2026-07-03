@@ -42,6 +42,9 @@ class SolverResult:
     model_name: str
     raw_response: str = ""
     cached: bool = False
+    # Optional plottable-curve payload (see services/plotting.py). Old cache
+    # rows lack the key and load as None (legacy name-based canvas curves).
+    plot: dict | None = None
 
     def to_json(self) -> JsonDict:
         return asdict(self)
@@ -50,6 +53,7 @@ class SolverResult:
     def from_json(cls, payload: JsonDict, *, cached: bool = False) -> "SolverResult":
         data = dict(payload)
         data["cached"] = cached
+        plot = data.get("plot")
         return cls(
             summary=str(data.get("summary", "")),
             derivation_steps=list(data.get("derivation_steps", [])),
@@ -58,6 +62,7 @@ class SolverResult:
             model_name=str(data.get("model_name", "cached")),
             raw_response=str(data.get("raw_response", "")),
             cached=bool(data.get("cached", cached)),
+            plot=plot if isinstance(plot, dict) else None,
         )
 
 

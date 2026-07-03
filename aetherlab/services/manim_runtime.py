@@ -28,6 +28,34 @@ _RENDER_DIR.mkdir(parents=True, exist_ok=True)
 _RENDER_QUALITY = "l"  # low = 480p15
 
 
+def _detect_render_tier() -> dict:
+    """Hardware-aware render tier, ported from the manim-bot project.
+
+    Governs fps and process priority: capable boxes get 60fps, constrained
+    ones render at 30fps below normal priority so the UI stays responsive.
+    Always passing an explicit --fps prevents Manim from silently producing
+    15fps output at low quality.
+    """
+    try:
+        import os as _os
+
+        import psutil
+
+        total_gb = psutil.virtual_memory().total / 1024**3
+        cpu = _os.cpu_count() or 2
+    except Exception:
+        total_gb, cpu = 8.0, 2
+
+    if total_gb >= 16 and cpu >= 6:
+        return {"name": "cinematic", "fps": 60, "below_normal": False}
+    if total_gb >= 10:
+        return {"name": "standard", "fps": 30, "below_normal": False}
+    return {"name": "constrained", "fps": 30, "below_normal": True}
+
+
+_RENDER_TIER = _detect_render_tier()
+
+
 class ManimRuntime:
     def __init__(self, settings: "AppSettings | None" = None) -> None:
         self._settings = settings
@@ -134,17 +162,29 @@ class ManimRuntime:
         # Clean old renders for this scene to avoid stale video bug
         _clean_old_renders(scene_name)
 
-        # Adjust timeout based on quality (higher quality = longer timeout)
-        timeout_map = {"l": 180, "m": 300, "h": 480, "k": 900}
-        render_timeout = timeout_map.get(quality, 180)
+        # Timeouts ported from manim-bot: fps-explicit renders are heavier,
+        # and its production ceiling is 600s.
+        timeout_map = {"l": 240, "m": 420, "h": 600, "k": 900}
+        render_timeout = timeout_map.get(quality, 240)
 
-        log.info("Rendering scene: %s with %s -q%s", scene_name, " ".join(manim_cmd), quality)
+        tier = _RENDER_TIER
+        log.info(
+            "Rendering scene: %s with %s -q%s --fps %d (tier %s)",
+            scene_name, " ".join(manim_cmd), quality, tier["fps"], tier["name"],
+        )
 
         try:
             creation_flags = 0x08000000  # CREATE_NO_WINDOW on Windows
+            if tier["below_normal"]:
+                creation_flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
             # NOTE: No --disable_caching — let Manim cache rendered frames for speed
             result = subprocess.run(
-                [*manim_cmd, "render", f"-q{quality}", str(scene_file), scene_bundle.class_name],
+                [
+                    *manim_cmd, "render", f"-q{quality}",
+                    "--fps", str(tier["fps"]),
+                    "--media_dir", str(_RENDER_DIR / "media"),
+                    str(scene_file), scene_bundle.class_name,
+                ],
                 capture_output=True,
                 text=True,
                 timeout=render_timeout,
@@ -153,7 +193,9 @@ class ManimRuntime:
             )
             if result.returncode != 0:
                 stderr = result.stderr.strip()
-                scene_bundle.diagnostics.append(f"Manim render failed: {stderr[-300:]}")
+                # Keep a generous tail: the repair pass feeds this back to the
+                # LLM and needs the actual traceback, not just the last line.
+                scene_bundle.diagnostics.append(f"Manim render failed: {stderr[-1500:]}")
                 scene_bundle.status = "render-error"
                 return scene_bundle
         except subprocess.TimeoutExpired:
@@ -174,6 +216,50 @@ class ManimRuntime:
         else:
             scene_bundle.diagnostics.append("Render succeeded but video file not found.")
             scene_bundle.status = "compiled"
+
+        return scene_bundle
+
+    async def render_scene_with_repair(
+        self,
+        scene_bundle: SceneBundle,
+        settings: "AppSettings | None" = None,
+        quality: str = "l",
+        max_repairs: int = 2,
+    ) -> SceneBundle:
+        """Render; on a render-time API error, ask the LLM to fix its own code.
+
+        LLM scenes occasionally invent Manim kwargs that pass the compile check
+        but explode at render time. Feeding the traceback back for a bounded
+        number of repair rounds converts most of those into successful renders.
+        Without an API key this is exactly render_scene().
+        """
+        s = settings or self._settings
+        scene_bundle = self.render_scene(scene_bundle, s, quality)
+
+        repairs = 0
+        while (
+            scene_bundle.status == "render-error"
+            and repairs < max_repairs
+            and s is not None
+            and s.openai_api_key
+        ):
+            from aetherlab.services.scene_generator import SceneGenerator
+
+            error = scene_bundle.diagnostics[-1] if scene_bundle.diagnostics else "unknown"
+            repairs += 1
+            log.info("Attempting render repair %d/%d", repairs, max_repairs)
+            try:
+                fixed = await SceneGenerator(s).repair(
+                    scene_bundle.code, error, scene_bundle.class_name
+                )
+                compile(fixed, "<aetherlab-repaired-scene>", "exec")
+            except Exception as exc:  # noqa: BLE001
+                scene_bundle.diagnostics.append(f"Render repair {repairs} failed: {exc}")
+                break
+            scene_bundle.code = fixed
+            scene_bundle.status = "compiled"
+            scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
+            scene_bundle = self.render_scene(scene_bundle, s, quality)
 
         return scene_bundle
 
@@ -231,18 +317,16 @@ class ManimRuntime:
 
 
 _MANIM_SCENE_TEMPLATE = '''
-"""Generated by AetherLab.
+"""Generated by AetherLab (Manim Community).
 
-The import block supports ManimGL first and Manim Community second so
-the scene can be inspected even on systems without ManimGL.
+Do NOT import manimlib here: manimgl parses sys.argv at import time, which
+hijacks the Manim Community CLI arguments mid-render (ported finding from
+the manim-bot project).
 """
 
 import math
 
-try:
-    from manimlib import *
-except Exception:
-    from manim import *
+from manim import *
 
 
 class {class_name}(Scene):
@@ -288,7 +372,12 @@ class {class_name}(Scene):
             frame_width = config.get("frame_width", frame_width)
         bounded_group.scale_to_fit_width(frame_width - 1.0)
         bounded_group.move_to(ORIGIN)
-        self.add(bounded_group)
+
+        # A scene with no animations produces no video file, so always
+        # animate in (and hold) rather than static-add.
+        self.play(FadeIn(bounded_group), run_time=1.0)
+        self.play(Create(curve.copy().set_color(YELLOW)), run_time=1.5)
+        self.wait(1.0)
 '''
 
 

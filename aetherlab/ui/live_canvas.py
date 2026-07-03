@@ -14,6 +14,7 @@ OPTIMIZATIONS (verified with QPaintEvent profiling):
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ import numpy as np
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
 
 require_qt()
+
+log = logging.getLogger(__name__)
 
 TRAIL_LENGTH = 24  # number of trail points to keep
 
@@ -89,7 +92,9 @@ def _phase_portrait_curves(params: dict[str, float]) -> list[CurveSpec]:
             name="phase",
             x_fn=x_fn,
             y_fn=y_fn,
-            color="#10B981",
+            # Violet per the design: phase-portrait overlay is dashed violet
+            # (emerald is reserved for complete/success states).
+            color="#8B5CF6",
             width=1.5,
             t_range=(-3.0, 3.0),
             t_steps=600,
@@ -134,12 +139,104 @@ _DOMAIN_MAP = {
 }
 
 
+def _auto_range(samples: np.ndarray, pad_frac: float = 0.08) -> tuple[float, float]:
+    """Finite min/max of samples with padding; raises if nothing is finite."""
+    finite = samples[np.isfinite(samples)]
+    if finite.size == 0:
+        raise ValueError("No finite samples to derive an axis range from.")
+    lo, hi = float(finite.min()), float(finite.max())
+    if lo == hi:
+        lo -= 1.0
+        hi += 1.0
+    pad = (hi - lo) * pad_frac
+    return lo - pad, hi + pad
+
+
+def _phase_overlay_for(
+    y_fn, t_range: tuple[float, float], params: dict[str, float]
+) -> CurveSpec:
+    """Finite-difference phase portrait (y vs dy/dt) for any compiled y_fn."""
+
+    def px_fn(t, p):
+        return y_fn(t, p)
+
+    def py_fn(t, p):
+        dt = max((t_range[1] - t_range[0]) / 2000.0, 1e-6)
+        return (y_fn(t + dt, p) - y_fn(t, p)) / dt
+
+    return CurveSpec(
+        name="phase",
+        x_fn=px_fn,
+        y_fn=py_fn,
+        color="#8B5CF6",
+        width=1.5,
+        t_range=t_range,
+        t_steps=600,
+    )
+
+
+def _state_from_plot(
+    title: str,
+    params: dict[str, float],
+    plot: dict,
+    phase_portrait: bool,
+) -> CanvasState:
+    """Build canvas state from a solver plot payload. Raises on any problem."""
+    from aetherlab.services.plotting import compile_plot
+
+    compiled = compile_plot(plot, params)
+
+    t = np.linspace(compiled.t_range[0], compiled.t_range[1], 400)
+    xs = compiled.x_fn(t, params)
+    ys = compiled.y_fn(t, params)
+
+    x_range = compiled.x_range or _auto_range(xs)
+    y_range = compiled.y_range or _auto_range(ys)
+
+    curves = [
+        CurveSpec(
+            name=compiled.y_label,
+            x_fn=compiled.x_fn,
+            y_fn=compiled.y_fn,
+            color="#06B6D4",
+            width=2.5,
+            t_range=compiled.t_range,
+            t_steps=600,
+        )
+    ]
+    if phase_portrait:
+        curves.append(_phase_overlay_for(compiled.y_fn, compiled.t_range, params))
+
+    return CanvasState(
+        title=title,
+        x_label=compiled.x_label,
+        y_label=compiled.y_label,
+        x_range=x_range,
+        y_range=y_range,
+        params=dict(params),
+        curves=curves,
+        show_phase_portrait=phase_portrait,
+    )
+
+
 def build_canvas_state(
     title: str,
     params: dict[str, float],
     phase_portrait: bool = False,
+    plot: dict | None = None,
 ) -> CanvasState:
-    """Auto-detect domain from variable names and build appropriate curves."""
+    """Build the canvas state.
+
+    Prefers the solver's own plot payload (compiled safely — see
+    services/plotting.py); any parse/compile problem falls back to the legacy
+    name-based curve families so the canvas never crashes on bad LLM output.
+    """
+    if plot is not None:
+        try:
+            return _state_from_plot(title, params, plot, phase_portrait)
+        except Exception as exc:  # noqa: BLE001 — canvas must never crash
+            log.warning("Solver plot rejected (%s); using legacy curves.", exc)
+
     factory = _generic_curves
     for key in params:
         if key in _DOMAIN_MAP:
@@ -364,9 +461,9 @@ class LiveCanvas(QtWidgets.QWidget):
 
         rect = self.rect()
 
-        # Background
+        # Background (QRadialGradient needs QPointF, not QPoint, in PyQt6)
         bg_gradient = QtGui.QRadialGradient(
-            rect.center(), max(rect.width(), rect.height()) * 0.7
+            QtCore.QPointF(rect.center()), max(rect.width(), rect.height()) * 0.7
         )
         bg_gradient.setColorAt(0, QtGui.QColor("#0F1520"))
         bg_gradient.setColorAt(1, QtGui.QColor("#0A0A0F"))
@@ -515,8 +612,17 @@ class LiveCanvas(QtWidgets.QWidget):
     ) -> QtCore.QPointF:
         x_min, x_max = state.x_range
         y_min, y_max = state.y_range
-        px = plot_rect.left() + (x - x_min) / (x_max - x_min) * plot_rect.width()
-        py = plot_rect.bottom() - (y - y_min) / (y_max - y_min) * plot_rect.height()
+        x_span = x_max - x_min
+        y_span = y_max - y_min
+        # Guard against division by zero on extreme zoom
+        if abs(x_span) < 1e-12:
+            px = plot_rect.left() + plot_rect.width() / 2
+        else:
+            px = plot_rect.left() + (x - x_min) / x_span * plot_rect.width()
+        if abs(y_span) < 1e-12:
+            py = plot_rect.top() + plot_rect.height() / 2
+        else:
+            py = plot_rect.bottom() - (y - y_min) / y_span * plot_rect.height()
         return QtCore.QPointF(px, py)
 
     def _draw_grid(
@@ -652,7 +758,9 @@ class LiveCanvas(QtWidgets.QWidget):
         pt = self._map_to_plot(x, y, plot_rect, state)
 
         # Outer glow — simple filled ellipse, no gradient
-        painter.setBrush(QtGui.QColor(curve.color + "30"))
+        glow_color = QtGui.QColor(curve.color)
+        glow_color.setAlpha(48)
+        painter.setBrush(glow_color)
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(pt, 12, 12)
 
@@ -701,8 +809,12 @@ class LiveCanvas(QtWidgets.QWidget):
 
 def _nice_step(range_val: float, target_divisions: int) -> float:
     """Compute a 'nice' grid step size."""
+    if abs(range_val) < 1e-12:
+        return 1.0  # degenerate range — return safe default
     raw = range_val / target_divisions
-    magnitude = 10 ** math.floor(math.log10(abs(raw) + 1e-12))
+    if abs(raw) < 1e-12:
+        return 1.0
+    magnitude = 10 ** math.floor(math.log10(abs(raw)))
     normalized = raw / magnitude
     if normalized < 1.5:
         nice = 1.0

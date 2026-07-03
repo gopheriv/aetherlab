@@ -1,0 +1,13 @@
+<!-- @dsCard group="Brand" viewport="700x150" name="Motion" subtitle="Purposeful, not decorative — stage transitions &amp; tracer pulse" -->
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;background:var(--surface-app);font-family:var(--font-mono);color:var(--text-secondary);font-size:12px;padding:18px;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;}
+  .row{display:flex;align-items:center;gap:12px;}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--accent-cyan);animation:pulse 1.6s var(--ease-standard) infinite;}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--accent-cyan-glow);}50%{box-shadow:0 0 0 8px transparent;}}
+  .swipe{width:200px;height:6px;background:var(--border-default);border-radius:99px;position:relative;overflow:hidden;}
+  .swipe i{position:absolute;left:-40%;width:40%;height:100%;background:var(--accent-cyan);animation:sweep 1.8s var(--ease-out) infinite;}
+  @keyframes sweep{0%{left:-40%}100%{left:100%}}
+</style>
+<div class="row"><div class="dot"></div><span>active-node pulse — duration-slow 420ms, ease-standard</span></div>
+<div class="row"><div class="swipe"><i></i></div><span>progress sweep — ease-out</span></div>

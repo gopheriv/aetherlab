@@ -137,7 +137,11 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             scene.status == "rendered" and not (scene.video_path and Path(scene.video_path).exists())
         )
         if needs_render:
-            rendered_scene = manim.render_scene(scene, self.settings, quality=self.render_quality)
+            rendered_scene = await manim.render_scene_with_repair(
+                scene, self.settings, quality=self.render_quality
+            )
+            if any("Applied render repair" in d for d in rendered_scene.diagnostics):
+                self.status.emit("Scene needed a render repair pass; re-rendered.")
             cache.store_scene(key, rendered_scene)
         else:
             self.status.emit("Reusing cached rendered video.")
