@@ -47,6 +47,10 @@ class AetherLabPipeline:
             scene = await manim.generate_scene_async(request, solver, rag, self.settings)
             self.cache.store_scene(key, scene)
 
+        # Render to MP4 (skip if a valid cached video already exists).
+        # render_scene_with_repair adds the error-aware self-heal loop (WP2b).
+        if scene.status == "compiled" or (scene.status == "rendered" and not _video_exists(scene.video_path)):
+            scene = await manim.render_scene_with_repair(scene, request, solver, rag, self.settings)
         # Render to MP4 (skip if a valid cached video already exists);
         # render-time API errors get a bounded LLM self-repair pass.
         if scene.status == "compiled" or (scene.status == "rendered" and not _video_exists(scene.video_path)):

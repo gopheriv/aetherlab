@@ -9,7 +9,6 @@ from pathlib import Path
 from aetherlab.core.models import RagHit, RagResult
 from aetherlab.core.settings import AppSettings
 
-
 TEXT_SUFFIXES = {".txt", ".md", ".tex"}
 PDF_SUFFIXES = {".pdf"}
 
