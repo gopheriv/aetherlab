@@ -125,12 +125,13 @@ class _NavRailButton(QtWidgets.QToolButton):
         self.setObjectName("NavRailItem")
         self._icon_name = icon_name
         self.setText(label)
-        self.setToolTip(tooltip)
+        self.setToolTip(f"{label} - {tooltip}")
         self.setCheckable(True)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.setIconSize(QtCore.QSize(18, 18))
-        self.setFixedSize(64, 56)
+        # v2: 56px rail is icon-first; the label lives in the tooltip.
+        self.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.setIconSize(QtCore.QSize(20, 20))
+        self.setFixedSize(44, 46)
         self._sync_icon()
         self.toggled.connect(lambda _checked: self._sync_icon())
 
@@ -138,7 +139,7 @@ class _NavRailButton(QtWidgets.QToolButton):
         if not self.isEnabled():
             color = "#3D4B5F"
         elif self.isChecked():
-            color = "#06B6D4"
+            color = "#22D3EE"
         else:
             color = "#94A3B8"
         self.setIcon(icons.icon(self._icon_name, 18, color))
@@ -154,7 +155,7 @@ class _NavRailButton(QtWidgets.QToolButton):
             painter = QtGui.QPainter(self)
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.setBrush(QtGui.QColor("#06B6D4"))
+            painter.setBrush(QtGui.QColor("#22D3EE"))
             painter.drawRoundedRect(QtCore.QRectF(0, self.height() / 2 - 10, 3, 20), 1.5, 1.5)
 
 
@@ -177,7 +178,7 @@ class SidebarNav(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("NavRail")
-        self.setFixedWidth(84)
+        self.setFixedWidth(56)  # v2: 56px rail
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 16, 10, 16)
@@ -670,6 +671,10 @@ class CommandBar(QtWidgets.QWidget):
             "Describe a physics or math problem…  (Ctrl+Enter to run)"
         )
         self.input.returnPressed.connect(self._submit)
+        # Command-bar focus filament: the shell lifts to a cyan hairline while
+        # the prompt is focused (design v2 restrained-glow guideline).
+        self._shell = shell
+        self.input.installEventFilter(self)
         layout.addWidget(self.input, 1)
 
         # Render quality selector
@@ -700,6 +705,19 @@ class CommandBar(QtWidgets.QWidget):
         layout.addWidget(self.cancel_button)
 
         outer.addWidget(shell)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.input:
+            if event.type() == QtCore.QEvent.Type.FocusIn:
+                self._set_shell_focused(True)
+            elif event.type() == QtCore.QEvent.Type.FocusOut:
+                self._set_shell_focused(False)
+        return super().eventFilter(obj, event)
+
+    def _set_shell_focused(self, focused: bool) -> None:
+        self._shell.setProperty("focused", "true" if focused else "false")
+        self._shell.style().unpolish(self._shell)
+        self._shell.style().polish(self._shell)
 
     def _show_examples_menu(self) -> None:
         menu = QtWidgets.QMenu(self)
@@ -857,7 +875,24 @@ class ParameterDock(QtWidgets.QWidget):
             row_layout.addWidget(reset_btn)
 
             self._sliders[name] = (slider, spinbox, QtWidgets.QLabel(), value)
-            self._container_layout.addRow(name, row_widget)
+            self._container_layout.addRow(self._symbol_label(name), row_widget)
+
+    def _symbol_label(self, name: str) -> QtWidgets.QWidget:
+        """Typeset parameter symbol (design v2 §5.5), text fallback."""
+        from aetherlab.services.mathtext import render_param_symbol
+
+        pixmap = render_param_symbol(name, px_size=13, color="#F8FAFC")
+        label = QtWidgets.QLabel()
+        if pixmap is not None:
+            label.setPixmap(pixmap)
+        else:
+            label.setText(name)
+        label.setToolTip(name)
+        label.setMinimumWidth(34)
+        label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        return label
 
     def _on_slider_change(self, name: str, raw: int) -> None:
         span = self._spans.get(name, 1.0)
@@ -1121,7 +1156,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         menu.exec(anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
 
     def _copy_all(self) -> None:
-        parts = [self.summary.text()]
+        parts = [getattr(self, "_summary_text", "") or self.summary.text()]
         parts += [f"{i}. {s}" for i, s in enumerate(self._steps_text, start=1)]
         _copy_to_clipboard("\n".join(p for p in parts if p))
 
@@ -1136,7 +1171,24 @@ class AnalysisPanel(QtWidgets.QWidget):
 
     def set_solver_result(self, solver: SolverResult) -> None:
         cache_note = "  [cache]" if solver.cached else ""
-        self.summary.setText(f"{solver.summary}{cache_note}")
+        self._summary_text = f"{solver.summary}{cache_note}"
+        # Hero equation banner (design v2 §5.1): the solver's first governing
+        # equation, typeset large; else typeset the summary when it reads as
+        # math; prose keeps the styled-text banner. Fail-soft at every step.
+        from aetherlab.services.mathtext import looks_like_math, render_math
+
+        pixmap = None
+        equations = getattr(solver, "key_equations", None) or []
+        if equations:
+            pixmap = render_math(equations[0], px_size=30, color="#22D3EE")
+        if pixmap is None and looks_like_math(solver.summary):
+            pixmap = render_math(solver.summary, px_size=26, color="#22D3EE")
+        if pixmap is not None:
+            self.summary.setPixmap(pixmap)
+            self.summary.setToolTip(self._summary_text)
+        else:
+            self.summary.setText(self._summary_text)
+            self.summary.setToolTip("")
         self._empty_label.hide()
 
         # Keyword chips
@@ -1181,26 +1233,42 @@ class _RagHitCard(QtWidgets.QFrame):
     """
 
     def __init__(self, source: str, page: int | None, score: float, excerpt: str,
-                 source_path: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+                 source_path: str = "", is_web: bool = False,
+                 parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("CardFrame")
+        # Low-relevance cards read dimmer (design v2: reference card "dimmed" state).
+        if score < 0.5:
+            eff = QtWidgets.QGraphicsOpacityEffect(self)
+            eff.setOpacity(0.6)
+            self.setGraphicsEffect(eff)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        # Header row: icon + source + page + score pill + copy
+        # Header row: icon + source + page + origin badge + score pill + copy
         header = QtWidgets.QWidget()
         h_layout = QtWidgets.QHBoxLayout(header)
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(8)
 
-        h_layout.addWidget(icons.icon_label("book-open", 14, "#06B6D4"))
+        # Web references get a globe + violet accent; library keeps the book/cyan.
+        icon_name = "globe" if is_web else "book-open"
+        icon_color = "#8B5CF6" if is_web else "#06B6D4"
+        h_layout.addWidget(icons.icon_label(icon_name, 14, icon_color))
 
         src_label = QtWidgets.QLabel(source)
         src_label.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
         h_layout.addWidget(src_label)
 
-        if page:
+        if is_web:
+            web_badge = QtWidgets.QLabel("Wikipedia")
+            web_badge.setStyleSheet(
+                "color: #8B5CF6; border: 1px solid #8B5CF6; border-radius: 8px; "
+                "padding: 0px 7px; font-size: 9.5px; font-weight: 600;"
+            )
+            h_layout.addWidget(web_badge)
+        elif page:
             page_label = QtWidgets.QLabel(f"p.{page}")
             page_label.setStyleSheet("color: #64748B; font-size: 11px;")
             h_layout.addWidget(page_label)
@@ -1233,18 +1301,16 @@ class _RagHitCard(QtWidgets.QFrame):
         excerpt_label.setStyleSheet("color: #94A3B8; font-size: 12px;")
         layout.addWidget(excerpt_label)
 
-        # Open link (design: "Open" + arrow-up-right)
+        # Open link — a local file opens in the OS viewer, a URL in the browser.
         if source_path:
-            open_btn = QtWidgets.QPushButton("Open")
+            open_btn = QtWidgets.QPushButton("Open article" if is_web else "Open")
             open_btn.setObjectName("LinkButton")
-            open_btn.setIcon(icons.icon("arrow-up-right", 12, "#06B6D4"))
+            open_btn.setIcon(icons.icon("arrow-up-right", 12, icon_color))
             open_btn.setLayoutDirection(QtCore.Qt.LayoutDirection.RightToLeft)
             open_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            open_btn.clicked.connect(
-                lambda: QtGui.QDesktopServices.openUrl(
-                    QtCore.QUrl.fromLocalFile(source_path)
-                )
-            )
+            is_url = source_path.startswith(("http://", "https://"))
+            url = QtCore.QUrl(source_path) if is_url else QtCore.QUrl.fromLocalFile(source_path)
+            open_btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(url))
             row = QtWidgets.QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.addWidget(open_btn)
@@ -1311,7 +1377,12 @@ class ReferencePanel(QtWidgets.QWidget):
             return
 
         self._empty_label.hide()
-        self._backend_label.setText(f"{rag.backend} · {len(rag.hits)} hits")
+        n_web = sum(1 for h in rag.hits if getattr(h, "is_web", False))
+        n_lib = len(rag.hits) - n_web
+        provenance = f"{n_lib} library"
+        if n_web:
+            provenance += f" · {n_web} web"
+        self._backend_label.setText(f"{rag.backend} · {provenance}")
 
         for hit in rag.hits:
             card = _RagHitCard(
@@ -1320,6 +1391,7 @@ class ReferencePanel(QtWidgets.QWidget):
                 score=hit.score,
                 excerpt=hit.excerpt,
                 source_path=hit.source_path,
+                is_web=getattr(hit, "is_web", False),
             )
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
 
@@ -1400,6 +1472,16 @@ class SimulationPanel(QtWidgets.QWidget):
         self.status.setStyleSheet("font-size: 12px;")
         top_layout.addWidget(self.status, 1)
 
+        # Self-heal / revision pills (design v2 \u00a74) \u2014 hidden until they apply
+        self._repaired_pill = _Pill("repaired", "#F59E0B")
+        self._repaired_pill.setToolTip("Render errors the pipeline auto-fixed")
+        self._repaired_pill.hide()
+        top_layout.addWidget(self._repaired_pill)
+        self._revised_pill = _Pill("revised", "#8B5CF6")
+        self._revised_pill.setToolTip("Aesthetic revisions applied after visual critique")
+        self._revised_pill.hide()
+        top_layout.addWidget(self._revised_pill)
+
         # Phase portrait toggle checkbox
         self._phase_check = QtWidgets.QCheckBox("Phase-portrait overlay")
         self._phase_check.setStyleSheet(
@@ -1472,11 +1554,27 @@ class SimulationPanel(QtWidgets.QWidget):
         export_code_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         export_code_btn.clicked.connect(self.export_scene_requested.emit)
         ch_layout.addWidget(export_code_btn)
+        # Engine / status / duration chips (design v2 §6: code view is an artifact)
+        self._code_chips = QtWidgets.QWidget()
+        chips_layout = QtWidgets.QHBoxLayout(self._code_chips)
+        chips_layout.setContentsMargins(0, 2, 0, 2)
+        chips_layout.setSpacing(6)
+        self._engine_chip = _Pill("engine", "#64748B")
+        self._status_chip = _Pill("status", "#64748B")
+        self._duration_chip = _Pill("duration", "#64748B")
+        for chip in (self._engine_chip, self._status_chip, self._duration_chip):
+            chip.hide()
+            chips_layout.addWidget(chip)
+        chips_layout.addStretch()
         code_layout.addWidget(code_header)
+        code_layout.addWidget(self._code_chips)
 
-        self.code = QtWidgets.QPlainTextEdit()
-        self.code.setReadOnly(True)
-        code_layout.addWidget(self.code)
+        self.code = CodeArtifactView()
+        code_layout.addWidget(self.code, 1)
+
+        # Diagnostics drawer (design v2 §4: repaired/critique surfaced, not dumped)
+        self._diag_drawer = _DiagnosticsDrawer()
+        code_layout.addWidget(self._diag_drawer)
 
         self._stack.addWidget(self._loading)
         self._stack.addWidget(self._live_canvas)
@@ -1508,12 +1606,31 @@ class SimulationPanel(QtWidgets.QWidget):
         container_layout.setContentsMargins(12, 8, 12, 8)
         container_layout.setSpacing(8)
 
+        # Screening room: true-black letterbox stage (design v2 §6)
+        stage = QtWidgets.QWidget()
+        stage.setStyleSheet("background-color: #000000; border-radius: 8px;")
+        stage_layout = QtWidgets.QGridLayout(stage)
+        stage_layout.setContentsMargins(0, 0, 0, 0)
         self._video_widget = QVideoWidget()
         self._video_widget.setMinimumSize(400, 225)
-        self._video_widget.setStyleSheet(
-            "background-color: #0A0A0F; border-radius: 8px;"
-        )
-        container_layout.addWidget(self._video_widget, 1)
+        self._video_widget.setStyleSheet("background-color: #000000;")
+        stage_layout.addWidget(self._video_widget, 0, 0)
+        self._manim_badge = ManimBadge(small=True)
+        badge_wrap = QtWidgets.QWidget()
+        bw = QtWidgets.QHBoxLayout(badge_wrap)
+        bw.setContentsMargins(0, 0, 12, 12)
+        bw.addStretch()
+        bw.addWidget(self._manim_badge, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
+        badge_wrap.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        stage_layout.addWidget(badge_wrap, 0, 0)
+        container_layout.addWidget(stage, 1)
+
+        # Docked critique badge + storyboard strip (design v2 §4/§6)
+        self._critique_badge = CritiqueBadge()
+        container_layout.addWidget(self._critique_badge)
+        self._storyboard_strip = StoryboardStrip()
+        self._storyboard_strip.act_seek_requested.connect(self._seek_fraction)
+        container_layout.addWidget(self._storyboard_strip)
 
         # Controls bar (design: components/media/VideoControls.jsx)
         controls = QtWidgets.QFrame()
@@ -1555,9 +1672,9 @@ class SimulationPanel(QtWidgets.QWidget):
         self._next_frame_btn.setObjectName("VideoControlBtn")
         self._next_frame_btn.setToolTip("Next frame")
 
-        self._seek_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._seek_slider = ActSeekSlider()
         self._seek_slider.setRange(0, 0)
-        self._seek_slider.setToolTip("Seek")
+        self._seek_slider.setToolTip("Seek (violet = act starts, amber = hero frame)")
         self._seek_slider.setObjectName("VideoSeekSlider")
         self._seeking = False
 
@@ -1668,8 +1785,12 @@ class SimulationPanel(QtWidgets.QWidget):
         current = getattr(self._live_canvas, "_state", None)
         if current and current.params:
             params.update(current.params)
+        from aetherlab.services.mathtext import plain_math
+
+        raw_title = self._solver.summary or "Simulation"
+        title = plain_math(raw_title)[:70]
         state = build_canvas_state(
-            title=self._solver.summary[:60] if self._solver.summary else "Simulation",
+            title=title,
             params=params,
             phase_portrait=self._phase_check.isChecked(),
             plot=getattr(self._solver, "plot", None),
@@ -1713,6 +1834,37 @@ class SimulationPanel(QtWidgets.QWidget):
         if pills:
             pills[0].setChecked(True)
 
+    def _apply_scene_meta(self, scene: SceneBundle) -> None:
+        """Populate v2 code chips, diagnostics drawer, storyboard, critique."""
+        meta = parse_scene_meta(scene)
+
+        self._engine_chip.setText(scene.engine)
+        self._engine_chip.show()
+        self._status_chip.setText(scene.status)
+        self._status_chip.show()
+        if meta["duration"]:
+            self._duration_chip.setText(meta["duration"])
+            self._duration_chip.show()
+        else:
+            self._duration_chip.hide()
+
+        self._diag_drawer.set_diagnostics(scene.diagnostics)
+
+        storyboard = getattr(scene, "storyboard", None)
+        self._storyboard_strip.set_storyboard(storyboard)
+        acts = _storyboard_acts(storyboard)
+        self._seek_slider.set_acts(acts)
+
+        self._critique_badge.set_critique(meta["critique"])
+
+        # Repaired / revised pills in the top bar
+        self._repaired_pill.setVisible(meta["repaired"] > 0)
+        if meta["repaired"]:
+            self._repaired_pill.setText(f"repaired ×{meta['repaired']}")
+        self._revised_pill.setVisible(meta["revised"] > 0)
+        if meta["revised"]:
+            self._revised_pill.setText(f"revised ×{meta['revised']}")
+
     def set_scene_bundle(self, scene: SceneBundle) -> None:
         self._stack.setCurrentIndex(1)
         self.status.setText(f"Engine: {scene.engine} | Status: {scene.status}")
@@ -1722,11 +1874,8 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
-        if scene.diagnostics:
-            diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-            self.code.setPlainText(f"{scene.code}\n\n# Diagnostics:\n{diag_lines}")
-        else:
-            self.code.setPlainText(scene.code)
+        self.code.setPlainText(scene.code)  # diagnostics now live in the drawer
+        self._apply_scene_meta(scene)
         pills = self._pill_group.buttons()
         if pills:
             pills[0].setChecked(True)
@@ -1748,10 +1897,12 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusReady")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
+            self._apply_scene_meta(scene)
             pills = self._pill_group.buttons()
             if len(pills) > 1:
                 pills[1].setChecked(True)
         else:
+            self.code.setPlainText(scene.code)  # diagnostics live in the drawer (v2 §4)
             self.show_code()
             if scene.video_path:
                 self.status.setText(f"Video path set but file missing: {scene.video_path}")
@@ -1760,9 +1911,14 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
-            if scene.diagnostics:
-                diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-                self.code.setPlainText(scene.code + "\n\n# Diagnostics:\n" + diag_lines)
+            self._apply_scene_meta(scene)
+
+    def _seek_fraction(self, frac: float) -> None:
+        """Seek the video to a fraction of its duration (storyboard act click)."""
+        dur = self._player.duration()
+        if dur > 0:
+            self._player.setPosition(int(frac * dur))
+            self._player.play()
 
     def _auto_play(self, media_status) -> None:
         """Play video once media is loaded."""
@@ -1928,15 +2084,28 @@ class EmptyStateView(QtWidgets.QWidget):
     example_picked = QtCore.pyqtSignal(str)
     settings_requested = QtCore.pyqtSignal()
     library_requested = QtCore.pyqtSignal()
+    ollama_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        # Ambient math watermarks (design v2 §5.4): rendered once, painted at
+        # <=6% opacity behind a fine dot grid in paintEvent. Decorative only.
+        self._watermarks: list = []
+        try:
+            from aetherlab.services.mathtext import WATERMARK_FORMULAS, render_math
+            for formula in WATERMARK_FORMULAS[:3]:
+                pm = render_math(formula, px_size=34, color="#22D3EE")
+                if pm is not None:
+                    self._watermarks.append(pm)
+        except Exception:  # noqa: BLE001 — texture is optional
+            pass
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(24)
         layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        mark = icons.icon_label("atom", 40, "#06B6D4")
+        mark = icons.icon_label("atom", 40, "#22D3EE")
         layout.addWidget(mark, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         headline = QtWidgets.QLabel("Describe a problem to begin")
@@ -1990,6 +2159,16 @@ class EmptyStateView(QtWidgets.QWidget):
         key_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         key_btn.clicked.connect(self.settings_requested.emit)
         strip_layout.addWidget(key_btn)
+        # One-click local-AI enable, shown only when a background probe finds
+        # a running Ollama and no key is configured (offer_ollama).
+        self._ollama_btn = QtWidgets.QPushButton("Use local AI (Ollama)")
+        self._ollama_btn.setStyleSheet(
+            "color: #10B981; font-size: 12.5px; font-weight: 600;"
+        )
+        self._ollama_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._ollama_btn.clicked.connect(self.ollama_requested.emit)
+        self._ollama_btn.hide()
+        strip_layout.addWidget(self._ollama_btn)
 
         div = QtWidgets.QFrame()
         div.setFixedWidth(1)
@@ -2009,10 +2188,31 @@ class EmptyStateView(QtWidgets.QWidget):
         layout.addSpacing(6)
         layout.addWidget(self._setup_strip, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        """Ambient math texture (v2 §5.4). The dot/line grid now comes from the
+        shared BlueprintBackdrop behind the workspace, so this only paints the
+        watermark formulas over it."""
+        painter = QtGui.QPainter(self)
+        rect = self.rect()
+
+        # Watermark formulas: corners, never behind the centered content.
+        if self._watermarks:
+            painter.setOpacity(0.06)
+            positions = [
+                QtCore.QPointF(rect.width() * 0.04, rect.height() * 0.10),
+                QtCore.QPointF(rect.width() * 0.62, rect.height() * 0.82),
+                QtCore.QPointF(rect.width() * 0.06, rect.height() * 0.84),
+            ]
+            for pm, pos in zip(self._watermarks, positions):
+                painter.drawPixmap(pos, pm)
+            painter.setOpacity(1.0)
+        super().paintEvent(event)
+
     def set_status(self, has_api_key: bool, model: str, library_count: int) -> None:
         if has_api_key:
             self._key_icon.setPixmap(icons.icon_pixmap("check-circle", 16, "#10B981"))
             self._key_label.setText(f"Model: {model}")
+            self._ollama_btn.hide()
         else:
             self._key_icon.setPixmap(icons.icon_pixmap("key-round", 16, "#F59E0B"))
             self._key_label.setText("No API key configured")
@@ -2021,6 +2221,15 @@ class EmptyStateView(QtWidgets.QWidget):
             self._lib_label.setText(f"{library_count} textbook{plural} in library")
         else:
             self._lib_label.setText("No textbooks indexed")
+
+    def offer_ollama(self, model_count: int) -> None:
+        """Show the one-click local-AI CTA (called when a probe finds Ollama
+        running and no key is configured)."""
+        self._key_label.setText(
+            f"Ollama detected — {model_count} local model{'s' if model_count != 1 else ''} ready"
+        )
+        self._key_icon.setPixmap(icons.icon_pixmap("check-circle", 16, "#10B981"))
+        self._ollama_btn.show()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2386,19 +2595,40 @@ class LibraryPanel(QtWidgets.QWidget):
         self._list_shell.setVisible(bool(files))
         self._empty.setVisible(not files)
 
-        indexed_paths = self._indexed_paths()
-        for path in files:
+        manifest = self._manifest()
+        # Research-bookshelf spine colors, assigned stably per file.
+        spine_cycle = ("#22D3EE", "#8B5CF6", "#10B981", "#F59E0B", "#F43F5E")
+        for i, path in enumerate(files):
             item = QtWidgets.QListWidgetItem()
             row = QtWidgets.QWidget()
             row_layout = QtWidgets.QHBoxLayout(row)
             row_layout.setContentsMargins(14, 8, 14, 8)
             row_layout.setSpacing(12)
-            row_layout.addWidget(icons.icon_label("file-text", 15, "#64748B"))
+
+            # Painted book spine (design v2 §4: research bookshelf)
+            entry = manifest.get(str(path))
+            indexed = entry is not None
+            reindexing = bool(getattr(self, "_worker", None)
+                              and self._worker and self._worker.isRunning())
+            spine = _BookSpine(spine_cycle[i % len(spine_cycle)])
+            row_layout.addWidget(spine)
+
             name = QtWidgets.QLabel(path.name)
             name.setStyleSheet(
                 "color: #F8FAFC; font-size: 12.5px; background: transparent;"
             )
             row_layout.addWidget(name, 1)
+
+            # chunk count from the manifest (freshness)
+            chunks = int(entry.get("chunks", 0)) if entry else 0
+            if chunks:
+                chunk_lbl = QtWidgets.QLabel(f"{chunks:,} chunks")
+                chunk_lbl.setStyleSheet(
+                    "color: #64748B; font-size: 10.5px; "
+                    "font-family: 'Cascadia Code', monospace; background: transparent;"
+                )
+                row_layout.addWidget(chunk_lbl)
+
             size_kb = path.stat().st_size / 1024
             size = QtWidgets.QLabel(
                 f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
@@ -2408,11 +2638,17 @@ class LibraryPanel(QtWidgets.QWidget):
                 "font-family: 'Cascadia Code', monospace; background: transparent;"
             )
             row_layout.addWidget(size)
-            indexed = str(path) in indexed_paths
-            chip = QtWidgets.QLabel("Indexed" if indexed else "Pending")
-            chip_color = "#10B981" if indexed else "#06B6D4"
+
+            # Freshness dot + status (emerald indexed / amber re-indexing / grey pending)
+            if reindexing and not indexed:
+                status_text, dot = "Re-indexing", "#F59E0B"
+            elif indexed:
+                status_text, dot = "Indexed", "#10B981"
+            else:
+                status_text, dot = "Pending", "#64748B"
+            chip = QtWidgets.QLabel(status_text)
             chip.setStyleSheet(
-                f"color: {chip_color}; border: 1px solid {chip_color}; "
+                f"color: {dot}; border: 1px solid {dot}; "
                 "border-radius: 9px; padding: 1px 9px; font-size: 11px; "
                 "background: transparent;"
             )
@@ -2421,17 +2657,20 @@ class LibraryPanel(QtWidgets.QWidget):
             self._list.addItem(item)
             self._list.setItemWidget(item, row)
 
-    def _indexed_paths(self) -> set[str]:
-        """Paths recorded in the ingest manifest (per-file 'Indexed' chips)."""
+    def _manifest(self) -> dict:
+        """The ingest manifest {path: {mtime, size, chunks}}."""
         if not self._settings:
-            return set()
+            return {}
         try:
             from aetherlab.services.ingestion import LibraryIngestor
 
-            ingestor = LibraryIngestor(self._settings)
-            return set(ingestor._load_manifest().keys())
+            return LibraryIngestor(self._settings)._load_manifest()
         except Exception:  # noqa: BLE001
-            return set()
+            return {}
+
+    def _indexed_paths(self) -> set[str]:
+        """Paths recorded in the ingest manifest (per-file 'Indexed' chips)."""
+        return set(self._manifest().keys())
 
     # ── starter library download flow ──
 
@@ -2597,3 +2836,560 @@ class LibraryPanel(QtWidgets.QWidget):
         self.refresh()
         if copied:
             self._reindex()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# v2 §6 — Screening room, storyboard, critique, code artifact
+# ════════════════════════════════════════════════════════════════════════════
+
+# Design v2 tokens (mirror ui/style.py; kept local so this block is self-contained)
+_V2 = {
+    "stage": "#000000", "panel": "#0D0D14", "panel2": "#13131A", "elev": "#181822",
+    "line": "#1E293B", "line2": "#334155",
+    "tx": "#F8FAFC", "tx2": "#94A3B8", "tx3": "#64748B",
+    "cyan": "#22D3EE", "cyan_deep": "#06B6D4", "emerald": "#10B981",
+    "violet": "#8B5CF6", "amber": "#F59E0B", "rose": "#F43F5E",
+}
+
+
+def parse_scene_meta(scene: "SceneBundle") -> dict:
+    """Distill a SceneBundle's diagnostics into structured v2 UI state.
+
+    Returns {repaired:int, revised:int, critique:{verdict,score,issues}|None,
+    duration:str|None}. Pure — no Qt. Storyboard rides on scene.storyboard.
+    """
+    import re as _re
+
+    diags = list(getattr(scene, "diagnostics", []) or [])
+    repaired = sum(1 for d in diags if d.startswith("Applied render repair"))
+    revised = sum(1 for d in diags if d.startswith("Applied visual revision"))
+
+    critique = None
+    for d in diags:
+        m = _re.search(r"Visual critique round \d+: (\w+) \(score ([\d.]+)\)(?: — (.+))?", d)
+        if m:
+            verdict, score, issues = m.group(1), float(m.group(2)), m.group(3)
+            critique = {
+                "verdict": verdict,
+                "score": score,
+                "issues": [s.strip() for s in issues.split(";")] if issues else [],
+            }
+    duration = None
+    for d in diags:
+        m = _re.search(r"Estimated duration ~(\d+)s", d)
+        if m:
+            duration = f"~{m.group(1)}s"
+    return {"repaired": repaired, "revised": revised,
+            "critique": critique, "duration": duration}
+
+
+def _storyboard_acts(storyboard: dict | None) -> list[dict]:
+    """Normalized [{name, duration_s, beats, narration}] from a storyboard dict."""
+    if not isinstance(storyboard, dict):
+        return []
+    acts = storyboard.get("acts")
+    if not isinstance(acts, list):
+        return []
+    narration = storyboard.get("narration")
+    out = []
+    for i, act in enumerate(acts):
+        if not isinstance(act, dict):
+            continue
+        line = ""
+        if isinstance(narration, list) and i < len(narration):
+            line = str(narration[i])
+        try:
+            dur = float(act.get("duration_s", 0) or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        out.append({
+            "name": str(act.get("name", f"ACT {i + 1}")),
+            "duration_s": dur,
+            "beats": [str(b) for b in act.get("beats", []) if b],
+            "narration": line,
+        })
+    return out
+
+
+class _Pill(QtWidgets.QLabel):
+    """Small status pill (repaired ×N / revised ×N / verdict)."""
+
+    def __init__(self, text: str, color: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setStyleSheet(
+            f"color: {color}; border: 1px solid {color}; border-radius: 9px; "
+            "padding: 1px 9px; font-size: 10.5px; font-weight: 600; "
+            "font-family: 'Cascadia Code', monospace; background: transparent;"
+        )
+
+
+class ManimBadge(QtWidgets.QFrame):
+    """"Rendered with Manim Community" attribution (design v2 §6)."""
+
+    def __init__(self, small: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ManimBadge")
+        self.setStyleSheet(
+            "QFrame#ManimBadge { background: rgba(10,10,15,0.72); border: 1px solid "
+            f"{_V2['line']}; border-radius: 6px; }}"
+        )
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 8, 3)
+        lay.setSpacing(6)
+        glyph = icons.icon_label("aperture", 13 if small else 15, _V2["cyan"])
+        lay.addWidget(glyph)
+        text = QtWidgets.QLabel("Rendered with Manim Community")
+        text.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: {9 if small else 10.5}px; "
+            "background: transparent; border: none;"
+        )
+        if small:
+            text.setText("Manim CE")
+        lay.addWidget(text)
+
+
+class ActSeekSlider(QtWidgets.QSlider):
+    """Seek slider that paints storyboard act ticks (violet) and an amber
+    hero-frame bookmark over the groove (design v2 §6)."""
+
+    hero_seek_requested = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
+        self._act_fracs: list[tuple[float, str]] = []   # (start_frac, name)
+        self._hero_frac: float | None = None
+
+    def set_acts(self, acts: list[dict]) -> None:
+        total = sum(a["duration_s"] for a in acts) or 0.0
+        self._act_fracs = []
+        self._hero_frac = None
+        if total <= 0:
+            self.update()
+            return
+        cum = 0.0
+        for act in acts:
+            self._act_fracs.append((cum / total, act["name"]))
+            # Hero frame lives in the REVEAL act (cinematic §5): bookmark its start.
+            if act["name"].upper().startswith("REVEAL"):
+                self._hero_frac = cum / total
+            cum += act["duration_s"]
+        if self._hero_frac is None and self._act_fracs:
+            self._hero_frac = self._act_fracs[-1][0]
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self._act_fracs:
+            return
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        mid = self.height() / 2
+        for frac, _name in self._act_fracs:
+            x = frac * w
+            pen = QtGui.QPen(QtGui.QColor(_V2["violet"]), 1.5)
+            painter.setPen(pen)
+            painter.drawLine(QtCore.QPointF(x, mid - 6), QtCore.QPointF(x, mid + 6))
+        if self._hero_frac is not None:
+            x = self._hero_frac * w
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(_V2["amber"]))
+            painter.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(x, mid - 7), QtCore.QPointF(x - 4, mid - 12),
+                QtCore.QPointF(x + 4, mid - 12),
+            ]))
+
+
+class StoryboardStrip(QtWidgets.QWidget):
+    """Docked act strip: ESTABLISH / EVOLVE / REVEAL cards. Clicking an act
+    emits its start fraction so the video can seek there (design v2 §6)."""
+
+    act_seek_requested = QtCore.pyqtSignal(float)
+
+    _ACT_COLORS = {"ESTABLISH": _V2["cyan"], "EVOLVE": _V2["emerald"],
+                   "REVEAL": _V2["amber"]}
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._layout = QtWidgets.QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._empty = QtWidgets.QLabel("No storyboard for this scene.")
+        self._empty.setStyleSheet(f"color: {_V2['tx3']}; font-size: 11px;")
+        self._layout.addWidget(self._empty)
+
+    def set_storyboard(self, storyboard: dict | None) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        acts = _storyboard_acts(storyboard)
+        if not acts:
+            self._empty = QtWidgets.QLabel("No storyboard for this scene.")
+            self._empty.setStyleSheet(f"color: {_V2['tx3']}; font-size: 11px;")
+            self._layout.addWidget(self._empty)
+            return
+        total = sum(a["duration_s"] for a in acts) or 1.0
+        cum = 0.0
+        for act in acts:
+            frac = cum / total
+            cum += act["duration_s"]
+            self._layout.addWidget(self._make_card(act, frac), 1)
+
+    def _make_card(self, act: dict, frac: float) -> QtWidgets.QWidget:
+        name = act["name"].upper()
+        color = self._ACT_COLORS.get(name.split()[0] if name else "", _V2["violet"])
+        card = QtWidgets.QFrame()
+        card.setObjectName("ActCard")
+        card.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        card.setStyleSheet(
+            f"QFrame#ActCard {{ background: {_V2['panel2']}; border: 1px solid {_V2['line']}; "
+            f"border-left: 3px solid {color}; border-radius: 8px; }}"
+            f"QFrame#ActCard:hover {{ background: {_V2['elev']}; }}"
+        )
+        lay = QtWidgets.QVBoxLayout(card)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(3)
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        label = QtWidgets.QLabel(act["name"])
+        label.setStyleSheet(
+            f"color: {color}; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 0.8px; background: transparent; border: none;"
+        )
+        head.addWidget(label)
+        head.addStretch()
+        dur = QtWidgets.QLabel(f"{act['duration_s']:g}s")
+        dur.setStyleSheet(
+            f"color: {_V2['tx3']}; font-size: 10px; font-family: 'Cascadia Code', "
+            "monospace; background: transparent; border: none;"
+        )
+        head.addWidget(dur)
+        lay.addLayout(head)
+        if act["narration"]:
+            script = QtWidgets.QLabel(act["narration"])
+            script.setWordWrap(True)
+            script.setStyleSheet(
+                f"color: {_V2['tx2']}; font-size: 11px; font-style: italic; "
+                "background: transparent; border: none;"
+            )
+            lay.addWidget(script)
+        card.mousePressEvent = lambda e, f=frac: self.act_seek_requested.emit(f)
+        return card
+
+
+class CritiqueBadge(QtWidgets.QFrame):
+    """Verdict + 0–10 score + expandable issues (design v2 §4/§6)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CritiqueBadge")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(4)
+
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        self._icon = QtWidgets.QLabel()
+        self._icon.setFixedSize(16, 16)
+        head.addWidget(self._icon)
+        self._verdict = QtWidgets.QLabel("")
+        self._verdict.setStyleSheet(
+            f"color: {_V2['tx']}; font-size: 12px; font-weight: 600; "
+            "background: transparent; border: none;"
+        )
+        head.addWidget(self._verdict)
+        self._score = QtWidgets.QLabel("")
+        self._score.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: 11px; font-family: 'Cascadia Code', "
+            "monospace; background: transparent; border: none;"
+        )
+        head.addWidget(self._score)
+        head.addStretch()
+        self._toggle = QtWidgets.QPushButton("Issues")
+        self._toggle.setObjectName("GhostButton")
+        self._toggle.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._toggle.clicked.connect(self._toggle_issues)
+        head.addWidget(self._toggle)
+        lay.addLayout(head)
+
+        self._issues = QtWidgets.QLabel("")
+        self._issues.setWordWrap(True)
+        self._issues.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: 11px; padding: 2px 0 2px 24px; "
+            "background: transparent; border: none;"
+        )
+        self._issues.hide()
+        lay.addWidget(self._issues)
+        self.hide()
+
+    def _toggle_issues(self) -> None:
+        self._issues.setVisible(not self._issues.isVisible())
+
+    def set_critique(self, critique: dict | None) -> None:
+        if not critique:
+            self.hide()
+            return
+        verdict = critique["verdict"]
+        color = {"ship": _V2["emerald"], "revise": _V2["amber"]}.get(verdict, _V2["tx3"])
+        icon_name = {"ship": "check-circle", "revise": "alert-circle"}.get(verdict, "info")
+        self._icon.setPixmap(icons.icon_pixmap(icon_name, 15, color))
+        self._verdict.setText(
+            {"ship": "Ready to ship", "revise": "Revision suggested"}.get(
+                verdict, verdict.title())
+        )
+        self._score.setText(f"{critique['score']:.1f}/10")
+        issues = critique.get("issues") or []
+        if issues:
+            self._issues.setText("• " + "\n• ".join(issues))
+            self._toggle.show()
+        else:
+            self._toggle.hide()
+        self.setStyleSheet(
+            f"QFrame#CritiqueBadge {{ background: {_V2['panel2']}; "
+            f"border: 1px solid {color}; border-radius: 8px; }}"
+        )
+        self.show()
+
+
+class _ManimHighlighter(QtGui.QSyntaxHighlighter):
+    """Manim-aware syntax accents (design v2 syntax map)."""
+
+    _KEYWORDS = {
+        "import", "from", "as", "def", "class", "return", "for", "while", "if",
+        "elif", "else", "with", "in", "and", "or", "not", "lambda", "self",
+        "True", "False", "None", "yield", "pass", "break", "continue",
+    }
+    _PLAY_VERBS = {
+        "Create", "Write", "Transform", "ReplacementTransform", "FadeIn",
+        "FadeOut", "GrowFromCenter", "GrowArrow", "DrawBorderThenFill",
+        "Indicate", "Flash", "Circumscribe", "MoveAlongPath", "Rotate",
+        "Rotating", "TransformMatchingTex", "TransformMatchingShapes",
+        "ApplyWave", "SpiralIn", "Wiggle", "FocusOn", "ShowPassingFlash",
+        "always_redraw", "add_updater",
+    }
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        import re as _re
+        self._re = _re
+        self._fmt = {}
+        for key, color in (("kw", _V2["violet"]), ("cls", _V2["cyan"]),
+                           ("verb", _V2["emerald"]), ("lit", _V2["amber"]),
+                           ("cmt", _V2["tx3"])):
+            f = QtGui.QTextCharFormat()
+            f.setForeground(QtGui.QColor(color))
+            self._fmt[key] = f
+        self._fmt["cls"].setFontWeight(QtGui.QFont.Weight.DemiBold)
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802
+        for m in self._re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text):
+            word = m.group()
+            if word in self._KEYWORDS:
+                self.setFormat(m.start(), len(word), self._fmt["kw"])
+            elif word in self._PLAY_VERBS:
+                self.setFormat(m.start(), len(word), self._fmt["verb"])
+            elif word[:1].isupper():
+                self.setFormat(m.start(), len(word), self._fmt["cls"])
+        for m in self._re.finditer(r"\b\d+\.?\d*\b", text):
+            self.setFormat(m.start(), len(m.group()), self._fmt["lit"])
+        for m in self._re.finditer(r"(['\"]).*?\1", text):
+            self.setFormat(m.start(), len(m.group()), self._fmt["lit"])
+        h = text.find("#")
+        if h >= 0:
+            self.setFormat(h, len(text) - h, self._fmt["cmt"])
+
+
+class _LineNumberArea(QtWidgets.QWidget):
+    def __init__(self, editor: "CodeArtifactView") -> None:
+        super().__init__(editor)
+        self._editor = editor
+
+    def sizeHint(self) -> QtCore.QSize:  # noqa: N802
+        return QtCore.QSize(self._editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        self._editor.line_number_area_paint(event)
+
+
+class CodeArtifactView(QtWidgets.QPlainTextEdit):
+    """Editor pane with line numbers + Manim syntax accents (design v2 §6)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setObjectName("CodeArtifact")
+        self.setStyleSheet(
+            f"QPlainTextEdit#CodeArtifact {{ background: {_V2['stage']}; "
+            f"border: 1px solid {_V2['line']}; border-radius: 8px; "
+            f"color: {_V2['tx']}; font-family: 'Cascadia Code', monospace; "
+            "font-size: 12px; padding: 4px; }"
+        )
+        self.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self._numbers = _LineNumberArea(self)
+        self._highlighter = _ManimHighlighter(self.document())
+        self.blockCountChanged.connect(lambda _: self._update_margins())
+        self.updateRequest.connect(self._update_numbers)
+        self._update_margins()
+
+    def line_number_area_width(self) -> int:
+        digits = len(str(max(1, self.blockCount())))
+        return 14 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def _update_margins(self) -> None:
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def _update_numbers(self, rect, dy) -> None:
+        if dy:
+            self._numbers.scroll(0, dy)
+        else:
+            self._numbers.update(0, rect.y(), self._numbers.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_margins()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self._numbers.setGeometry(
+            QtCore.QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height())
+        )
+
+    def line_number_area_paint(self, event) -> None:
+        painter = QtGui.QPainter(self._numbers)
+        painter.fillRect(event.rect(), QtGui.QColor(_V2["panel"]))
+        block = self.firstVisibleBlock()
+        num = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+        painter.setFont(self.font())
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                painter.setPen(QtGui.QColor(_V2["tx3"]))
+                painter.drawText(
+                    0, int(top), self._numbers.width() - 6, self.fontMetrics().height(),
+                    QtCore.Qt.AlignmentFlag.AlignRight, str(num + 1),
+                )
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            num += 1
+
+
+class _DiagnosticsDrawer(QtWidgets.QFrame):
+    """Collapsible mono diagnostics with severity dots (design v2 §4)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
+        self._toggle = QtWidgets.QPushButton("▸ Diagnostics")
+        self._toggle.setObjectName("GhostButton")
+        self._toggle.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._toggle.clicked.connect(self._toggle_body)
+        lay.addWidget(self._toggle, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+        self._body = QtWidgets.QPlainTextEdit()
+        self._body.setReadOnly(True)
+        self._body.setMaximumHeight(120)
+        self._body.setStyleSheet(
+            f"QPlainTextEdit {{ background: {_V2['panel']}; border: 1px solid {_V2['line']}; "
+            f"border-radius: 6px; color: {_V2['tx2']}; font-family: 'Cascadia Code', "
+            "monospace; font-size: 11px; }"
+        )
+        self._body.hide()
+        lay.addWidget(self._body)
+        self.hide()
+
+    def _severity(self, line: str) -> str:
+        low = line.lower()
+        if any(k in low for k in ("fail", "error", "timed out", "unsafe")):
+            return "●"  # rose
+        if any(k in low for k in ("repair", "revis", "retry", "revise", "warn")):
+            return "●"  # amber
+        return "●"
+
+    def set_diagnostics(self, diagnostics: list[str]) -> None:
+        if not diagnostics:
+            self.hide()
+            return
+        rows = []
+        for d in diagnostics:
+            low = d.lower()
+            if any(k in low for k in ("fail", "error", "timed out", "unsafe")):
+                dot = _V2["rose"]
+            elif any(k in low for k in ("repair", "revis", "retry", "warn")):
+                dot = _V2["amber"]
+            else:
+                dot = _V2["tx3"]
+            rows.append((dot, d))
+        # QPlainTextEdit can't color per-line easily; prefix with a unicode dot
+        # and rely on the drawer being mono. Keep it simple + legible.
+        self._body.setPlainText("\n".join(f"• {d}" for _c, d in rows))
+        self._toggle.setText(f"▸ Diagnostics ({len(diagnostics)})")
+        self.show()
+
+    def _toggle_body(self) -> None:
+        vis = not self._body.isVisible()
+        self._body.setVisible(vis)
+        self._toggle.setText(
+            self._toggle.text().replace("▸", "▾") if vis
+            else self._toggle.text().replace("▾", "▸")
+        )
+
+
+class _BookSpine(QtWidgets.QWidget):
+    """A little painted book spine for the library bookshelf (design v2 §4)."""
+
+    def __init__(self, color: str, parent=None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(8, 24)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor(self._color))
+        painter.drawRoundedRect(QtCore.QRectF(1, 1, 6, 22), 2, 2)
+        cap = QtGui.QColor(self._color)
+        cap.setAlphaF(0.5)
+        painter.setBrush(cap)
+        painter.drawRoundedRect(QtCore.QRectF(1, 1, 6, 4), 2, 2)
+
+
+class BlueprintBackdrop(QtWidgets.QWidget):
+    """A precision-instrument backdrop: fine cyan dot grid + faint 40px
+    blueprint cross-lines (design v2 guidelines). Hosts a single child that
+    fills it; the texture shows through the child's transparent gaps.
+    """
+
+    def __init__(self, child: QtWidgets.QWidget, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("BlueprintBackdrop")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(child)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        painter = QtGui.QPainter(self)
+        rect = self.rect()
+        painter.fillRect(rect, QtGui.QColor("#0A0A0F"))
+
+        # Blueprint cross-lines every 40px at ~4% cyan.
+        line = QtGui.QColor("#22D3EE")
+        line.setAlphaF(0.035)
+        painter.setPen(QtGui.QPen(line, 1))
+        for x in range(0, rect.width(), 40):
+            painter.drawLine(x, 0, x, rect.height())
+        for y in range(0, rect.height(), 40):
+            painter.drawLine(0, y, rect.width(), y)
+
+        # Dot grid at the 40px intersections, slightly brighter.
+        dot = QtGui.QColor("#22D3EE")
+        dot.setAlphaF(0.06)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(dot)
+        for x in range(0, rect.width(), 40):
+            for y in range(0, rect.height(), 40):
+                painter.drawEllipse(QtCore.QPointF(x, y), 1.1, 1.1)

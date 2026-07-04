@@ -26,7 +26,18 @@ class AppSettings:
     llm_model: str
     llm_timeout_seconds: float = 60.0
     llm_context_window: int = 250_000
+    # Optional vision-capable model (same OpenAI-compatible endpoint) used by
+    # the scene critic to look at rendered frames. None disables the critique
+    # loop entirely (renders ship uncritiqued, as before).
+    vision_model: str | None = None
+    # v3: pull supplementary references from the web (Wikipedia) alongside the
+    # local textbook library. Fail-soft and time-boxed; disable for offline use.
+    web_references: bool = True
+    web_ref_timeout: float = 8.0
     provider_source: str = "environment"
+
+
+OLLAMA_OPENAI_BASE_URL = "http://localhost:11434/v1"
 
 
 def _path_from_env(name: str, default: Path) -> Path:
@@ -80,7 +91,12 @@ def load_settings() -> AppSettings:
         "AETHERLAB_LIBRARY_DIR",
         Path(app_cfg["library_path"]).expanduser() if app_cfg.get("library_path") else data_dir / "library",
     )
-    qwen = load_qwen_settings()
+    # The ~/.qwen autoload is a developer-machine convenience: a student's app
+    # must never silently inherit provider credentials from an unrelated tool.
+    # Opt back in with AETHERLAB_QWEN_AUTOLOAD=1.
+    qwen = load_qwen_settings() if os.getenv("AETHERLAB_QWEN_AUTOLOAD") == "1" else {}
+
+    preset = (os.getenv("AETHERLAB_PROVIDER") or app_cfg.get("provider_preset") or "").lower()
 
     env_model = os.getenv("AETHERLAB_LLM_MODEL")
     llm_model = env_model or app_cfg.get("model") or qwen.get("model") or "gpt-5.5"
@@ -97,8 +113,16 @@ def load_settings() -> AppSettings:
         or qwen.get("base_url")
     )
 
+    # The "ollama" preset fills whatever the tiers above left unset: Ollama's
+    # OpenAI-compatible endpoint needs no real key, just a placeholder.
+    if preset == "ollama":
+        base_url = base_url or OLLAMA_OPENAI_BASE_URL
+        api_key = api_key or "ollama"
+
     if env_model or os.getenv("AETHERLAB_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"):
         source = "environment"
+    elif preset == "ollama":
+        source = "ollama-local"
     elif app_cfg.get("api_key") or app_cfg.get("model") or app_cfg.get("base_url"):
         source = str(app_config_path())
     else:
@@ -113,8 +137,26 @@ def load_settings() -> AppSettings:
         openai_base_url=base_url,
         llm_model=llm_model,
         llm_timeout_seconds=float(os.getenv("AETHERLAB_LLM_TIMEOUT", "60")),
+        vision_model=os.getenv("AETHERLAB_VISION_MODEL") or app_cfg.get("vision_model") or None,
+        web_references=_as_bool(
+            os.getenv("AETHERLAB_WEB_REFS"), app_cfg.get("web_references"), default=True
+        ),
         provider_source=source,
     )
+
+
+def _as_bool(*values, default: bool) -> bool:
+    """First non-None value coerced to bool ('0'/'false'/'no'/'off' → False)."""
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        if s in ("0", "false", "no", "off", ""):
+            return False
+        return True
+    return default
 
 
 def load_qwen_settings(path: Path | None = None) -> dict[str, str]:

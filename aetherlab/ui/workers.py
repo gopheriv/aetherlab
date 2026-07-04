@@ -102,6 +102,10 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 return cached.rag
             self.status.emit("Worker B: searching local textbook memory.")
             rag = await LocalVectorRag(self.settings).search(solver.keywords)
+            if getattr(self.settings, "web_references", True):
+                self.status.emit("Worker B: fetching web references (Wikipedia).")
+                from aetherlab.services.pipeline import _merge_web_references
+                rag = await _merge_web_references(rag, solver.keywords, self.settings)
             cache.store_rag(key, rag)
             return rag
 
@@ -138,10 +142,13 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         )
         if needs_render:
             rendered_scene = await manim.render_scene_with_repair(
-                scene, self.settings, quality=self.render_quality
+                scene, self.settings, quality=self.render_quality,
+                brief=self.request.prompt,
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
+            if any("Applied visual revision" in d for d in rendered_scene.diagnostics):
+                self.status.emit("Visual critic requested a revision; re-rendered.")
             cache.store_scene(key, rendered_scene)
         else:
             self.status.emit("Reusing cached rendered video.")

@@ -28,6 +28,16 @@ _RENDER_DIR.mkdir(parents=True, exist_ok=True)
 _RENDER_QUALITY = "l"  # low = 480p15
 
 
+def detect_latex() -> bool:
+    """True when a LaTeX toolchain is available for Manim's MathTex/Tex.
+
+    Manim only needs LaTeX for Tex-family mobjects; when it's absent the scene
+    prompts add a Text-only rule so generated scenes still render everywhere
+    (the domain fallback templates are already Text-only by contract).
+    """
+    return shutil.which("latex") is not None or shutil.which("xelatex") is not None
+
+
 def _detect_render_tier() -> dict:
     """Hardware-aware render tier, ported from the manim-bot project.
 
@@ -74,22 +84,53 @@ class ManimRuntime:
         class_name = "AetherLabScene"
 
         if s and s.openai_api_key:
+            from aetherlab.services.code_safety import validate_code_safety
+            from aetherlab.services.scene_validation import estimate_duration, validate_scene
+
             generator = SceneGenerator(s)
             for attempt in range(max_retries + 1):
                 code = await generator.generate(request, solver, rag, class_name)
                 try:
                     compile(code, "<aetherlab-generated-scene>", "exec")
-                    if attempt > 0:
-                        diagnostics.append(f"Scene succeeded on retry {attempt}.")
-                    return SceneBundle(
-                        class_name=class_name,
-                        code=code,
-                        engine=engine,
-                        status="compiled",
-                        diagnostics=diagnostics,
-                    )
                 except SyntaxError as exc:
                     diagnostics.append(f"Attempt {attempt + 1}: scene failed to compile: {exc}")
+                    continue
+                # Fail-closed safety gate: generated scenes run with full
+                # interpreter privileges in the render subprocess.
+                safe, issues = validate_code_safety(code)
+                if not safe:
+                    diagnostics.append(
+                        f"Attempt {attempt + 1}: scene failed the safety gate: "
+                        + "; ".join(issues[:4])
+                    )
+                    continue
+                # Static pre-render lint: hallucinated names, provably-bad
+                # kwargs, structurally broken LaTeX. Catching these here turns
+                # a render crash + repair round into a fresh generation.
+                lint_ok, lint_issues = validate_scene(code)
+                if not lint_ok:
+                    diagnostics.append(
+                        f"Attempt {attempt + 1}: pre-render lint failed: "
+                        + "; ".join(lint_issues[:4])
+                    )
+                    continue
+                if attempt > 0:
+                    diagnostics.append(f"Scene succeeded on retry {attempt}.")
+                est = estimate_duration(code)
+                diagnostics.append(
+                    f"Estimated duration ~{est.total_seconds:.0f}s "
+                    f"({est.play_calls} beats, {est.wait_calls} waits)."
+                )
+                return SceneBundle(
+                    class_name=class_name,
+                    code=code,
+                    engine=engine,
+                    status="compiled",
+                    diagnostics=diagnostics,
+                    # Carried so the visual critic can judge the render
+                    # against the director's locked treatment.
+                    storyboard=generator._last_storyboard,
+                )
             # All retries exhausted — fall back to static template
             diagnostics.append("All LLM attempts failed; using deterministic fallback.")
             code = self._build_scene_code(class_name, request, solver, rag)
@@ -194,8 +235,9 @@ class ManimRuntime:
             if result.returncode != 0:
                 stderr = result.stderr.strip()
                 # Keep a generous tail: the repair pass feeds this back to the
-                # LLM and needs the actual traceback, not just the last line.
-                scene_bundle.diagnostics.append(f"Manim render failed: {stderr[-1500:]}")
+                # LLM and needs the actual traceback — chained exceptions and
+                # LaTeX logs push the root cause well past a short tail.
+                scene_bundle.diagnostics.append(f"Manim render failed: {stderr[-8000:]}")
                 scene_bundle.status = "render-error"
                 return scene_bundle
         except subprocess.TimeoutExpired:
@@ -225,27 +267,56 @@ class ManimRuntime:
         settings: "AppSettings | None" = None,
         quality: str = "l",
         max_repairs: int = 2,
+        max_revisions: int = 2,
+        brief: str = "",
     ) -> SceneBundle:
-        """Render; on a render-time API error, ask the LLM to fix its own code.
+        """Render; repair crashes/timeouts; then (optionally) critique and revise.
 
-        LLM scenes occasionally invent Manim kwargs that pass the compile check
-        but explode at render time. Feeding the traceback back for a bounded
-        number of repair rounds converts most of those into successful renders.
-        Without an API key this is exactly render_scene().
+        Crash path: LLM scenes occasionally invent Manim kwargs that pass the
+        compile check but explode at render time; feeding the traceback back for
+        a bounded number of repair rounds converts most into successful renders.
+        Quality path: with a vision model configured, the rendered video's
+        frames are judged against the storyboard/brief and revised until the
+        critic says ship (bounded by max_revisions). Without an API key this is
+        exactly render_scene(); without a vision model, repairs-only.
         """
         s = settings or self._settings
         scene_bundle = self.render_scene(scene_bundle, s, quality)
 
+        learner = None
+        if s is not None:
+            from aetherlab.services.error_learner import ErrorLearner
+
+            learner = ErrorLearner(s.data_dir / "error_patterns.json")
+
         repairs = 0
         while (
-            scene_bundle.status == "render-error"
+            scene_bundle.status in {"render-error", "render-timeout"}
             and repairs < max_repairs
             and s is not None
             and s.openai_api_key
         ):
+            from aetherlab.services.code_safety import validate_code_safety
             from aetherlab.services.scene_generator import SceneGenerator
 
             error = scene_bundle.diagnostics[-1] if scene_bundle.diagnostics else "unknown"
+            if scene_bundle.status == "render-timeout":
+                # Timeouts punish the most ambitious scenes — give the repair
+                # model actionable direction instead of dropping the attempt.
+                error += (
+                    " The scene exceeded the render time limit. Reduce rendering "
+                    "load while preserving the visual design: fewer/cheaper "
+                    "always_redraw updaters (prefer static mobjects + .animate), "
+                    "fewer self.play calls, lower curve sample counts, shorter "
+                    "waits. Do NOT strip the scene down to a bare plot."
+                )
+            if learner is not None:
+                # Cross-run learning: curated Manim-CE pitfall hints + a
+                # recurrence warning when the same signature keeps appearing.
+                hints = learner.hints_for(error)
+                learner.record(error)
+                if hints:
+                    error += "\n\nKnown fixes for this class of error:\n- " + "\n- ".join(hints)
             repairs += 1
             log.info("Attempting render repair %d/%d", repairs, max_repairs)
             try:
@@ -256,10 +327,101 @@ class ManimRuntime:
             except Exception as exc:  # noqa: BLE001
                 scene_bundle.diagnostics.append(f"Render repair {repairs} failed: {exc}")
                 break
+            safe, issues = validate_code_safety(fixed)
+            if not safe:
+                scene_bundle.diagnostics.append(
+                    f"Render repair {repairs} rejected by safety gate: " + "; ".join(issues[:4])
+                )
+                break
+            from aetherlab.services.scene_validation import validate_scene
+
+            lint_ok, lint_issues = validate_scene(fixed)
+            if not lint_ok:
+                # The repair itself introduced a provable render failure —
+                # feed the lint report back as the next round's error instead
+                # of wasting a render on it.
+                scene_bundle.diagnostics.append(
+                    f"Render repair {repairs} failed pre-render lint: "
+                    + "; ".join(lint_issues[:4])
+                )
+                continue
             scene_bundle.code = fixed
             scene_bundle.status = "compiled"
             scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
             scene_bundle = self.render_scene(scene_bundle, s, quality)
+
+        # ── Perceptual quality loop ──────────────────────────────────────
+        # The critic looks at the actual rendered frames and judges them
+        # against the storyboard/brief; "revise" verdicts loop an aesthetic
+        # rewrite. Entirely optional: no vision model → verdict "skipped".
+        if (
+            scene_bundle.status == "rendered"
+            and s is not None
+            and s.vision_model
+            and s.openai_api_key
+        ):
+            import json as _json
+
+            from aetherlab.services.code_safety import validate_code_safety
+            from aetherlab.services.scene_critic import critique_video
+            from aetherlab.services.scene_generator import SceneGenerator
+            from aetherlab.services.scene_validation import validate_scene
+
+            generator = SceneGenerator(s)
+            board_brief = (
+                _json.dumps(scene_bundle.storyboard)
+                if scene_bundle.storyboard
+                else (brief or "A short cinematic physics explainer scene.")
+            )
+            for round_no in range(1, max_revisions + 1):
+                crit = await critique_video(scene_bundle.video_path, board_brief, s)
+                if crit.verdict == "skipped":
+                    break
+                scene_bundle.diagnostics.append(
+                    f"Visual critique round {round_no}: {crit.verdict} "
+                    f"(score {crit.score:.1f})"
+                    + (" — " + "; ".join(crit.issues[:3]) if crit.issues else "")
+                )
+                if not crit.should_revise:
+                    break
+                try:
+                    revised = await generator.revise(
+                        scene_bundle.code,
+                        "\n".join(crit.issues) or "Improve composition and pacing.",
+                        scene_bundle.class_name,
+                    )
+                    compile(revised, "<aetherlab-revised-scene>", "exec")
+                except Exception as exc:  # noqa: BLE001
+                    scene_bundle.diagnostics.append(
+                        f"Visual revision {round_no} failed: {exc}"
+                    )
+                    break
+                safe, _ = validate_code_safety(revised)
+                lint_ok, _ = validate_scene(revised)
+                if not safe or not lint_ok:
+                    scene_bundle.diagnostics.append(
+                        f"Visual revision {round_no} rejected by static gates."
+                    )
+                    break
+                # Render the revision as a trial: only adopt it if it still
+                # renders — never downgrade a shipped cut to a failed one.
+                trial = SceneBundle(
+                    class_name=scene_bundle.class_name,
+                    code=revised,
+                    engine=scene_bundle.engine,
+                    status="compiled",
+                    diagnostics=list(scene_bundle.diagnostics),
+                    storyboard=scene_bundle.storyboard,
+                )
+                trial = self.render_scene(trial, s, quality)
+                if trial.status == "rendered":
+                    trial.diagnostics.append(f"Applied visual revision {round_no}.")
+                    scene_bundle = trial
+                else:
+                    scene_bundle.diagnostics.append(
+                        f"Visual revision {round_no} did not render; keeping previous cut."
+                    )
+                    break
 
         return scene_bundle
 
@@ -277,11 +439,17 @@ class ManimRuntime:
 
     def _find_manim_command(self) -> list[str] | None:
         """Find the manim command as a list suitable for subprocess.run.
-        
-        Prefer `python -m manim` to avoid cross-Python-version issues.
+
+        Dev installs prefer `python -m manim` (avoids cross-Python-version
+        issues). In a PyInstaller bundle sys.executable is aetherlab.exe and
+        `-m` means nothing — the exe instead relays `--manim ...` straight to
+        Manim's CLI (see __main__.main), preserving subprocess isolation.
         """
+        import sys
+
         if find_spec("manim"):
-            import sys
+            if getattr(sys, "frozen", False):
+                return [sys.executable, "--manim"]
             return [sys.executable, "-m", "manim"]
         manim_path = shutil.which("manim")
         if manim_path:
@@ -295,90 +463,29 @@ class ManimRuntime:
         solver: SolverResult,
         rag: RagResult,
     ) -> str:
-        title = _literal(_shorten(request.normalized_prompt(), 70))
-        summary = _literal(_shorten(solver.summary, 120))
-        first_steps = [_shorten(step, 82) for step in solver.derivation_steps[:4]]
-        step_lines = ",\n            ".join(_literal(step) for step in first_steps) or _literal("No derivation steps available.")
-        variable_lines = ",\n            ".join(
-            f"{_literal(name)}: {float(value)!r}" for name, value in sorted(solver.variables.items())
+        """Deterministic domain-aware fallback (services/scene_templates).
+
+        Chooses a pendulum/orbit/wave/oscillator visualization matching the
+        problem instead of one generic damped-wave plot, themed to the app
+        palette when the UI has persisted one.
+        """
+        from aetherlab.services.scene_templates import (
+            build_scene,
+            detect_domain,
+            load_scene_palette,
         )
-        if not variable_lines:
-            variable_lines = f"{_literal('parameter')}: 1.0"
-        rag_count = len(rag.hits)
 
-        return _MANIM_SCENE_TEMPLATE.format(
+        domain = detect_domain(solver.keywords, solver.variables)
+        palette = load_scene_palette(self._settings.data_dir if self._settings else None)
+        return build_scene(
             class_name=class_name,
-            title=title,
-            summary=summary,
-            step_lines=step_lines,
-            variable_lines=variable_lines,
-            rag_count=rag_count,
-        ).strip() + "\n"
-
-
-_MANIM_SCENE_TEMPLATE = '''
-"""Generated by AetherLab (Manim Community).
-
-Do NOT import manimlib here: manimgl parses sys.argv at import time, which
-hijacks the Manim Community CLI arguments mid-render (ported finding from
-the manim-bot project).
-"""
-
-import math
-
-from manim import *
-
-
-class {class_name}(Scene):
-    def construct(self):
-        title_text = {title}
-        summary_text = {summary}
-        derivation_steps = [
-            {step_lines}
-        ]
-        variables = {{
-            {variable_lines}
-        }}
-
-        title = Text(title_text).scale(0.55)
-        title.to_edge(UP)
-
-        summary = Text(summary_text).scale(0.32)
-        summary.next_to(title, DOWN)
-
-        rows = VGroup()
-        for index, step in enumerate(derivation_steps, start=1):
-            rows.add(Text(f"{{index}}. {{step}}").scale(0.28))
-        rows.arrange(DOWN, aligned_edge=LEFT, buff=0.18)
-        rows.next_to(summary, DOWN, buff=0.35)
-
-        axes = Axes(x_range=[-3, 3, 1], y_range=[-2, 2, 1])
-        axes.scale(0.55)
-        axes.to_edge(DOWN)
-
-        damping = variables.get("damping", 0.15)
-        stiffness = variables.get("stiffness", 1.0)
-        waveform = lambda x: math.exp(-damping * (x + 3)) * math.sin(stiffness * x * 2)
-        if hasattr(axes, "plot"):
-            curve = axes.plot(waveform, color=BLUE)
-        else:
-            curve = axes.get_graph(waveform, color=BLUE)
-        caption = Text("RAG references: {rag_count}").scale(0.25)
-        caption.next_to(axes, UP, buff=0.1)
-
-        bounded_group = VGroup(title, summary, rows, axes, curve, caption)
-        frame_width = getattr(config, "frame_width", 14.0)
-        if isinstance(config, dict):
-            frame_width = config.get("frame_width", frame_width)
-        bounded_group.scale_to_fit_width(frame_width - 1.0)
-        bounded_group.move_to(ORIGIN)
-
-        # A scene with no animations produces no video file, so always
-        # animate in (and hold) rather than static-add.
-        self.play(FadeIn(bounded_group), run_time=1.0)
-        self.play(Create(curve.copy().set_color(YELLOW)), run_time=1.5)
-        self.wait(1.0)
-'''
+            domain=domain,
+            title=_shorten(request.normalized_prompt(), 70),
+            summary=_shorten(solver.summary, 120),
+            steps=[_shorten(step, 82) for step in solver.derivation_steps[:4]],
+            variables=solver.variables,
+            palette=palette,
+        )
 
 
 def _scene_name(class_name: str, code: str = "") -> str:
@@ -419,10 +526,6 @@ def _shorten(text: str, limit: int) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 3].rstrip() + "..."
-
-
-def _literal(text: str) -> str:
-    return repr(text)
 
 
 def sanitize_scene_name(text: str) -> str:

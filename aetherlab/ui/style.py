@@ -13,6 +13,10 @@ BG_DEEPEST = "#0A0A0F"
 BG_PANEL_1 = "#0D0D14"
 BG_PANEL_2 = "#13131A"
 BG_CANVAS_TOP = "#0F1520"
+STAGE = "#000000"        # v2: true-black screening-room letterbox
+ELEV = "#181822"         # v2: elevated controls / segmented fills
+HOVER_SURFACE = "#1C1C27"  # v2: hover surface
+LINE_0 = "#141A24"       # v2: faintest divider
 SURFACE_INPUT = "#0B0B12"
 SURFACE_INPUT_FOCUS = "#0E0E17"
 
@@ -24,11 +28,12 @@ TEXT_MID = "#94A3B8"
 TEXT_LOW = "#64748B"
 TEXT_ON_ACCENT = "#04141A"
 
-CYAN = "#06B6D4"
-CYAN_HOVER = "#22D3EE"
-CYAN_ACTIVE = "#0891B2"
-CYAN_TINT_10 = "rgba(6, 182, 212, 0.10)"
-CYAN_TINT_20 = "rgba(6, 182, 212, 0.20)"
+CYAN = "#22D3EE"          # v2 primary (v1 #06B6D4 kept as CYAN_DEEP)
+CYAN_DEEP = "#06B6D4"     # fills, spines, pressed states
+CYAN_HOVER = "#67E8F9"
+CYAN_ACTIVE = "#06B6D4"
+CYAN_TINT_10 = "rgba(34, 211, 238, 0.10)"
+CYAN_TINT_20 = "rgba(34, 211, 238, 0.20)"
 
 EMERALD = "#10B981"
 EMERALD_TINT_10 = "rgba(16, 185, 129, 0.10)"
@@ -94,7 +99,7 @@ QToolButton#TitleIconButton {{
     border-radius: 6px;
     padding: 5px;
 }}
-QToolButton#TitleIconButton:hover {{ background-color: {BG_PANEL_2}; }}
+QToolButton#TitleIconButton:hover {{ background-color: {HOVER_SURFACE}; }}
 
 /* ═══════════════ Nav rail ═══════════════ */
 
@@ -113,7 +118,7 @@ QToolButton#NavRailItem {{
     letter-spacing: 0.3px;
     padding: 8px 2px;
 }}
-QToolButton#NavRailItem:hover {{ background-color: {BG_PANEL_2}; }}
+QToolButton#NavRailItem:hover {{ background-color: {HOVER_SURFACE}; }}
 QToolButton#NavRailItem:checked {{
     background-color: {CYAN_TINT_10};
     color: {CYAN};
@@ -348,7 +353,7 @@ QMenu::item {{
     padding: 8px 12px;
     border-radius: 4px;
 }}
-QMenu::item:selected {{ background-color: {BG_PANEL_1}; }}
+QMenu::item:selected {{ background-color: {HOVER_SURFACE}; }}
 
 /* ═══════════════ Inputs ═══════════════ */
 
@@ -431,13 +436,13 @@ QListWidget {{
 }}
 QListWidget::item {{
     background-color: {BG_PANEL_2};
-    border-bottom: 1px solid {BORDER_HAIRLINE};
+    border-bottom: 1px solid {LINE_0};
     color: {TEXT_HIGH};
     /* No padding: rows are embedded widgets (History/Library) that manage
        their own margins — QSS item padding offsets and clips them. */
     padding: 0;
 }}
-QListWidget::item:hover {{ background-color: {BG_PANEL_1}; }}
+QListWidget::item:hover {{ background-color: {HOVER_SURFACE}; }}
 QListWidget::item:selected {{
     background-color: {CYAN_TINT_10};
     color: {CYAN};
@@ -488,7 +493,7 @@ QPushButton#VideoControlBtn {{
     border-radius: 6px;
     padding: 5px;
 }}
-QPushButton#VideoControlBtn:hover {{ background-color: {BG_PANEL_1}; }}
+QPushButton#VideoControlBtn:hover {{ background-color: {ELEV}; }}
 
 QPushButton#VideoPlayBtn {{
     background-color: {CYAN};
@@ -541,4 +546,25 @@ QDialog {{
 QSplitter::handle {{ background-color: {BORDER_HAIRLINE}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
+
+/* ═══════════════ Focus rings (v2 §9: keyboard-first) ═══════════════ */
+/* A visible 1.5px cyan outline on every focusable control. */
+QComboBox:focus {{ border: 1.5px solid {CYAN}; }}
+QCheckBox:focus {{ outline: none; }}
+QCheckBox:focus::indicator {{ border: 1.5px solid {CYAN}; }}
+QPushButton#SecondaryButton:focus,
+QPushButton#GhostButton:focus,
+QPushButton#RunButton:focus,
+QPushButton#PrimaryButton:focus,
+QPushButton#CancelButton:focus {{ border: 1.5px solid {CYAN_HOVER}; }}
+QToolButton#NavRailItem:focus {{ background-color: {CYAN_TINT_10}; }}
+QSlider:focus {{ background: transparent; }}
+QSlider:focus::handle:horizontal {{ border: 2px solid {CYAN_HOVER}; }}
+
+/* ═══════════════ Command-bar focus filament ═══════════════ */
+/* The shell lifts to a cyan hairline while the prompt is focused. */
+QFrame#CommandBarShell[focused="true"] {{
+    border: 1px solid {CYAN};
+    background-color: {ELEV};
+}}
 """
