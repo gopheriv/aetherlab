@@ -44,6 +44,9 @@ class SolverResult:
     # Optional plottable-curve payload (see services/plotting.py). Old cache
     # rows lack the key and load as None (legacy name-based canvas curves).
     plot: dict | None = None
+    # Governing equations as LaTeX strings (mathtext subset), most important
+    # first — drives the hero equation banner. Old cache rows load as [].
+    key_equations: list[str] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return asdict(self)
@@ -53,6 +56,7 @@ class SolverResult:
         data = dict(payload)
         data["cached"] = cached
         plot = data.get("plot")
+        equations = data.get("key_equations")
         return cls(
             summary=str(data.get("summary", "")),
             derivation_steps=list(data.get("derivation_steps", [])),
@@ -62,6 +66,7 @@ class SolverResult:
             raw_response=str(data.get("raw_response", "")),
             cached=bool(data.get("cached", cached)),
             plot=plot if isinstance(plot, dict) else None,
+            key_equations=[str(e) for e in equations] if isinstance(equations, list) else [],
         )
 
 
@@ -71,10 +76,19 @@ class RagHit:
     page_number: int | None
     score: float
     excerpt: str
+    # v3: origin distinguishes local library hits from web references
+    # (e.g. Wikipedia); source_label is a clean display title. Both default so
+    # old cached RagResult rows deserialize unchanged.
+    source_label: str | None = None
+    origin: str = "library"
 
     @property
     def source_name(self) -> str:
-        return Path(self.source_path).name
+        return self.source_label or Path(self.source_path).name
+
+    @property
+    def is_web(self) -> bool:
+        return self.origin == "web" or self.source_path.startswith(("http://", "https://"))
 
 
 @dataclass
@@ -111,6 +125,9 @@ class SceneBundle:
     diagnostics: list[str] = field(default_factory=list)
     cached: bool = False
     video_path: str = ""
+    # Creative treatment the scene implements (see SceneGenerator.storyboard).
+    # The visual critic judges renders against it. Old cache rows load as None.
+    storyboard: dict | None = None
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -118,6 +135,7 @@ class SceneBundle:
 
     @classmethod
     def from_json(cls, payload: JsonDict, *, cached: bool = False) -> "SceneBundle":
+        storyboard = payload.get("storyboard")
         return cls(
             class_name=str(payload.get("class_name", "AetherLabScene")),
             code=str(payload.get("code", "")),
@@ -126,6 +144,7 @@ class SceneBundle:
             diagnostics=list(payload.get("diagnostics", [])),
             cached=cached,
             video_path=str(payload.get("video_path", "")),
+            storyboard=storyboard if isinstance(storyboard, dict) else None,
         )
 
 

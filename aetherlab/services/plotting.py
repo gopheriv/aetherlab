@@ -27,6 +27,12 @@ class ExprError(ValueError):
 MAX_EXPR_CHARS = 512
 MAX_AST_NODES = 200
 MAX_T_SPAN = 1e4
+MAX_CURVES = 6
+MAX_POINTS = 8
+MAX_LABEL_CHARS = 40
+
+_ALLOWED_STYLES = ("solid", "dashed")
+_ALLOWED_ROLES = ("primary", "secondary", "reference")
 
 # numpy callables the expressions may use
 _FUNCTIONS: dict[str, Any] = {
@@ -58,8 +64,25 @@ _ALLOWED_UNARYOPS = (ast.UAdd, ast.USub)
 
 
 @dataclass(frozen=True)
+class CompiledCurve:
+    """One compiled curve of a (possibly multi-curve) plot payload."""
+
+    name: str
+    x_fn: Callable[[np.ndarray, dict[str, float]], np.ndarray]
+    y_fn: Callable[[np.ndarray, dict[str, float]], np.ndarray]
+    style: str = "solid"      # solid | dashed
+    role: str = "primary"     # primary | secondary | reference
+
+
+@dataclass(frozen=True)
 class CompiledPlot:
-    """A validated, compiled plot ready for the canvas."""
+    """A validated, compiled plot ready for the canvas.
+
+    `x_fn`/`y_fn` remain the PRIMARY curve's callables for backward
+    compatibility; `curves` carries the full (ordered) set. `fill` is an
+    optional (upper_fn, lower_fn) pair for translucent region shading, and
+    `points` is an optional tuple of (t, label) markers.
+    """
 
     kind: str
     x_fn: Callable[[np.ndarray, dict[str, float]], np.ndarray]
@@ -70,6 +93,9 @@ class CompiledPlot:
     x_label: str = "x"
     y_label: str = "y"
     param_names: tuple[str, ...] = field(default_factory=tuple)
+    curves: tuple[CompiledCurve, ...] = field(default_factory=tuple)
+    fill: tuple[Callable, Callable] | None = None
+    points: tuple[tuple[float, str], ...] = field(default_factory=tuple)
 
 
 class _IntToFloat(ast.NodeTransformer):
@@ -188,8 +214,66 @@ def _pair(value: Any, what: str) -> tuple[float, float]:
     return lo, hi
 
 
+def _compile_curve_entry(
+    entry: Any, index: int, kind: str, params: set[str]
+) -> CompiledCurve:
+    """Validate + compile one entry of a `curves` list."""
+    if not isinstance(entry, dict):
+        raise ExprError(f"curves[{index}] must be an object.")
+
+    y_fn = compile_expression(entry.get("y"), params)
+    if kind == "explicit":
+        x_fn = compile_expression("t", params)
+    else:
+        x_fn = compile_expression(entry.get("x") or "t", params)
+
+    style = entry.get("style", "solid")
+    if style not in _ALLOWED_STYLES:
+        raise ExprError(f"curves[{index}].style must be one of {_ALLOWED_STYLES}.")
+    role = entry.get("role", "primary" if index == 0 else "secondary")
+    if role not in _ALLOWED_ROLES:
+        raise ExprError(f"curves[{index}].role must be one of {_ALLOWED_ROLES}.")
+
+    name = entry.get("name")
+    if name is not None and not isinstance(name, str):
+        raise ExprError(f"curves[{index}].name must be a string.")
+    name = (name or f"curve {index + 1}")[:MAX_LABEL_CHARS]
+
+    return CompiledCurve(name=name, x_fn=x_fn, y_fn=y_fn, style=style, role=role)
+
+
+def _compile_points(
+    payload: Any, t0: float, t1: float
+) -> tuple[tuple[float, str], ...]:
+    """Validate the optional `points` marker list: [{t, label}]."""
+    if payload is None:
+        return ()
+    if not isinstance(payload, list):
+        raise ExprError("points must be a list of {t, label} objects.")
+    out: list[tuple[float, str]] = []
+    for i, entry in enumerate(payload[:MAX_POINTS]):
+        if not isinstance(entry, dict):
+            raise ExprError(f"points[{i}] must be an object.")
+        t = entry.get("t")
+        if not isinstance(t, (int, float)) or isinstance(t, bool) or not math.isfinite(t):
+            raise ExprError(f"points[{i}].t must be a finite number.")
+        if not (t0 <= float(t) <= t1):
+            continue  # silently drop out-of-range markers
+        label = entry.get("label", "")
+        if not isinstance(label, str):
+            raise ExprError(f"points[{i}].label must be a string.")
+        out.append((float(t), label[:MAX_LABEL_CHARS]))
+    return tuple(out)
+
+
 def compile_plot(payload: Any, variables: dict[str, float]) -> CompiledPlot:
-    """Validate a solver `plot` payload and compile its expressions."""
+    """Validate a solver `plot` payload and compile its expressions.
+
+    Two payload shapes are accepted:
+    - Legacy single curve: {kind, x, y, t_range, ...} — unchanged behavior.
+    - Multi-curve: {kind, curves: [{name, x?, y, style?, role?}], t_range, ...}
+      plus optional fill_between {upper, lower} and points [{t, label}].
+    """
     if not isinstance(payload, dict):
         raise ExprError("plot payload must be an object.")
 
@@ -203,38 +287,97 @@ def compile_plot(payload: Any, variables: dict[str, float]) -> CompiledPlot:
 
     params = set(variables.keys())
 
-    y_expr = payload.get("y")
-    y_fn = compile_expression(y_expr, params)
-
-    if kind == "explicit":
-        x_fn = compile_expression("t", params)
+    curves_payload = payload.get("curves")
+    if curves_payload is not None:
+        if not isinstance(curves_payload, list) or not curves_payload:
+            raise ExprError("curves must be a non-empty list.")
+        if len(curves_payload) > MAX_CURVES:
+            raise ExprError(f"At most {MAX_CURVES} curves are allowed.")
+        curves = tuple(
+            _compile_curve_entry(entry, i, kind, params)
+            for i, entry in enumerate(curves_payload)
+        )
     else:
-        x_fn = compile_expression(payload.get("x") or "t", params)
+        # Legacy single-curve payload (and all cached SolverResults).
+        y_fn = compile_expression(payload.get("y"), params)
+        if kind == "explicit":
+            x_fn = compile_expression("t", params)
+        else:
+            x_fn = compile_expression(payload.get("x") or "t", params)
+        curves = (
+            CompiledCurve(
+                name=str(payload.get("y_label") or "y")[:MAX_LABEL_CHARS],
+                x_fn=x_fn,
+                y_fn=y_fn,
+                style="solid",
+                role="primary",
+            ),
+        )
+
+    # Primary = first primary-role curve, else the first curve.
+    primary = next((c for c in curves if c.role == "primary"), curves[0])
+
+    fill_payload = payload.get("fill_between")
+    fill = None
+    if fill_payload is not None:
+        if not isinstance(fill_payload, dict):
+            raise ExprError("fill_between must be an object with upper/lower.")
+        fill = (
+            compile_expression(fill_payload.get("upper"), params),
+            compile_expression(fill_payload.get("lower"), params),
+        )
+
+    points = _compile_points(payload.get("points"), t0, t1)
 
     x_range = _pair(payload["x_range"], "x_range") if payload.get("x_range") else None
     y_range = _pair(payload["y_range"], "y_range") if payload.get("y_range") else None
 
     return CompiledPlot(
         kind=kind,
-        x_fn=x_fn,
-        y_fn=y_fn,
+        x_fn=primary.x_fn,
+        y_fn=primary.y_fn,
         t_range=(t0, t1),
         x_range=x_range,
         y_range=y_range,
         x_label=str(payload.get("x_label") or ("t" if kind == "explicit" else "x")),
         y_label=str(payload.get("y_label") or "y"),
         param_names=tuple(sorted(params)),
+        curves=curves,
+        fill=fill,
+        points=points,
     )
 
 
 def fallback_plot_payload() -> dict[str, Any]:
-    """Deterministic damped-oscillator plot matching llm.DEFAULT_VARIABLES."""
+    """Deterministic damped-oscillator showcase matching llm.DEFAULT_VARIABLES.
+
+    Emits the oscillation plus its two dashed decay envelopes so the no-key
+    path exercises the full multi-curve pipeline (roles, dashed references).
+    """
     return {
         "kind": "explicit",
-        "x": "t",
-        "y": "exp(-damping*t) * sin(stiffness*t*2) / sqrt(mass)",
         "t_range": [0.0, 10.0],
         "y_range": [-1.2, 1.2],
         "x_label": "t (s)",
         "y_label": "x(t)",
+        "curves": [
+            {
+                "name": "x(t)",
+                "y": "exp(-damping*t) * sin(stiffness*t*2) / sqrt(mass)",
+                "style": "solid",
+                "role": "primary",
+            },
+            {
+                "name": "envelope",
+                "y": "exp(-damping*t) / sqrt(mass)",
+                "style": "dashed",
+                "role": "reference",
+            },
+            {
+                "name": "-envelope",
+                "y": "-exp(-damping*t) / sqrt(mass)",
+                "style": "dashed",
+                "role": "reference",
+            },
+        ],
     }

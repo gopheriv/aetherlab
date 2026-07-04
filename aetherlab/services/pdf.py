@@ -74,6 +74,7 @@ def export_derivation_to_latex(
     derivation_steps: list[str],
     variables: dict[str, float],
     output_path: Path,
+    key_equations: list[str] | None = None,
 ) -> Path:
     """Write a standalone LaTeX document from solver results."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +89,13 @@ def export_derivation_to_latex(
         for step in derivation_steps
     ) or r"  \item No derivation steps available."
 
+    # key_equations are already LaTeX — emitted verbatim in display math,
+    # NOT escaped (escaping would destroy them).
+    equations_block = ""
+    if key_equations:
+        rows = "\n".join(f"\\[ {eq} \\]" for eq in key_equations)
+        equations_block = f"\n\\section*{{Key Equations}}\n{rows}\n"
+
     latex = rf"""\documentclass[11pt]{{article}}
 \usepackage[margin=2.5cm]{{geometry}}
 \usepackage{{amsmath,amssymb}}
@@ -101,6 +109,7 @@ def export_derivation_to_latex(
 
 \section*{{Summary}}
 {_latex_escape(summary)}
+{equations_block}
 
 \section*{{Derivation Steps}}
 \begin{{enumerate}}

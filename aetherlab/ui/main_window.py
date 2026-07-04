@@ -231,6 +231,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def __init__(self, settings: AppSettings, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._settings = settings
         self.setWindowTitle("Settings")
         self.setMinimumWidth(480)
         self.setStyleSheet(AETHERLAB_QSS)
@@ -352,6 +353,20 @@ class SettingsDialog(QtWidgets.QDialog):
         # ── Provider ──
         form.addWidget(self._section("PROVIDER"))
 
+        from aetherlab.core.settings import load_app_config
+
+        self._preset_combo = QtWidgets.QComboBox()
+        self._preset_combo.addItems(["Custom endpoint", "Local Ollama", "No AI (offline)"])
+        saved_preset = load_app_config().get("provider_preset", "")
+        self._preset_combo.setCurrentIndex(
+            {"": 0, "custom": 0, "ollama": 1, "none": 2}.get(saved_preset, 0)
+        )
+        self._preset_combo.setToolTip(
+            "Local Ollama runs models on this computer — free, private, no key.\n"
+            "No AI still solves with built-in templates and textbook references."
+        )
+        form.addLayout(self._labeled("Provider", self._preset_combo))
+
         self._api_key_edit = QtWidgets.QLineEdit(settings.openai_api_key or "")
         self._api_key_edit.setObjectName("MonoField")
         self._api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
@@ -365,6 +380,22 @@ class SettingsDialog(QtWidgets.QDialog):
         self._model_edit = QtWidgets.QLineEdit(settings.llm_model)
         self._model_edit.setObjectName("MonoField")
         form.addLayout(self._labeled("Model", self._model_edit))
+
+        # Test connection row
+        test_row = QtWidgets.QHBoxLayout()
+        test_row.setSpacing(8)
+        self._test_btn = QtWidgets.QPushButton("Test connection")
+        self._test_btn.setObjectName("SecondaryButton")
+        self._test_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._test_btn.clicked.connect(self._test_connection)
+        test_row.addWidget(self._test_btn)
+        self._test_result = QtWidgets.QLabel("")
+        self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._test_result.setWordWrap(True)
+        test_row.addWidget(self._test_result, 1)
+        form.addLayout(test_row)
+
+        self._preset_combo.currentIndexChanged.connect(self._apply_preset)
 
         # ── Rendering ──
         form.addSpacing(4)
@@ -381,6 +412,44 @@ class SettingsDialog(QtWidgets.QDialog):
         saved_quality = load_app_config().get("default_quality", "l")
         self._quality_combo.setCurrentIndex({"l": 0, "m": 1, "h": 2}.get(saved_quality, 0))
         form.addLayout(self._labeled("Default quality", self._quality_combo))
+
+        # ── Vision · Critique (design v2 §8, new) ──
+        form.addSpacing(4)
+        form.addWidget(self._section("VISION · CRITIQUE"))
+
+        self._vision_edit = QtWidgets.QLineEdit(settings.vision_model or "")
+        self._vision_edit.setObjectName("MonoField")
+        self._vision_edit.setPlaceholderText("e.g. gpt-4o, claude-3-5-sonnet (leave blank to disable)")
+        form.addLayout(
+            self._labeled(
+                "Vision model",
+                self._vision_edit,
+            )
+        )
+        vision_hint = QtWidgets.QLabel(
+            "When set, rendered videos are watched frame-by-frame and revised "
+            "toward a quality rubric; blank skips the critique loop."
+        )
+        vision_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        vision_hint.setWordWrap(True)
+        form.addWidget(vision_hint)
+
+        # ── References (design v3: web references) ──
+        form.addSpacing(4)
+        form.addWidget(self._section("REFERENCES"))
+        self._web_refs_check = QtWidgets.QCheckBox(
+            "Pull web references (Wikipedia) alongside the local library"
+        )
+        self._web_refs_check.setChecked(getattr(settings, "web_references", True))
+        self._web_refs_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        form.addWidget(self._web_refs_check)
+        web_hint = QtWidgets.QLabel(
+            "Fetches relevant encyclopedia intros for each run; fail-soft and "
+            "time-boxed, so it never blocks a solve. Turn off for offline use."
+        )
+        web_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        web_hint.setWordWrap(True)
+        form.addWidget(web_hint)
 
         # ── Paths ──
         form.addSpacing(4)
@@ -501,9 +570,61 @@ class SettingsDialog(QtWidgets.QDialog):
         row.addWidget(browse)
         return row
 
+    def _apply_preset(self, index: int) -> None:
+        """Fill provider fields when the user picks a preset."""
+        from aetherlab.core.settings import OLLAMA_OPENAI_BASE_URL
+
+        if index == 1:  # Local Ollama
+            from aetherlab.services.providers import detect_ollama
+
+            self._base_url_edit.setText(OLLAMA_OPENAI_BASE_URL)
+            if not self._api_key_edit.text().strip():
+                self._api_key_edit.setText("ollama")
+            models = detect_ollama()
+            if models:
+                self._model_edit.setText(models[0])
+                self._model_edit.setToolTip("Installed: " + ", ".join(models[:12]))
+                self._test_result.setStyleSheet("color: #10B981; font-size: 11px;")
+                self._test_result.setText(f"Ollama detected — {len(models)} model(s) installed.")
+            else:
+                self._test_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+                self._test_result.setText(
+                    "Ollama not detected. Install from ollama.com, then run "
+                    "`ollama pull qwen2.5:7b` and reopen Settings."
+                )
+        elif index == 2:  # No AI (offline)
+            self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+            self._test_result.setText(
+                "Offline mode: built-in domain templates + textbook references, no LLM."
+            )
+
+    def _test_connection(self) -> None:
+        from dataclasses import replace
+
+        from aetherlab.services.providers import test_connection
+
+        self._test_btn.setEnabled(False)
+        self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._test_result.setText("Testing…")
+        QtWidgets.QApplication.processEvents()
+        probe = replace(
+            self._settings,
+            openai_api_key=self._api_key_edit.text().strip() or None,
+            openai_base_url=self._base_url_edit.text().strip() or None,
+            llm_model=self._model_edit.text().strip() or self._settings.llm_model,
+        )
+        ok, message = test_connection(probe)
+        self._test_result.setStyleSheet(
+            f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;"
+        )
+        self._test_result.setText(message)
+        self._test_btn.setEnabled(True)
+
     def get_settings(self) -> dict:
         quality_map = {0: "l", 1: "m", 2: "h"}
+        preset_map = {0: "custom", 1: "ollama", 2: "none"}
         return {
+            "provider_preset": preset_map.get(self._preset_combo.currentIndex(), "custom"),
             "model": self._model_edit.text().strip(),
             "api_key": self._api_key_edit.text().strip() or None,
             "base_url": self._base_url_edit.text().strip() or None,
@@ -514,12 +635,27 @@ class SettingsDialog(QtWidgets.QDialog):
 
 
             "default_quality": quality_map.get(self._quality_combo.currentIndex(), "l"),
+            "vision_model": self._vision_edit.text().strip() or None,
+            "web_references": self._web_refs_check.isChecked(),
         }
 
 
 # ────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ────────────────────────────────────────────────────────────────────────────
+
+
+class _OllamaProbe(QtCore.QThread):
+    """Background check for a locally running Ollama (never blocks the UI)."""
+
+    found = QtCore.pyqtSignal(list)
+
+    def run(self) -> None:
+        from aetherlab.services.providers import detect_ollama
+
+        models = detect_ollama()
+        if models:
+            self.found.emit(models)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -668,6 +804,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ── Workspace stack (one workspace, rail-driven) ──
         self._workspace = QtWidgets.QStackedWidget()
+        # Transparent so the BlueprintBackdrop grid shows through card gaps.
+        self._workspace.setStyleSheet("QStackedWidget { background: transparent; }")
+        self._workspace.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self._workspace.addWidget(self.empty_view)      # 0
         self._workspace.addWidget(self.running_view)    # 1
         self._workspace.addWidget(solve_page)           # 2
@@ -697,7 +836,9 @@ class MainWindow(QtWidgets.QMainWindow):
         center_layout.setSpacing(0)
         center_layout.addWidget(toast_area)
         center_layout.addWidget(self._timeline_strip)
-        center_layout.addWidget(self._workspace, 1)
+        # Blueprint-grid backdrop behind the workspace (precision-instrument feel).
+        from aetherlab.ui.widgets import BlueprintBackdrop
+        center_layout.addWidget(BlueprintBackdrop(self._workspace), 1)
         center_layout.addWidget(self.command_bar)
 
         # ── Shell: title bar over (rail | center) ──
@@ -732,6 +873,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         provider_note = settings.llm_model if settings.openai_api_key else "No API key"
         self.statusBar().showMessage(f"AetherLab ready · {provider_note}")
+
+        # When no provider is configured, quietly look for a local Ollama and
+        # offer one-click local AI on the empty state.
+        self._ollama_models: list[str] = []
+        if not settings.openai_api_key:
+            self._ollama_probe = _OllamaProbe(self)
+            self._ollama_probe.found.connect(self._on_ollama_found)
+            self._ollama_probe.start()
 
     # ── wiring ──
 
@@ -802,6 +951,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Empty-state calls to action
         self.empty_view.example_picked.connect(self._prefill_prompt)
+        self.empty_view.ollama_requested.connect(self._enable_ollama)
         self.empty_view.settings_requested.connect(self._open_settings)
         self.empty_view.library_requested.connect(lambda: self.sidebar.select(1))
 
@@ -832,6 +982,40 @@ class MainWindow(QtWidgets.QMainWindow):
     def _prefill_prompt(self, prompt: str) -> None:
         self.command_bar.input.setText(prompt)
         self.command_bar.input.setFocus()
+
+    def _on_ollama_found(self, models: list) -> None:
+        self._ollama_models = list(models)
+        if not self.settings.openai_api_key:
+            self.empty_view.offer_ollama(len(self._ollama_models))
+            self.statusBar().showMessage(
+                f"Ollama detected — {len(self._ollama_models)} local model(s) available."
+            )
+
+    def _enable_ollama(self) -> None:
+        """One-click local AI: persist the Ollama preset and reload settings."""
+        from aetherlab.core.settings import (
+            OLLAMA_OPENAI_BASE_URL,
+            load_settings,
+            save_app_config,
+        )
+
+        model = self._ollama_models[0] if self._ollama_models else ""
+        save_app_config(
+            {
+                "provider_preset": "ollama",
+                "model": model,
+                "base_url": OLLAMA_OPENAI_BASE_URL,
+                "api_key": "ollama",
+            }
+        )
+        self.settings = load_settings()
+        self._refresh_empty_status()
+        self.toast.show_message(
+            "success",
+            f"Local AI enabled via Ollama ({self.settings.llm_model}). "
+            "You can change the model in Settings.",
+        )
+        self.statusBar().showMessage(f"AetherLab ready · {self.settings.llm_model} (local)")
 
     def _on_sidebar_select(self, index: int) -> None:
         """Rail items are pure destinations (design spatial model).
@@ -895,7 +1079,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         solver = self._last_result.solver
         export_derivation_to_latex(
-            solver.summary, solver.derivation_steps, solver.variables, Path(path)
+            solver.summary, solver.derivation_steps, solver.variables, Path(path),
+            key_equations=getattr(solver, "key_equations", None),
         )
         self.statusBar().showMessage(f"LaTeX exported: {path}")
 
@@ -918,7 +1103,8 @@ class MainWindow(QtWidgets.QMainWindow):
         tmp = tmp_dir / "derivation.tex"
         solver = self._last_result.solver
         export_derivation_to_latex(
-            solver.summary, solver.derivation_steps, solver.variables, tmp
+            solver.summary, solver.derivation_steps, solver.variables, tmp,
+            key_equations=getattr(solver, "key_equations", None),
         )
         self.statusBar().showMessage("Compiling PDF…")
         pdf = compile_latex_to_pdf(tmp)
@@ -1069,12 +1255,15 @@ class MainWindow(QtWidgets.QMainWindow):
             from aetherlab.core.settings import save_app_config
             save_app_config(
                 {
+                    "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
                     "api_key": vals["api_key"],
                     "base_url": vals["base_url"],
                     "library_path": vals["library_path"],
                     "data_dir": vals["data_dir"],
                     "default_quality": vals["default_quality"],
+                    "vision_model": vals["vision_model"],
+                    "web_references": "1" if vals["web_references"] else "0",
                 }
             )
 
@@ -1086,6 +1275,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 openai_base_url=vals["base_url"],
                 library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
                 data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
+                vision_model=vals["vision_model"],
+                web_references=vals["web_references"],
             )
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")

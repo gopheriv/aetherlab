@@ -1,66 +1,93 @@
-# AetherLab — Physics Desktop Workbench
+<p align="center">
+  <img src="assets/aetherlab_icon_1080.png" width="96" alt="AetherLab" />
+</p>
 
-AetherLab turns a natural-language physics or math prompt into:
+<h1 align="center">AetherLab</h1>
 
-1. **An analytical derivation** (summary, step-by-step derivation, keywords, and
-   simulation variables) produced by an OpenAI-compatible LLM, with a
-   deterministic offline fallback.
-2. **Textbook references** retrieved from a local library via ChromaDB vector
-   search, with a filesystem keyword-search fallback.
-3. **A custom Manim scene** generated to visualize the problem, compiled,
-   validated, and rendered to an MP4.
-4. **A live interactive canvas** with parameter sliders that update parametric
-   curves in real time.
+<p align="center"><b>Type a physics question. Get a derivation, textbook
+references, an animated video, and a live interactive plot.</b></p>
 
-Everything runs in a single PyQt6 desktop window with a dashboard layout
-(Solve · Refs · Scene · Params · History) and a 4-stage pipeline progress bar.
+---
+
+AetherLab is a desktop physics workbench for students, educators, and the
+curious. One prompt drives a four-stage pipeline:
+
+| Stage | What you get |
+|---|---|
+| **Solve** | An analytical derivation with typeset equations (AI-written, or a built-in scaffold without AI) |
+| **RAG** | Citations from *real* textbooks — free OpenStax books download & index in one click, your own PDFs too |
+| **Scene** | A storyboarded animation, directed and coded by AI, rendered with [Manim Community](https://www.manim.community/) |
+| **Render** | A self-healing MP4 render — crashes and timeouts are auto-repaired; a vision model can review and revise the result |
+
+Plus a **live parametric canvas**: drag sliders (damping, stiffness, gravity…)
+and watch the solution curves respond in real time.
 
 ## Install
 
+**Students:** run `AetherLab-Setup-<version>.exe` → launch from the Start menu.
+Then read the [Quickstart](docs/QUICKSTART.md).
+
+**From source** (Python 3.11+):
 ```bash
-python -m pip install -e .            # core (PyQt6, numpy, openai)
-python -m pip install -e ".[rag]"     # optional: ChromaDB + PyMuPDF for RAG
-python -m pip install -e ".[dev]"     # optional: pytest, black, ruff
+pip install -e .[rag]
+pip install manim
+python -m aetherlab
 ```
 
-Requires Python **3.11+**. Manim Community (`manim`) must be installed and on
-the path for video rendering.
+## AI is optional — and can be free
 
-## Configure the model provider
+- **No AI:** built-in domain templates (pendulum, orbit, wave, oscillator) +
+  full textbook references. Works offline.
+- **Local AI (free, private):** install [Ollama](https://ollama.com); AetherLab
+  detects it and enables it in one click.
+- **Cloud AI:** any OpenAI-compatible endpoint (Settings → paste base URL,
+  key, model → Test connection).
 
-AetherLab reads provider settings in this order of precedence:
+Advanced configuration (env vars override everything):
+`AETHERLAB_OPENAI_API_KEY`/`OPENAI_API_KEY`, `AETHERLAB_OPENAI_BASE_URL`,
+`AETHERLAB_LLM_MODEL`, `AETHERLAB_VISION_MODEL`, `AETHERLAB_PROVIDER=ollama`,
+`AETHERLAB_DATA_DIR`, `AETHERLAB_LIBRARY_DIR`, `AETHERLAB_LLM_TIMEOUT`.
+Data lives under `%LOCALAPPDATA%\AetherLab` (or `~/.aetherlab`). Logs:
+`%LOCALAPPDATA%\AetherLab\logs\aetherlab.log`.
 
-| Setting   | Environment variables                                   | Fallback |
-|-----------|---------------------------------------------------------|----------|
-| API key   | `AETHERLAB_OPENAI_API_KEY`, `OPENAI_API_KEY`            | `~/.qwen/settings.json` |
-| Base URL  | `AETHERLAB_OPENAI_BASE_URL`, `OPENAI_BASE_URL`          | `~/.qwen/settings.json` |
-| Model     | `AETHERLAB_LLM_MODEL`                                    | `~/.qwen/settings.json`, else `gpt-5.5` |
+## Highlights
 
-Without an API key, AetherLab still runs using its deterministic solver and a
-static fallback scene.
-
-Other paths (all optional): `AETHERLAB_DATA_DIR`, `AETHERLAB_CACHE_PATH`,
-`AETHERLAB_CHROMA_PATH`, `AETHERLAB_LIBRARY_DIR`, `AETHERLAB_LLM_TIMEOUT`.
-By default, data lives under `%LOCALAPPDATA%\AetherLab` (or `~/.aetherlab`).
+- **Typeset math everywhere** — governing equations render as real math, from
+  the hero banner to the parameter sliders (γ, ω, ℓ).
+- **Storyboarded animations** — the AI first *directs* (3 acts, hero frame,
+  narration script), then implements; a static safety/lint battery and a
+  bounded self-repair loop keep renders reliable.
+- **Real textbook grounding** — ChromaDB vector search over an OpenStax
+  starter library with page-level citations; filesystem keyword fallback
+  without ChromaDB.
+- **Exports** — LaTeX/PDF derivations, MP4/GIF animations, runnable Manim
+  scene code.
 
 ## Run
 
 ```bash
 python -m aetherlab                 # launch the desktop app
-python -m aetherlab --smoke         # headless end-to-end pipeline smoke test
-python -m aetherlab --smoke "Solve the simple pendulum for large angles."
+python -m aetherlab --smoke         # headless end-to-end pipeline check
+python -m aetherlab --version
 ```
 
-On Windows you can use `start.bat`, which launches the app under a watchdog that
-auto-restarts it on a crash (a clean quit stops the watchdog).
+On Windows, `start.bat` launches the app under a crash-restart watchdog.
 
-## Library / RAG
+## Development
 
-Drop `.txt`, `.md`, `.tex`, or `.pdf` files into the library directory
-(`%LOCALAPPDATA%\AetherLab\library` by default). They are auto-ingested into
-ChromaDB on the first run; if ChromaDB is unavailable, a filesystem keyword
-search is used instead.
+```bash
+python test_features.py            # behavioural suite (offscreen-safe)
+python build_feature_tracker.py    # regenerate the canonical feature tracker
+```
 
-## License
+The feature catalog lives in `AetherLab_Feature_Tracker.xlsx` (generated —
+edit `build_feature_tracker.py`). Architecture notes:
+`MANIM_PIPELINE_QUALITY_ANALYSIS.md`, `PHYSICS_SOURCES.md`. Docs for users:
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md),
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
-MIT
+## License & credits
+
+MIT. Videos are rendered with [Manim Community](https://www.manim.community/).
+Starter textbooks are [OpenStax](https://openstax.org) (CC BY 4.0) — download
+for free at openstax.org. Icons are [Lucide](https://lucide.dev) (MIT).

@@ -21,7 +21,7 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=qwen3.6-plus data_dir set timeout=60.0"
+    "note": "model=gpt-5.5 data_dir set timeout=60.0"
   },
   "F07": {
     "status": "PASS",
@@ -185,11 +185,11 @@
   },
   "F47": {
     "status": "PASS",
-    "note": "starter dialog: 2 default-selected book(s)"
+    "note": "starter dialog: 3 default-selected book(s)"
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=216722 + skip-existing"
+    "note": "URL fallback + free_disk_mb=213833 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -201,7 +201,7 @@
   },
   "F51": {
     "status": "PASS",
-    "note": "static template compiles (2234 chars)"
+    "note": "static template compiles (1584 chars)"
   },
   "F52": {
     "status": "PASS",
@@ -237,7 +237,7 @@
   },
   "F60": {
     "status": "PASS",
-    "note": "code viewer shows diagnostics prefixed with #"
+    "note": "diagnostics surfaced in the drawer (v2), code view stays clean"
   },
   "F61": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_zjhkmnuf/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_5eciax8v/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -357,7 +357,7 @@
   },
   "F90": {
     "status": "PASS",
-    "note": "QSS present (11421 chars)"
+    "note": "QSS present (12328 chars)"
   },
   "F91": {
     "status": "PASS",
@@ -398,5 +398,133 @@
   "F100": {
     "status": "PASS",
     "note": "sanitize + stable per-code hashing"
+  },
+  "F101": {
+    "status": "PASS",
+    "note": "self-heal wired incl. timeout repair; non-compiled path safe (F101)"
+  },
+  "F102": {
+    "status": "PASS",
+    "note": "truncation guard raises in repair AND revise (F102)"
+  },
+  "F103": {
+    "status": "PASS",
+    "note": "safety gate blocks imports/builtins/escapes; wired twice (F103)"
+  },
+  "F104": {
+    "status": "PASS",
+    "note": "pitfall KB + persistent recurrence store + prompt wiring (F104)"
+  },
+  "F105": {
+    "status": "PASS",
+    "note": "4 domains compile LaTeX-free; both fallback paths routed (F105)"
+  },
+  "F106": {
+    "status": "PASS",
+    "note": "lint+LaTeX+duration checks work; wired into gen+repair (F106)"
+  },
+  "F107": {
+    "status": "PASS",
+    "note": "hot storyboard@0.9 \u2192 cold codegen@0.15; fail-soft (F107)"
+  },
+  "F108": {
+    "status": "PASS",
+    "note": "critique loop wired + fail-soft; sampled 3 frames via PyAV (F108)"
+  },
+  "F109": {
+    "status": "PASS",
+    "note": "zoom anchors cursor; 120ms smooth-zoom animation wired"
+  },
+  "F110": {
+    "status": "PASS",
+    "note": "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump"
+  },
+  "F111": {
+    "status": "PASS",
+    "note": "snaps within 24px with (t,x,y); raw-coords fallback beyond"
+  },
+  "F112": {
+    "status": "PASS",
+    "note": "one palette dict; zero stray hex in module body"
+  },
+  "F113": {
+    "status": "PASS",
+    "note": "viewport-independent sample cache; 1/t = 2 branches, no bridge"
+  },
+  "F114": {
+    "status": "PASS",
+    "note": "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated"
+  },
+  "F115": {
+    "status": "PASS",
+    "note": "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn"
+  },
+  "F116": {
+    "status": "PASS",
+    "note": "2x PNG written (60346 bytes) + signal"
+  },
+  "F117": {
+    "status": "PASS",
+    "note": "legend always shown, hit-testable, toggles visibility"
+  },
+  "F118": {
+    "status": "PASS",
+    "note": "mono param chip; 300ms fade only on first paint"
+  },
+  "F119": {
+    "status": "PASS",
+    "note": "cyan #22D3EE primary; stage/elev/hover/line-0 tokens; 56px rail"
+  },
+  "F120": {
+    "status": "PASS",
+    "note": "mathtext \u2192 pixmaps; symbol map; math/prose discriminator; safe on junk"
+  },
+  "F121": {
+    "status": "PASS",
+    "note": "hero banner: math\u2192pixmap, prose\u2192text; param symbols; ambient watermarks"
+  },
+  "F122": {
+    "status": "PASS",
+    "note": "parse repaired/revised/critique/duration; storyboard acts + hero bookmark"
+  },
+  "F123": {
+    "status": "PASS",
+    "note": "screening room widgets swapped in; code artifact + highlighter; act-click seeks"
+  },
+  "F124": {
+    "status": "PASS",
+    "note": "library spines + chunk counts + freshness; Settings vision\u00b7critique field"
+  },
+  "F125": {
+    "status": "PASS",
+    "note": "web provider fail-soft; RagHit origin/label back-compat; toggle honored"
+  },
+  "F126": {
+    "status": "PASS",
+    "note": "merge: library-first + web-tagged; fail-soft on provider error; toggle wired"
+  },
+  "F127": {
+    "status": "PASS",
+    "note": "web/library card styling + dimming; provenance; backdrop; filament; settings toggle"
+  },
+  "F128": {
+    "status": "PASS",
+    "note": "ollama preset resolves; qwen gated; env wins (F128)"
+  },
+  "F129": {
+    "status": "PASS",
+    "note": "providers module + preset UI + CTA (0 local models) (F129)"
+  },
+  "F130": {
+    "status": "PASS",
+    "note": "key_equations end-to-end: model\u2192fallback\u2192banner\u2192export (F130)"
+  },
+  "F131": {
+    "status": "PASS",
+    "note": "--version=1.0.0; rotating log; ico + taskbar wiring (F131)"
+  },
+  "F132": {
+    "status": "PASS",
+    "note": "LaTeX-aware prompts (latex=True); packaging+CI+docs present (F132)"
   }
 }

@@ -36,6 +36,13 @@ os.environ["AETHERLAB_LIBRARY_DIR"] = str(_TMP / "lib")
 os.environ["AETHERLAB_CHROMA_PATH"] = str(_TMP / "chroma")
 os.environ.pop("AETHERLAB_OPENAI_API_KEY", None)
 os.environ.pop("OPENAI_API_KEY", None)
+# Also neutralize the ~/.qwen autoload: without this, subprocess tests (F02
+# smoke) pick up a live provider key and make real LLM calls — slow and
+# non-deterministic (F02 once timed out at 600s mid-suite because of it).
+os.environ["QWEN_SETTINGS_PATH"] = str(_TMP / "no-qwen-settings.json")
+os.environ.pop("AETHERLAB_QWEN_AUTOLOAD", None)
+os.environ.pop("AETHERLAB_PROVIDER", None)
+os.environ.pop("AETHERLAB_VISION_MODEL", None)
 
 results: dict[str, dict] = {}
 
@@ -333,10 +340,14 @@ def t_f22():
 
 
 def t_f23():
+    from dataclasses import replace
     from aetherlab.services.llm import AsyncLLMCoordinator
     from aetherlab.core.models import ProblemRequest
-    r = asyncio.run(AsyncLLMCoordinator(_settings()).solve(ProblemRequest(prompt="Solve the RLC circuit")))
-    assert r.model_name == "deterministic-fallback"
+    # Force no key so we exercise the deterministic fallback regardless of any
+    # working provider config on the host (e.g. ~/.qwen).
+    keyless = replace(_settings(), openai_api_key=None)
+    r = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="Solve the RLC circuit")))
+    assert r.model_name == "deterministic-fallback", r.model_name
     assert len(r.derivation_steps) == 5 and r.plot is not None
     return f"fallback: {len(r.derivation_steps)} steps, plot attached"
 
@@ -625,8 +636,9 @@ def t_f48():
 
 def t_f49():
     from aetherlab.services.scene_generator import SceneGenerator, SCENE_GENERATION_SYSTEM_PROMPT
-    assert "max_tokens=16384" in inspect.getsource(SceneGenerator._generate_remote)
-    assert "temperature=0.4" in inspect.getsource(SceneGenerator._generate_remote)
+    _gr = inspect.getsource(SceneGenerator._generate_remote)
+    # Two-call split: codegen runs cold (0.15), single-call fallback stays 0.4.
+    assert "max_tokens=32768" in _gr and "temperature = 0.15" in _gr and "temperature = 0.4" in _gr
     # code extraction robustness
     sg = SceneGenerator(_settings())
     code = sg._extract_code("<think>plan</think>```python\nfrom manim import *\nclass X(Scene):\n    def construct(self):\n        pass\n```", "AetherLabScene")
@@ -705,6 +717,194 @@ def t_f58():
     return f"manim cmd: {' '.join(cmd)}"
 
 
+def t_f101():
+    # Render self-heal: repair loop is wired (incl. timeout repair), and a
+    # non-compiled scene is a safe no-op.
+    from dataclasses import replace
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.core.models import SceneBundle
+    src = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "max_repairs" in src and ".repair(" in src
+    assert '"render-timeout"' in src, "timeout must be repairable now"
+    assert "exceeded the render time limit" in src, "timeout repair needs actionable direction"
+    sb = SceneBundle(class_name="X", code="def broken(", engine="manim-community", status="compile-error")
+    keyless = replace(_settings(), openai_api_key=None)
+    out = asyncio.run(ManimRuntime(keyless).render_scene_with_repair(sb, keyless))
+    assert out.status == "compile-error"  # non-compiled → render_scene skips, repair loop never entered
+    return "self-heal wired incl. timeout repair; non-compiled path safe (F101)"
+
+
+def t_f103():
+    from aetherlab.services.code_safety import validate_code_safety
+    ok, issues = validate_code_safety("import os\nopen('x')")
+    assert not ok and len(issues) >= 2, issues
+    ok2, _ = validate_code_safety("from manim import *\nimport numpy as np\nx = 1")
+    assert ok2
+    # escape-chain attributes
+    ok3, iss3 = validate_code_safety("y = ().__class__.__bases__[0].__subclasses__()")
+    assert not ok3 and any("__subclasses__" in i for i in iss3)
+    # wired into generation + repair
+    src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert src.count("validate_code_safety") >= 2
+    return "safety gate blocks imports/builtins/escapes; wired twice (F103)"
+
+
+def t_f104():
+    from aetherlab.services.error_learner import ErrorLearner, known_pitfall_hints, preventive_pitfalls_block
+    hints = known_pitfall_hints("AttributeError: 'Axes' object has no attribute 'get_graph'")
+    assert hints and "axes.plot" in hints[0]
+    store = _TMP / "err_store.json"
+    learner = ErrorLearner(store)
+    err = "NameError: name 'ShowCreation' is not defined"
+    assert learner.seen_count(err) == 0
+    learner.record(err)
+    assert ErrorLearner(store).seen_count(err) == 1, "must persist across instances"
+    assert any("before" in h for h in ErrorLearner(store).hints_for(err))
+    # preventive block reaches the generation prompt
+    from aetherlab.services.scene_generator import SceneGenerator
+    assert "preventive_pitfalls_block" in inspect.getsource(SceneGenerator._generate_remote)
+    assert "pitfalls" in preventive_pitfalls_block().lower()
+    return "pitfall KB + persistent recurrence store + prompt wiring (F104)"
+
+
+def t_f105():
+    from aetherlab.services.scene_templates import build_scene, detect_domain
+    from aetherlab.services.scene_generator import SceneGenerator
+    assert detect_domain(["kepler", "orbit"], {}) == "orbit"
+    assert detect_domain(["pendulum"], {}) == "pendulum"
+    assert detect_domain(["fourier", "wave"], {}) == "wave"
+    assert detect_domain(["something"], {"damping": 0.1}) == "oscillator"
+    for dom in ("pendulum", "orbit", "wave", "oscillator"):
+        code = build_scene("AetherLabScene", dom, "T", "S", ["s1"], {"gravity": 9.8})
+        compile(code, "<t>", "exec")
+        assert "MathTex" not in code, "templates must be LaTeX-free"
+    # both fallback paths route through the domain builder now
+    sg_src = inspect.getsource(SceneGenerator._fallback_scene)
+    assert "detect_domain" in sg_src and "build_scene" in sg_src
+    mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime._build_scene_code)
+    assert "detect_domain" in mr_src and "build_scene" in mr_src
+    return "4 domains compile LaTeX-free; both fallback paths routed (F105)"
+
+
+def t_f106():
+    from aetherlab.services.scene_validation import (
+        validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
+    )
+    bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
+    issues = lint_manim_names(bad)
+    assert any("ShowCreation" in i for i in issues), issues
+    tex_bad = 'from manim import *\nclass S(Scene):\n    def construct(self):\n        e = MathTex(r"\\frac{a}{b")\n'
+    assert check_latex_strings(tex_bad), "unclosed brace must be flagged"
+    from aetherlab.services.scene_templates import build_scene
+    clean = build_scene("S", "wave", "T", "S", ["s1"], {"frequency": 2.0})
+    ok, iss = validate_scene(clean)
+    assert ok, iss
+    est = estimate_duration(clean)
+    assert est.total_seconds > 0 and est.play_calls >= 1
+    # wired into generation and repair paths
+    mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert mr_src.count("validate_scene") >= 2 and "estimate_duration" in mr_src
+    return "lint+LaTeX+duration checks work; wired into gen+repair (F106)"
+
+
+def t_f102():
+    # Truncation guard: a finish_reason=='length' reply raises rather than compiling junk.
+    from aetherlab.services.scene_generator import SceneGenerator
+    class _Msg:  content = "some truncated code"
+    class _Choice:  finish_reason = "length"; message = _Msg()
+    class _Resp:  choices = [_Choice()]
+    class _Completions:
+        async def create(self, **_):  return _Resp()
+    class _Chat:  completions = _Completions()
+    class _Client:  chat = _Chat()
+    sg = SceneGenerator(_settings())
+    sg._client = _Client()
+    for method, args in (("repair", ("code", "err")), ("revise", ("code", "critique"))):
+        raised = False
+        try:
+            asyncio.run(getattr(sg, method)(*args, "AetherLabScene"))
+        except ValueError as exc:
+            raised = "truncat" in str(exc).lower()
+        assert raised, f"{method} must raise on finish_reason=length"
+    return "truncation guard raises in repair AND revise (F102)"
+
+
+def t_f107():
+    # Storyboard→codegen split: hot directing pass, cold implementation pass,
+    # fail-soft to the single-call cinematic path.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest, SolverResult, RagResult
+    from aetherlab.services.scene_generator import SceneGenerator
+    keyless = replace(_settings(), openai_api_key=None)
+    board = asyncio.run(SceneGenerator(keyless).storyboard(
+        ProblemRequest(prompt="x"), _solver(), _rag()))
+    assert board is None, "storyboard must fail soft without a key"
+
+    class _Msg:
+        def __init__(self, c): self.content = c
+    class _Choice:
+        def __init__(self, c): self.finish_reason = "stop"; self.message = _Msg(c)
+    class _Resp:
+        def __init__(self, c): self.choices = [_Choice(c)]
+    calls = []
+    class _Completions:
+        async def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                return _Resp('{"concept":"c","staging":"s","palette":{},'
+                             '"acts":[{"name":"ESTABLISH","duration_s":5,"beats":["b"]}],'
+                             '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
+            return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
+                         "    def construct(self):\n        self.wait(1)\n")
+    class _Chat: completions = _Completions()
+    class _Client: chat = _Chat()
+    sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
+    sg._client = _Client()
+    code = asyncio.run(sg._generate_remote(
+        ProblemRequest(prompt="pendulum"), _solver(), _rag(), "AetherLabScene"))
+    assert len(calls) == 2, "storyboard call + codegen call expected"
+    assert calls[0]["temperature"] == 0.9 and calls[1]["temperature"] == 0.15
+    assert "Locked storyboard" in calls[1]["messages"][1]["content"]
+    assert sg._last_storyboard and "acts" in sg._last_storyboard
+    assert "class AetherLabScene" in code
+    return "hot storyboard@0.9 → cold codegen@0.15; fail-soft (F107)"
+
+
+def t_f108():
+    # Perceptual critique loop: skips cleanly without a vision model; PyAV
+    # frame extraction works on a real render when one exists.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.scene_critic import Critique, critique_video, extract_frames
+    no_vlm = replace(_settings(), vision_model=None)
+    crit = asyncio.run(critique_video("missing.mp4", "brief", no_vlm))
+    assert crit.verdict == "skipped" and not crit.should_revise
+    assert Critique(verdict="revise").should_revise
+    # storyboard round-trips through the scene cache
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="rendered",
+        storyboard={"acts": []}).to_json())
+    assert sb.storyboard == {"acts": []}
+    assert SceneBundle.from_json({}).storyboard is None
+    # loop is wired into the runtime after successful renders
+    src = inspect.getsource(__import__(
+        "aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]
+    ).ManimRuntime.render_scene_with_repair)
+    assert "critique_video" in src and ".revise(" in src and "max_revisions" in src
+    assert "keeping previous cut" in src, "revisions must never downgrade a shipped render"
+    import pathlib, tempfile
+    vids = sorted(
+        pathlib.Path(tempfile.gettempdir()).glob("aetherlab/renders/media/videos/**/*.mp4"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    note = "no render available for frame sampling"
+    if vids:
+        frames = extract_frames(vids[-1], count=3)
+        assert len(frames) >= 1, "PyAV should sample frames from a real render"
+        note = f"sampled {len(frames)} frames via PyAV"
+    return f"critique loop wired + fail-soft; {note} (F108)"
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Scene UI
 # ══════════════════════════════════════════════════════════════════════════
@@ -726,10 +926,14 @@ def t_f60():
     sp = SimulationPanel()
     sp.set_scene_bundle(SceneBundle(class_name="X", code="x=1", engine="manim-community",
                                     status="compiled", diagnostics=["note one", "note two"]))
+    # v2 (§4): diagnostics live in a dedicated drawer, not dumped in the code view.
     txt = sp.code.toPlainText()
-    assert "# note one" in txt and "# note two" in txt
+    assert "x=1" in txt
+    drawer = sp._diag_drawer._body.toPlainText()
+    assert "note one" in drawer and "note two" in drawer
+    assert not sp._diag_drawer.isHidden()
     sp.close()
-    return "code viewer shows diagnostics prefixed with #"
+    return "diagnostics surfaced in the drawer (v2), code view stays clean"
 
 
 def t_f61():
@@ -1131,6 +1335,598 @@ def t_f100():
     a = _scene_name("X", "code A"); b = _scene_name("X", "code B")
     assert a != b and _scene_name("X", "code A") == a
     return "sanitize + stable per-code hashing"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Live canvas flagship upgrade (F109-F118)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _canvas(params=None, plot=None):
+    from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state
+    lc = LiveCanvas()
+    lc.resize(800, 600)
+    lc.set_state(build_canvas_state(
+        "t", params or {"damping": 0.2, "stiffness": 1.0}, plot=plot))
+    return lc
+
+
+def t_f109():
+    # Cursor-anchored zoom: the data point under the cursor must not move,
+    # for both the direct math and the wheel path (smooth animation bypassed).
+    from aetherlab.ui.qt_compat import QtCore
+    lc = _canvas()
+    plot_rect = lc._plot_rect()
+    anchor = QtCore.QPointF(plot_rect.left() + plot_rect.width() * 0.3,
+                            plot_rect.top() + plot_rect.height() * 0.8)
+    before = lc._pixel_to_data(anchor.x(), anchor.y(), plot_rect)
+    lc._apply_zoom(4.0, anchor)
+    after = lc._pixel_to_data(anchor.x(), anchor.y(), plot_rect)
+    assert abs(before[0] - after[0]) < 1e-9 and abs(before[1] - after[1]) < 1e-9
+    # Smooth-zoom plumbing exists and wheel targets it
+    assert lc.smooth_zoom_enabled and lc._zoom_anim.duration() == 120
+    lc.reset_view()
+    assert lc._zoom_factor == 1.0 and lc._zoom_target == 1.0
+    return "zoom anchors cursor; 120ms smooth-zoom animation wired"
+
+
+def t_f110():
+    # Trail lives in data space (survives zoom); tracer advances by wall clock.
+    from aetherlab.ui.qt_compat import QtCore
+    from aetherlab.ui.live_canvas import SWEEP_SECONDS
+    lc = _canvas()
+    lc._trail.append((1.25, -0.5))
+    lc._apply_zoom(6.0, QtCore.QPointF(400, 300))
+    lc._pan_offset += QtCore.QPointF(2.0, 1.0)
+    assert list(lc._trail) == [(1.25, -0.5)], "trail must store data coords"
+    assert SWEEP_SECONDS == 6.0
+    lc._sweep_clock.invalidate()
+    t0 = lc._tracer_t
+    lc._tick()  # first tick after a pause only starts the clock — no jump
+    assert lc._tracer_t == t0 and lc._sweep_clock.isValid()
+    return "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump"
+
+
+def t_f111():
+    # Hover snapping: cursor near the curve snaps to a sample with (t, x, y).
+    from aetherlab.ui.qt_compat import QtCore, QtGui
+    lc = _canvas()
+    pm = QtGui.QPixmap(lc.size()); lc.render(pm)  # populate pixel cache
+    assert lc._pixel_cache, "paint must publish pixel cache for hover"
+    idx, px, py, t_arr = lc._pixel_cache[0]
+    import numpy as np
+    j = int(np.nanargmin(np.abs(px - 400)))
+    near = QtCore.QPointF(float(px[j]) + 5, float(py[j]) + 5)
+    lc._update_hover(near)
+    assert lc._hover_snap is not None, "within 24px must snap"
+    sidx, st, sx, sy, spx, spy = lc._hover_snap
+    assert sidx == idx and abs(spx - px[j]) < 30
+    far = QtCore.QPointF(float(px[j]) + 200, float(py[j]) - 200)
+    lc._update_hover(far)
+    assert lc._hover_snap is None and lc._hover_coords is not None, "far → raw coords"
+    return "snaps within 24px with (t,x,y); raw-coords fallback beyond"
+
+
+def t_f112():
+    # All canvas colors flow from CANVAS_PALETTE (mirrors style.py tokens).
+    import inspect, re
+    import aetherlab.ui.live_canvas as mod
+    from aetherlab.ui.live_canvas import CANVAS_PALETTE
+    assert CANVAS_PALETTE["primary"] == "#22D3EE"  # v2 bright cyan
+    assert CANVAS_PALETTE["grid"] == "#1E293B"
+    src = inspect.getsource(mod)
+    body = src.split("CANVAS_PALETTE: dict[str, str] = {")[1].split("}")[1]
+    stray = re.findall(r'"#[0-9A-Fa-f]{6}"', body)
+    assert stray == [], f"hardcoded hex outside palette: {stray[:4]}"
+    return "one palette dict; zero stray hex in module body"
+
+
+def t_f113():
+    # Sample cache is viewport-independent; NaN gaps split into branches.
+    import numpy as np
+    from aetherlab.ui.qt_compat import QtCore, QtGui
+    from aetherlab.ui.live_canvas import (
+        LiveCanvas, CanvasState, CurveSpec, _finite_runs,
+    )
+    def fx(t, p): return t
+    def fy(t, p):
+        with np.errstate(all="ignore"):
+            return 1.0 / t
+    st = CanvasState(title="1/t", x_range=(-3, 3), y_range=(-5, 5),
+                     curves=[CurveSpec(name="1/t", x_fn=fx, y_fn=fy,
+                                       t_range=(-3.0, 3.0), t_steps=601)])
+    lc = LiveCanvas(); lc.resize(800, 600); lc.set_state(st)
+    lc._ensure_samples(st)
+    key = lc._sample_key
+    lc._apply_zoom(5.0, QtCore.QPointF(400, 300))
+    lc._ensure_samples(st)
+    assert lc._sample_key == key, "zoom must NOT rebuild samples"
+    t, xs, ys = lc._samples[0]
+    runs = _finite_runs(np.isfinite(xs) & np.isfinite(ys))
+    assert len(runs) == 2, f"1/t must render as 2 branches, got {len(runs)}"
+    pm = QtGui.QPixmap(lc.size()); lc.render(pm)
+    assert not pm.isNull()
+    st.params["k"] = 2.0
+    lc._ensure_samples(st)
+    assert lc._sample_key != key, "param change must rebuild samples"
+    return "viewport-independent sample cache; 1/t = 2 branches, no bridge"
+
+
+def t_f114():
+    # Multi-curve payloads: roles, dashed references, fill, points — and full
+    # backward compatibility for old single-curve payloads.
+    from aetherlab.services.plotting import compile_plot, fallback_plot_payload
+    from aetherlab.ui.live_canvas import build_canvas_state, CANVAS_PALETTE
+    vars_ = {"damping": 0.3}
+    payload = {
+        "kind": "explicit", "t_range": [0, 10],
+        "curves": [
+            {"name": "x(t)", "y": "exp(-damping*t)*sin(3*t)", "role": "primary"},
+            {"name": "env", "y": "exp(-damping*t)", "style": "dashed", "role": "reference"},
+        ],
+        "fill_between": {"upper": "exp(-damping*t)", "lower": "-exp(-damping*t)"},
+        "points": [{"t": 0.0, "label": "release"}, {"t": 99.0, "label": "dropped"}],
+    }
+    cp = compile_plot(payload, vars_)
+    assert len(cp.curves) == 2 and cp.fill is not None and len(cp.points) == 1
+    st = build_canvas_state("m", vars_, plot=payload)
+    assert len(st.curves) == 2 and st.curves[1].style == "dashed"
+    assert st.curves[1].color == CANVAS_PALETTE["reference"]
+    assert len(st.fills) == 1 and len(st.marked_points) == 1
+    # Backward compat: legacy payload and cached rows load as one primary curve
+    old = {"kind": "explicit", "y": "sin(t)", "t_range": [0, 6], "y_label": "x(t)"}
+    st_old = build_canvas_state("o", vars_, plot=old)
+    assert len(st_old.curves) == 1 and st_old.curves[0].role == "primary"
+    # Fallback payload showcases envelopes; solver prompt documents the schema
+    fb = fallback_plot_payload()
+    assert len(fb["curves"]) == 3
+    import inspect
+    from aetherlab.services import llm
+    src = inspect.getsource(llm.AsyncLLMCoordinator._solve_remote)
+    assert "fill_between" in src and "reference" in src
+    return "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated"
+
+
+def t_f115():
+    # Time scrubbing + double-click reset.
+    from aetherlab.ui.qt_compat import QtCore
+    lc = _canvas()
+    plot_rect = lc._plot_rect()
+    curve = lc._state.curves[0]
+    t0, t1 = curve.t_range
+    lc._begin_scrub(QtCore.QPointF(plot_rect.left() + plot_rect.width() * 0.5,
+                                   plot_rect.center().y()))
+    assert lc._scrubbing
+    mid = t0 + 0.5 * (t1 - t0)
+    assert abs(lc._tracer_t - mid) < (t1 - t0) * 0.02, f"{lc._tracer_t} vs {mid}"
+    saved = lc._tracer_t
+    lc._tick()
+    assert lc._tracer_t == saved, "animation pauses while scrubbing"
+    lc._scrubbing = False
+    lc._apply_zoom(3.0, QtCore.QPointF(400, 300))
+    lc.reset_view()  # double-click routes here (mouseDoubleClickEvent)
+    assert lc._zoom_factor == 1.0
+    import inspect
+    from aetherlab.ui.live_canvas import LiveCanvas
+    assert "reset_view" in inspect.getsource(LiveCanvas.mouseDoubleClickEvent)
+    assert hasattr(LiveCanvas, "_draw_progress_bar")
+    return "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn"
+
+
+def t_f116():
+    # PNG export writes a nonzero 2x file offscreen and emits the signal.
+    import os, tempfile
+    lc = _canvas()
+    got = []
+    lc.png_exported.connect(lambda p: got.append(p))
+    path = os.path.join(tempfile.mkdtemp(prefix="aeth_png_"), "canvas.png")
+    out = lc.save_png(path)
+    assert out == path and os.path.getsize(path) > 1000
+    assert got == [path], "png_exported signal must fire"
+    from aetherlab.ui.qt_compat import QtGui
+    img = QtGui.QImage(path)
+    assert img.width() == lc.width() * 2, f"expected 2x, got {img.width()}"
+    return f"2x PNG written ({os.path.getsize(path)} bytes) + signal"
+
+
+def t_f117():
+    # Interactive legend: always present for named curves, click-toggles.
+    from aetherlab.ui.qt_compat import QtGui
+    lc = _canvas()  # single named curve — legend must still render
+    pm = QtGui.QPixmap(lc.size()); lc.render(pm)
+    assert lc._legend_hits, "legend hidden for a single named curve"
+    rect, index = lc._legend_hits[0]
+    assert lc._state.curves[index].visible
+    hit = lc._legend_hit(rect.center())
+    assert hit == index
+    lc.toggle_curve_visibility(index)
+    assert not lc._state.curves[index].visible
+    pm2 = QtGui.QPixmap(lc.size()); lc.render(pm2)  # muted style paints fine
+    lc.toggle_curve_visibility(index)
+    assert lc._state.curves[index].visible
+    return "legend always shown, hit-testable, toggles visibility"
+
+
+def t_f118():
+    # Param chip renders live values; first paint fades in (later ones don't).
+    import inspect
+    from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state, FADE_IN_MS
+    src = inspect.getsource(LiveCanvas._draw_param_chip)
+    assert "params.items()" in src and "AlignRight" in src
+    lc = LiveCanvas(); lc.resize(800, 600)
+    assert lc._fade_alpha == 1.0
+    lc.set_state(build_canvas_state("t", {"damping": 0.2}))
+    assert lc._fade_alpha < 1.0, "first curves must start faded"
+    lc._fade_anim.stop(); lc._fade_alpha = 1.0
+    lc.set_state(build_canvas_state("t", {"damping": 0.4}))
+    assert lc._fade_alpha == 1.0, "subsequent updates must not re-fade"
+    assert FADE_IN_MS == 300
+    return "mono param chip; 300ms fade only on first paint"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Design v2 activation (F119-F124)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f119():
+    # v2 tokens: bright cyan primary + new surface tints; canvas primary matches.
+    from aetherlab.ui import style
+    assert style.CYAN == "#22D3EE" and style.CYAN_DEEP == "#06B6D4"
+    for tok in ("STAGE", "ELEV", "HOVER_SURFACE", "LINE_0"):
+        assert hasattr(style, tok), tok
+    assert style.STAGE == "#000000"
+    from aetherlab.ui.live_canvas import CANVAS_PALETTE
+    assert CANVAS_PALETTE["primary"] == "#22D3EE"
+    from aetherlab.ui.widgets import SidebarNav
+    rail = SidebarNav()
+    assert rail.width() == 56, f"rail should be 56px, got {rail.width()}"
+    return "cyan #22D3EE primary; stage/elev/hover/line-0 tokens; 56px rail"
+
+
+def t_f120():
+    # Math-as-brand: mathtext service typesets to pixmaps, never raises.
+    from aetherlab.services.mathtext import (
+        render_math, render_param_symbol, looks_like_math, latex_for_param,
+        WATERMARK_FORMULAS,
+    )
+    pm = render_math(r"x(t) = A e^{-\zeta \omega_0 t}\cos(\omega_d t)", 26)
+    assert pm is not None and pm.width() > 100
+    sym = render_param_symbol("damping", 15)
+    assert sym is not None and sym.width() > 0
+    assert latex_for_param("omega0") == r"\omega_0"
+    assert looks_like_math("E = mc^2") and not looks_like_math(
+        "the system slowly returns to rest as friction dissipates energy")
+    assert render_math("\\frac{unclosed", 20) is None  # bad input → None, no raise
+    assert all(render_math(f, 34) is not None for f in WATERMARK_FORMULAS)
+    return "mathtext → pixmaps; symbol map; math/prose discriminator; safe on junk"
+
+
+def t_f121():
+    # Hero equation banner typesets math summaries, prose stays text;
+    # parameter rows show typeset symbols; empty state carries watermarks.
+    from aetherlab.core.models import SolverResult
+    from aetherlab.ui.widgets import AnalysisPanel, ParameterDock, EmptyStateView
+    a = AnalysisPanel()
+    a.set_solver_result(SolverResult("x(t) = A e^{-ζωt}\\cos(ω t)",
+                                     ["s"], ["k"], {"damping": 0.2}, "m"))
+    assert a.summary.pixmap() is not None and not a.summary.pixmap().isNull()
+    a.set_solver_result(SolverResult(
+        "The oscillator gradually loses amplitude as damping removes its energy.",
+        ["s"], ["k"], {"damping": 0.2}, "m"))
+    assert a.summary.text() and a.summary.pixmap().isNull()  # PyQt6: cleared pixmap is null, not None
+    d = ParameterDock()
+    d.set_variables({"damping": 0.15, "omega0": 2.0})
+    assert d._container_layout.rowCount() == 2
+    e = EmptyStateView()
+    assert len(e._watermarks) >= 2
+    return "hero banner: math→pixmap, prose→text; param symbols; ambient watermarks"
+
+
+def t_f122():
+    # Scene-meta parser + storyboard normalizer feed the v2 chrome.
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.ui.widgets import parse_scene_meta, _storyboard_acts, SimulationPanel
+    sb = SceneBundle(
+        "AetherLabScene", "class AetherLabScene(Scene):\n    def construct(self): pass",
+        "manim-community", "rendered",
+        ["Estimated duration ~19s (6 beats, 2 waits).",
+         "Applied render repair 1.", "Applied visual revision 1.",
+         "Visual critique round 1: ship (score 8.5) — tighten pacing; raise contrast"],
+        storyboard={"acts": [
+            {"name": "ESTABLISH", "duration_s": 5, "beats": ["b"]},
+            {"name": "EVOLVE", "duration_s": 10, "beats": ["b"]},
+            {"name": "REVEAL", "duration_s": 4, "beats": ["b"]}],
+            "narration": ["Set the stage", "Let it evolve", "Lock the invariant"]})
+    m = parse_scene_meta(sb)
+    assert m["repaired"] == 1 and m["revised"] == 1
+    assert m["critique"]["verdict"] == "ship" and m["critique"]["score"] == 8.5
+    assert len(m["critique"]["issues"]) == 2 and m["duration"] == "~19s"
+    acts = _storyboard_acts(sb.storyboard)
+    assert [a["name"] for a in acts] == ["ESTABLISH", "EVOLVE", "REVEAL"]
+    assert acts[2]["narration"] == "Lock the invariant"
+    # empty/old bundles degrade to no storyboard, no crash
+    assert parse_scene_meta(SceneBundle.from_json({}))["critique"] is None
+    assert _storyboard_acts(None) == []
+    p = SimulationPanel()
+    p.set_scene_bundle(sb)
+    assert p._repaired_pill.isVisibleTo(p) and p._revised_pill.isVisibleTo(p)
+    assert p._engine_chip.text() == "manim-community"
+    assert len(p._seek_slider._act_fracs) == 3 and p._seek_slider._hero_frac is not None
+    return "parse repaired/revised/critique/duration; storyboard acts + hero bookmark"
+
+
+def t_f123():
+    # Screening room + code artifact + storyboard seek wiring.
+    from aetherlab.ui.widgets import (
+        SimulationPanel, ManimBadge, CodeArtifactView, _ManimHighlighter,
+        ActSeekSlider, StoryboardStrip, CritiqueBadge,
+    )
+    p = SimulationPanel()
+    assert isinstance(p.code, CodeArtifactView)
+    assert isinstance(p._seek_slider, ActSeekSlider)
+    assert isinstance(p._storyboard_strip, StoryboardStrip)
+    assert isinstance(p._critique_badge, CritiqueBadge)
+    assert isinstance(p._manim_badge, ManimBadge)
+    # code view has a Manim-aware highlighter + line numbers
+    assert isinstance(p.code._highlighter, _ManimHighlighter)
+    assert p.code.line_number_area_width() > 0
+    # storyboard click → seek
+    seeks = []
+    p._seek_fraction = lambda f: seeks.append(f)  # capture
+    p._storyboard_strip.act_seek_requested.connect(p._seek_fraction)
+    p._storyboard_strip.set_storyboard({"acts": [
+        {"name": "ESTABLISH", "duration_s": 5}, {"name": "REVEAL", "duration_s": 5}]})
+    # find an act card and click it
+    from aetherlab.ui.qt_compat import QtGui, QtCore
+    cards = [p._storyboard_strip._layout.itemAt(i).widget()
+             for i in range(p._storyboard_strip._layout.count())]
+    cards[1].mousePressEvent(None)  # second act → frac 0.5
+    assert seeks and abs(seeks[-1] - 0.5) < 1e-6, seeks
+    return "screening room widgets swapped in; code artifact + highlighter; act-click seeks"
+
+
+def t_f124():
+    # Library bookshelf spines + chunk counts; Settings Vision·Critique section.
+    import inspect
+    from aetherlab.ui.widgets import LibraryPanel, _BookSpine
+    src = inspect.getsource(LibraryPanel.refresh)
+    assert "_BookSpine" in src and "chunks" in src and "Re-indexing" in src
+    spine = _BookSpine("#22D3EE")
+    from aetherlab.ui.qt_compat import QtGui
+    pm = QtGui.QPixmap(spine.size()); spine.render(pm)  # paints without crash
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.core.settings import load_settings
+    d = SettingsDialog(load_settings())
+    vals = d.get_settings()
+    assert "vision_model" in vals
+    dsrc = inspect.getsource(SettingsDialog.__init__)
+    assert "VISION" in dsrc and "_vision_edit" in dsrc
+    return "library spines + chunk counts + freshness; Settings vision·critique field"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# v3 — Web references + graphics upgrade (F125-F127)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f125():
+    # Web reference provider: offline-safe, correct shape; model back-compat.
+    from aetherlab.services.web_references import WikipediaReferenceProvider, fetch_web_references
+    from aetherlab.core.models import RagHit, RagResult
+    # A broken endpoint must return [] (never raise) — offline-safety contract.
+    broken = WikipediaReferenceProvider(timeout=2)
+    broken.api = "https://invalid.aetherlab.example/w/api.php"
+    assert broken.search(["oscillator"], 3) == []
+    assert WikipediaReferenceProvider().search([], 3) == []  # no keywords → []
+    # RagHit gains origin/source_label with safe defaults; old dicts still load.
+    h = RagHit("C:/lib/x.pdf", 3, 2.0, "e")
+    assert h.origin == "library" and not h.is_web and h.source_name == "x.pdf"
+    w = RagHit("https://en.wikipedia.org/wiki/Harmonic_oscillator", None, 0.9, "e",
+               source_label="Harmonic oscillator", origin="web")
+    assert w.is_web and w.source_name == "Harmonic oscillator"
+    rr = RagResult.from_json({"keywords": ["k"], "backend": "chromadb",
+                              "hits": [{"source_path": "a.pdf", "page_number": 1,
+                                        "score": 1.0, "excerpt": "e"}]})
+    assert rr.hits[0].origin == "library"  # legacy 4-field row → default origin
+    # fetch honors the settings toggle
+    from aetherlab.core.settings import load_settings
+    from dataclasses import replace
+    assert fetch_web_references(["x"], replace(load_settings(), web_references=False)) == []
+    return "web provider fail-soft; RagHit origin/label back-compat; toggle honored"
+
+
+def t_f126():
+    # Merge helper appends web hits after library hits, tags backend, fail-soft;
+    # settings expose the toggle end to end.
+    import asyncio
+    from dataclasses import replace
+    from aetherlab.core.models import RagHit, RagResult
+    from aetherlab.core.settings import load_settings, _as_bool
+    from aetherlab.services.pipeline import _merge_web_references
+
+    s = load_settings()
+    assert isinstance(s.web_references, bool)
+    assert _as_bool("0", default=True) is False and _as_bool(None, "yes", default=False) is True
+
+    base = RagResult(["osc"], [RagHit("C:/lib/b.pdf", 5, 3.0, "local")], "chromadb")
+    # disabled → identical object
+    assert asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=False))) is base
+    # a provider that raises must not break the merge (returns base unchanged)
+    import aetherlab.services.web_references as wr
+    orig = wr.fetch_web_references
+    wr.fetch_web_references = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        out = asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=True)))
+        assert out is base
+    finally:
+        wr.fetch_web_references = orig
+    # a provider that returns hits gets merged, library first, backend tagged
+    wr.fetch_web_references = lambda kw, st, limit=3: [
+        RagHit("https://en.wikipedia.org/wiki/X", None, 0.9, "web", source_label="X", origin="web")]
+    try:
+        out = asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=True)))
+    finally:
+        wr.fetch_web_references = orig
+    assert len(out.hits) == 2 and out.hits[0].origin == "library" and out.hits[1].is_web
+    assert out.backend == "chromadb+web"
+    return "merge: library-first + web-tagged; fail-soft on provider error; toggle wired"
+
+
+def t_f127():
+    # Reference card web styling + dimming; blueprint backdrop; focus filament;
+    # Settings web-references checkbox.
+    import os
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from aetherlab.ui.qt_compat import QtWidgets, QtGui
+    from aetherlab.ui.widgets import _RagHitCard, BlueprintBackdrop, CommandBar
+    from aetherlab.core.models import RagResult, RagHit
+    from aetherlab.ui.widgets import ReferencePanel
+
+    # web card: opens a URL, not a local file; low score dims the card
+    web_card = _RagHitCard("Harmonic oscillator", None, 0.9,
+                           "An oscillator…", "https://en.wikipedia.org/wiki/Harmonic_oscillator",
+                           is_web=True)
+    assert web_card.graphicsEffect() is None  # high score → not dimmed
+    dim_card = _RagHitCard("Weak", 12, 0.3, "…", "C:/lib/x.pdf", is_web=False)
+    assert dim_card.graphicsEffect() is not None  # < 0.5 → dimmed
+    pm = QtGui.QPixmap(320, 120); web_card.render(pm)  # paints without crash
+
+    # ReferencePanel provenance line counts library vs web
+    rp = ReferencePanel()
+    rp.set_rag_result(RagResult(["k"], [
+        RagHit("C:/lib/a.pdf", 3, 0.9, "lib", origin="library"),
+        RagHit("https://en.wikipedia.org/wiki/X", None, 0.8, "web", source_label="X", origin="web"),
+    ], "chromadb+web"))
+    assert "1 library" in rp._backend_label.text() and "1 web" in rp._backend_label.text()
+
+    # Blueprint backdrop paints; command-bar filament toggles the shell property
+    bd = BlueprintBackdrop(QtWidgets.QLabel("x")); bd.resize(400, 300)
+    pm2 = QtGui.QPixmap(bd.size()); bd.render(pm2)
+    cb = CommandBar()
+    cb._set_shell_focused(True); assert cb._shell.property("focused") == "true"
+    cb._set_shell_focused(False); assert cb._shell.property("focused") == "false"
+
+    # Settings dialog carries the web-references checkbox
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.core.settings import load_settings
+    d = SettingsDialog(load_settings())
+    vals = d.get_settings()
+    assert "web_references" in vals and isinstance(vals["web_references"], bool)
+    return "web/library card styling + dimming; provenance; backdrop; filament; settings toggle"
+
+
+def t_f128():
+    # Provider independence: ollama preset resolution + qwen autoload gated off.
+    import aetherlab.core.settings as S
+    saved_env = os.environ.pop("AETHERLAB_DATA_DIR", None)
+    orig_default = S._default_data_dir
+    S._default_data_dir = lambda: _TMP / "prov_home"
+    try:
+        s0 = S.load_settings()
+        assert s0.openai_api_key is None, "qwen autoload must be gated off by default"
+        S.save_app_config({"provider_preset": "ollama", "model": "qwen2.5:7b"})
+        s1 = S.load_settings()
+        assert s1.openai_base_url == S.OLLAMA_OPENAI_BASE_URL
+        assert s1.openai_api_key == "ollama" and s1.provider_source == "ollama-local"
+        os.environ["AETHERLAB_OPENAI_API_KEY"] = "sk-env"
+        assert S.load_settings().openai_api_key == "sk-env", "env must beat preset"
+    finally:
+        os.environ.pop("AETHERLAB_OPENAI_API_KEY", None)
+        (_TMP / "prov_home" / "settings.json").unlink(missing_ok=True)
+        S._default_data_dir = orig_default
+        if saved_env is not None:
+            os.environ["AETHERLAB_DATA_DIR"] = saved_env
+    return "ollama preset resolves; qwen gated; env wins (F128)"
+
+
+def t_f129():
+    # Ollama discovery + Settings preset UI + EmptyState one-click CTA.
+    from aetherlab.services.providers import detect_ollama, test_connection
+    models = detect_ollama(timeout=1.0)  # absence is a normal state
+    assert isinstance(models, list)
+    from dataclasses import replace
+    ok, msg = test_connection(replace(_settings(), openai_api_key=None))
+    assert not ok and "key" in msg.lower()
+    from aetherlab.ui.main_window import SettingsDialog
+    d = SettingsDialog(_settings())
+    assert d._preset_combo.count() == 3 and hasattr(d, "_test_btn")
+    assert d.get_settings()["provider_preset"] in ("custom", "ollama", "none")
+    d.close()
+    from aetherlab.ui.widgets import EmptyStateView
+    ev = EmptyStateView()
+    ev.offer_ollama(2)
+    assert ev._ollama_btn.isVisibleTo(ev) and "2 local models" in ev._key_label.text()
+    ev.set_status(True, "m", 0)
+    assert not ev._ollama_btn.isVisibleTo(ev)
+    ev.close()
+    return f"providers module + preset UI + CTA ({len(models)} local models) (F129)"
+
+
+def t_f130():
+    # key_equations contract: model round-trip, fallback domains, hero banner, export.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest, SolverResult
+    from aetherlab.services.llm import AsyncLLMCoordinator, FALLBACK_EQUATIONS
+    sr = SolverResult.from_json(SolverResult(
+        summary="s", derivation_steps=[], keywords=[], variables={},
+        model_name="t", key_equations=[r"E = mc^2"]).to_json())
+    assert sr.key_equations == [r"E = mc^2"]
+    assert SolverResult.from_json({}).key_equations == []
+    keyless = replace(_settings(), openai_api_key=None)
+    r = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="Solve the simple pendulum")))
+    assert r.key_equations == FALLBACK_EQUATIONS["pendulum"]
+    from aetherlab.services.mathtext import render_math
+    pm = render_math(r.key_equations[0], px_size=30)
+    assert pm is not None and not pm.isNull()
+    from aetherlab.ui.widgets import AnalysisPanel
+    ap = AnalysisPanel()
+    ap.set_solver_result(r)
+    assert ap.summary.pixmap() is not None and not ap.summary.pixmap().isNull()
+    ap.close()
+    from aetherlab.services.pdf import export_derivation_to_latex
+    out = _TMP / "keq.tex"
+    export_derivation_to_latex("s", ["x"], {}, out, key_equations=[r"E = mc^2"])
+    assert r"\[ E = mc^2 \]" in out.read_text(encoding="utf-8")
+    return "key_equations end-to-end: model→fallback→banner→export (F130)"
+
+
+def t_f131():
+    # Product hygiene: version flag, rotating log, icon assets + taskbar wiring.
+    import subprocess
+    from aetherlab import __version__
+    r = subprocess.run([sys.executable, "-m", "aetherlab", "--version"],
+                       capture_output=True, text=True, timeout=60, env={**os.environ})
+    assert __version__ in (r.stdout + r.stderr), (r.stdout, r.stderr)
+    from aetherlab.__main__ import _setup_logging
+    _setup_logging()
+    log_file = Path(os.environ["AETHERLAB_DATA_DIR"]) / "logs" / "aetherlab.log"
+    assert log_file.exists() and "starting" in log_file.read_text(encoding="utf-8")
+    assert Path("assets/aetherlab.ico").exists()
+    src = inspect.getsource(__import__("aetherlab.ui.app", fromlist=["run_app"]).run_app)
+    assert "SetCurrentProcessExplicitAppUserModelID" in src and "setWindowIcon" in src
+    return f"--version={__version__}; rotating log; ico + taskbar wiring (F131)"
+
+
+def t_f132():
+    # Packaging readiness: LaTeX-aware scene prompts + packaging assets present.
+    from aetherlab.services.manim_runtime import detect_latex
+    has = detect_latex()
+    src = inspect.getsource(__import__(
+        "aetherlab.services.scene_generator", fromlist=["SceneGenerator"]
+    ).SceneGenerator._generate_remote)
+    assert "detect_latex" in src and "NO LaTeX" in src
+    for f in ("packaging/aetherlab.spec", "packaging/installer.iss", "packaging/build.py",
+              ".github/workflows/ci.yml", "docs/QUICKSTART.md", "docs/TROUBLESHOOTING.md"):
+        assert Path(f).exists(), f
+    # Frozen-bundle regression: inside PyInstaller, sys.executable is our exe,
+    # so the renderer must relay via `aetherlab --manim ...` (not `-m manim`),
+    # and the build gate must demand an actually-rendered video.
+    from aetherlab.services.manim_runtime import ManimRuntime
+    mr_src = inspect.getsource(ManimRuntime._find_manim_command)
+    assert '"--manim"' in mr_src and "frozen" in mr_src
+    main_src = Path("aetherlab/__main__.py").read_text(encoding="utf-8")
+    assert '"--manim"' in main_src and "manim_main" in main_src
+    build_src = Path("packaging/build.py").read_text(encoding="utf-8")
+    assert "Scene status: rendered" in build_src, "gate must require a real render"
+    return f"LaTeX-aware prompts (latex={has}); frozen manim relay + strict gate (F132)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
