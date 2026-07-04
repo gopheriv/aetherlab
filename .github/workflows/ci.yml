@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[rag]
+          pip install manim matplotlib pillow
+
+      - name: Run behavioural feature suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test_features.py
+
+      - name: Regenerate feature tracker
+        run: python build_feature_tracker.py
+
+      - name: Upload tracker + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-tracker
+          path: |
+            AetherLab_Feature_Tracker.xlsx
+            AetherLab_Feature_Tracker.csv
+            feature_test_results.json
