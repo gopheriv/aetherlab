@@ -128,6 +128,8 @@ def _extract_with_pyav(video: Path, out_dir: Path, count: int) -> list[Path]:
 def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
     """CLI fallback: one frame per interval, downscaled to 640px wide."""
     try:
+        from aetherlab.core.proc import subprocess_kwargs
+
         duration = _probe_duration(video)
         interval = max(duration / count, 0.1)
         subprocess.run(
@@ -138,7 +140,7 @@ def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
                 str(out_dir / "frame_%02d.png"),
             ],
             capture_output=True, text=True, timeout=60,
-            creationflags=0x08000000,
+            **subprocess_kwargs(),
         )
         return sorted(out_dir.glob("frame_*.png"))[:count]
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
@@ -148,11 +150,13 @@ def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
 
 def _probe_duration(video: Path) -> float:
     try:
+        from aetherlab.core.proc import subprocess_kwargs
+
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "csv=p=0", str(video)],
             capture_output=True, text=True, timeout=20,
-            creationflags=0x08000000,
+            **subprocess_kwargs(),
         )
         return max(float(result.stdout.strip()), 0.5)
     except Exception:  # noqa: BLE001

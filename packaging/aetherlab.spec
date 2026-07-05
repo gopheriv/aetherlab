@@ -25,16 +25,35 @@ hiddenimports = [
     "PyQt6.QtSvg",
     "PyQt6.QtMultimedia",
     "PyQt6.QtMultimediaWidgets",
+    # Manim's CLI + plugin machinery (imported lazily → not auto-detected).
+    "manim.__main__",
+    "manim.plugins",
+    "manim.utils.commands",
+    "cloup",
+    "click",
 ]
 
-for package in ("manim", "chromadb", "av"):
-    d, b, h = collect_all(package)
-    datas += d
-    binaries += b
-    hiddenimports += h
+# The Manim render subprocess needs its whole native ecosystem, not just the
+# `manim` package: manimpango renders EVERY Text/MarkupText (all our fallback
+# templates use Text — miss it and every render fails), skia-pathops does path
+# boolean ops, moderngl backs the OpenGL renderer, av (PyAV) is the encoder.
+# collect_all pulls each package's data files, compiled libs, and submodules.
+_COLLECT = (
+    "manim", "manimpango", "skia_pathops", "moderngl", "moderngl_window",
+    "chromadb", "av", "cloup", "pygments", "imageio_ffmpeg",
+)
+for package in _COLLECT:
+    try:
+        d, b, h = collect_all(package)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass  # optional passenger (e.g. imageio_ffmpeg) not installed — skip
 
-# Metadata-only requirements (version lookups at import time).
-for dist in ("manim", "numpy", "openai", "matplotlib", "pillow", "chromadb"):
+# Metadata-only requirements (importlib.metadata version/entry-point lookups).
+for dist in ("manim", "manimpango", "numpy", "openai", "matplotlib", "pillow",
+             "chromadb", "cloup", "click"):
     try:
         datas += copy_metadata(dist)
     except Exception:

@@ -8,11 +8,15 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
+from datetime import datetime
 from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+from aetherlab.core.proc import subprocess_kwargs
 from aetherlab.services.scene_generator import SceneGenerator
 
 if TYPE_CHECKING:
@@ -23,6 +27,11 @@ log = logging.getLogger(__name__)
 # Where rendered videos are cached
 _RENDER_DIR = Path(tempfile.gettempdir()) / "aetherlab" / "renders"
 _RENDER_DIR.mkdir(parents=True, exist_ok=True)
+
+# One isolated sub-directory per render lives here (Bug 1: no shared partial
+# cache). Old run dirs are LRU-pruned so temp stays bounded.
+_RUNS_DIR = _RENDER_DIR / "runs"
+_MAX_KEPT_RUNS = 24
 
 # Manim Community render quality: 480p for speed
 _RENDER_QUALITY = "l"  # low = 480p15
@@ -183,6 +192,11 @@ class ManimRuntime:
     ) -> SceneBundle:
         """Render the generated scene to an MP4 video using Manim Community.
 
+        Each render runs in its OWN isolated media directory with caching
+        disabled, so Manim can never splice a stale partial-movie file from a
+        previous/adjacent render into this one — the root of the "sync bug"
+        where a regenerated scene came out desynchronized from its code.
+
         Args:
             quality: Manim quality flag — 'l' (480p), 'm' (720p), 'h' (1080p), 'k' (4K).
         """
@@ -190,70 +204,94 @@ class ManimRuntime:
             scene_bundle.diagnostics.append("Skipping render: scene did not compile.")
             return scene_bundle
 
-        scene_name = _scene_name(scene_bundle.class_name, scene_bundle.code)
-        scene_file = _RENDER_DIR / f"{scene_name}.py"
-        scene_file.write_text(scene_bundle.code, encoding="utf-8")
-
-        # Determine which manim binary to use
         manim_cmd = self._find_manim_command()
         if not manim_cmd:
             scene_bundle.diagnostics.append("No Manim binary found; returning code-only.")
             return scene_bundle
 
-        # Clean old renders for this scene to avoid stale video bug
-        _clean_old_renders(scene_name)
+        s = settings or self._settings
+        data_dir = getattr(s, "data_dir", None)
 
-        # Timeouts ported from manim-bot: fps-explicit renders are heavier,
-        # and its production ceiling is 600s.
-        timeout_map = {"l": 240, "m": 420, "h": 600, "k": 900}
-        render_timeout = timeout_map.get(quality, 240)
+        # ── Isolated per-render workspace (Bug 1) ──
+        # A fresh uuid-suffixed dir per render means no two renders ever share
+        # Manim's partial-movie cache — the frame-desync bug becomes impossible.
+        scene_name = _scene_name(scene_bundle.class_name, scene_bundle.code)
+        run_dir = _RUNS_DIR / f"{scene_name}_{quality}_{uuid.uuid4().hex[:8]}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        media_dir = run_dir / "media"
+        scene_file = run_dir / f"{scene_name}.py"
+        scene_file.write_text(scene_bundle.code, encoding="utf-8")
+        _prune_old_runs()
 
+        # ── Weight-aware timeout + resource guard (Bug 4) ──
+        base_timeout = {"l": 240, "m": 420, "h": 600, "k": 900}.get(quality, 240)
+        cost = _estimate_render_cost(scene_bundle.code)
+        render_timeout = min(int(base_timeout * cost), 1800)  # hard ceiling 30 min
         tier = _RENDER_TIER
+        fps = tier["fps"]
+        # A runaway scene (bad run_time → tens of seconds at 4K/60) can wedge the
+        # box; halve the frame rate on heavy hi-res renders.
+        if cost >= 3.0 and quality in ("h", "k"):
+            fps = 30
+
         log.info(
-            "Rendering scene: %s with %s -q%s --fps %d (tier %s)",
-            scene_name, " ".join(manim_cmd), quality, tier["fps"], tier["name"],
+            "Rendering %s -q%s --fps %d (tier %s, cost %.1f, timeout %ds)",
+            scene_name, quality, fps, tier["name"], cost, render_timeout,
         )
 
+        started = time.time()
         try:
-            creation_flags = 0x08000000  # CREATE_NO_WINDOW on Windows
-            if tier["below_normal"]:
-                creation_flags |= 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
-            # NOTE: No --disable_caching — let Manim cache rendered frames for speed
             result = subprocess.run(
                 [
                     *manim_cmd, "render", f"-q{quality}",
-                    "--fps", str(tier["fps"]),
-                    "--media_dir", str(_RENDER_DIR / "media"),
+                    "--fps", str(fps),
+                    # Correctness over speed: never reuse a cached partial movie.
+                    "--disable_caching",
+                    "--media_dir", str(media_dir),
                     str(scene_file), scene_bundle.class_name,
                 ],
                 capture_output=True,
                 text=True,
                 timeout=render_timeout,
-                creationflags=creation_flags,
-                cwd=str(_RENDER_DIR),
+                cwd=str(run_dir),
+                **subprocess_kwargs(below_normal=tier["below_normal"]),
             )
             if result.returncode != 0:
                 stderr = result.stderr.strip()
+                kind = _classify_failure(stderr)
+                dump = _dump_render_failure(data_dir, scene_bundle.code, stderr, kind)
                 # Keep a generous tail: the repair pass feeds this back to the
                 # LLM and needs the actual traceback — chained exceptions and
                 # LaTeX logs push the root cause well past a short tail.
-                scene_bundle.diagnostics.append(f"Manim render failed: {stderr[-8000:]}")
+                note = f"Manim render failed [{kind}]: {stderr[-8000:]}"
+                if dump:
+                    note += f"\n(full log: {dump})"
+                scene_bundle.diagnostics.append(note)
                 scene_bundle.status = "render-error"
+                scene_bundle.failure_kind = kind
                 return scene_bundle
         except subprocess.TimeoutExpired:
-            scene_bundle.diagnostics.append(f"Manim render timed out ({render_timeout}s).")
+            _dump_render_failure(data_dir, scene_bundle.code, "render exceeded time budget", "timeout")
+            scene_bundle.diagnostics.append(
+                f"Manim render timed out ({render_timeout}s, cost {cost:.1f})."
+            )
             scene_bundle.status = "render-timeout"
+            scene_bundle.failure_kind = "timeout"
             return scene_bundle
         except Exception as exc:
             scene_bundle.diagnostics.append(f"Manim render error: {exc}")
             scene_bundle.status = "render-error"
+            scene_bundle.failure_kind = "spawn"
             return scene_bundle
 
-        # Find the output video
-        video_path = _find_video(scene_name)
+        # ── Video discovery: THIS render only (Bug 1) ──
+        # The media dir is unique to this render, so any mp4 in it is ours;
+        # the mtime floor is belt-and-suspenders.
+        video_path = _find_video_in(media_dir, scene_bundle.class_name, started)
         if video_path:
             scene_bundle.video_path = str(video_path)
             scene_bundle.status = "rendered"
+            scene_bundle.failure_kind = ""
             log.info("Video rendered: %s (%.1f MB)", video_path, video_path.stat().st_size / 1e6)
         else:
             scene_bundle.diagnostics.append("Render succeeded but video file not found.")
@@ -279,9 +317,16 @@ class ManimRuntime:
         frames are judged against the storyboard/brief and revised until the
         critic says ship (bounded by max_revisions). Without an API key this is
         exactly render_scene(); without a vision model, repairs-only.
+
+        Hard-scene strategy (Bug 4): the code is validated and repaired at DRAFT
+        quality first (cheap, fast), and only promoted to the requested quality
+        once it renders. If the final high-quality render fails or times out,
+        the draft render is kept as partial success rather than returning
+        nothing.
         """
         s = settings or self._settings
-        scene_bundle = self.render_scene(scene_bundle, s, quality)
+        draft_quality = "l"  # validate/repair cheaply here; promote to `quality`
+        scene_bundle = self.render_scene(scene_bundle, s, draft_quality)
 
         learner = None
         if s is not None:
@@ -348,7 +393,29 @@ class ManimRuntime:
             scene_bundle.code = fixed
             scene_bundle.status = "compiled"
             scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
-            scene_bundle = self.render_scene(scene_bundle, s, quality)
+            scene_bundle = self.render_scene(scene_bundle, s, draft_quality)
+
+        # ── Promote the working code to the requested quality (Bug 4) ──
+        # The draft rendered; render the final at the target quality. If that
+        # fails/times out, keep the draft (partial success) rather than nothing.
+        final_quality = draft_quality
+        if scene_bundle.status == "rendered" and quality != draft_quality:
+            hq = SceneBundle(
+                class_name=scene_bundle.class_name,
+                code=scene_bundle.code,
+                engine=scene_bundle.engine,
+                status="compiled",
+                diagnostics=list(scene_bundle.diagnostics),
+                storyboard=scene_bundle.storyboard,
+            )
+            hq = self.render_scene(hq, s, quality)
+            if hq.status == "rendered":
+                scene_bundle = hq
+                final_quality = quality
+            else:
+                scene_bundle.diagnostics.append(
+                    f"Final {quality} render {hq.status}; keeping draft render (partial success)."
+                )
 
         # ── Perceptual quality loop ──────────────────────────────────────
         # The critic looks at the actual rendered frames and judges them
@@ -413,7 +480,7 @@ class ManimRuntime:
                     diagnostics=list(scene_bundle.diagnostics),
                     storyboard=scene_bundle.storyboard,
                 )
-                trial = self.render_scene(trial, s, quality)
+                trial = self.render_scene(trial, s, final_quality)
                 if trial.status == "rendered":
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
@@ -502,23 +569,123 @@ def _scene_name(class_name: str, code: str = "") -> str:
 
 
 def _clean_old_renders(scene_name: str) -> None:
-    """Remove old render artifacts to avoid stale video bug."""
-    # Manim Community output structure: media/videos/<scene>/<quality>/
+    """Legacy no-conflict cleanup (kept for API compatibility).
+
+    Renders now use isolated per-run dirs (_RUNS_DIR), so there is no shared
+    media tree to sweep; this only tidies the pre-isolation layout if present.
+    """
     media_dir = _RENDER_DIR / "media" / "videos" / scene_name
     if media_dir.exists():
         shutil.rmtree(media_dir, ignore_errors=True)
 
 
 def _find_video(scene_name: str) -> Path | None:
-    """Find the rendered MP4 file in Manim's output directory."""
+    """Legacy finder for the pre-isolation media layout (kept for API compat)."""
     videos_dir = _RENDER_DIR / "media" / "videos" / scene_name
     if not videos_dir.exists():
         return None
     mp4s = list(videos_dir.rglob("*.mp4"))
     if mp4s:
-        # Return the most recently modified file
         return max(mp4s, key=lambda p: p.stat().st_mtime)
     return None
+
+
+def _find_video_in(media_dir: Path, class_name: str, since: float) -> Path | None:
+    """Return THIS render's MP4 from its isolated media dir.
+
+    Because ``media_dir`` is unique to this render, any mp4 under it belongs to
+    this render; the mtime floor guards against a fluke stale file. Prefer the
+    file named after the scene class, else the largest (the assembled movie).
+    """
+    if not media_dir.exists():
+        return None
+    fresh = [p for p in media_dir.rglob("*.mp4") if p.stat().st_mtime >= since - 2.0]
+    mp4s = fresh or list(media_dir.rglob("*.mp4"))
+    if not mp4s:
+        return None
+    named = [p for p in mp4s if p.stem == class_name]
+    if named:
+        return max(named, key=lambda p: p.stat().st_mtime)
+    return max(mp4s, key=lambda p: p.stat().st_size)
+
+
+def _prune_old_runs(keep: int = _MAX_KEPT_RUNS) -> None:
+    """LRU-prune isolated run dirs so temp doesn't grow without bound.
+
+    A pruned video that a cached SceneBundle still points at is handled by the
+    pipeline's existing 'video missing → re-render' path, so pruning is safe.
+    """
+    try:
+        if not _RUNS_DIR.exists():
+            return
+        runs = sorted(
+            (p for p in _RUNS_DIR.iterdir() if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in runs[keep:]:
+            shutil.rmtree(stale, ignore_errors=True)
+    except Exception:  # noqa: BLE001 — housekeeping must never break a render
+        pass
+
+
+def _estimate_render_cost(code: str) -> float:
+    """Rough render-cost multiplier (1.0 = baseline 15s scene).
+
+    Heavier scenes (longer, many updaters, 3D/field mobjects) get proportionally
+    more render time before we call a timeout, so ambition isn't punished.
+    Capped so a pathological estimate can't grant an unbounded budget.
+    """
+    try:
+        from aetherlab.services.scene_validation import estimate_duration
+
+        duration = estimate_duration(code).total_seconds
+    except Exception:  # noqa: BLE001
+        duration = 15.0
+    updaters = code.count("always_redraw") + code.count("add_updater")
+    plays = code.count("self.play")
+    heavy = sum(
+        code.count(m)
+        for m in ("Surface", "ThreeDScene", "VectorField", "StreamLines",
+                  "ParametricSurface", "ImplicitFunction", "MoveAlongPath")
+    )
+    cost = max(1.0, duration / 15.0) + 0.15 * updaters + 0.04 * plays + 0.5 * heavy
+    return min(cost, 5.0)
+
+
+_FAILURE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("latex", ("undefined control sequence", "latex error", "! latex",
+               "no such file", "dvi", "tex error", "xelatex")),
+    ("ffmpeg", ("ffmpeg", "avconv", "libx264", "codec")),
+    ("oom", ("memoryerror", "out of memory", "cannot allocate", "killed", "oom")),
+    ("hallucinated-api", ("nameerror", "attributeerror", "has no attribute",
+                          "unexpected keyword argument", "is not defined",
+                          "typeerror", "importerror")),
+)
+
+
+def _classify_failure(stderr: str) -> str:
+    """Bucket a render stderr into a failure class for repair + metrics."""
+    low = (stderr or "").lower()
+    for kind, markers in _FAILURE_PATTERNS:
+        if any(m in low for m in markers):
+            return kind
+    return "unknown"
+
+
+def _dump_render_failure(data_dir, code: str, stderr: str, kind: str) -> Path | None:
+    """Persist the failing scene + full stderr so any render failure is
+    reproducible from disk. Best-effort; never raises into the render path."""
+    try:
+        base = Path(data_dir) if data_dir else _RENDER_DIR
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:4]
+        dump = base / "logs" / "renders" / f"{stamp}_{kind}"
+        dump.mkdir(parents=True, exist_ok=True)
+        (dump / "scene.py").write_text(code, encoding="utf-8")
+        (dump / "stderr.txt").write_text(stderr or "", encoding="utf-8")
+        return dump
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _shorten(text: str, limit: int) -> str:

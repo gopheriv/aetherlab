@@ -775,6 +775,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.statusBar().showMessage("Converting video to GIF…")
         try:
+            from aetherlab.core.proc import subprocess_kwargs
+
             result = subprocess.run(
                 [
                     "ffmpeg", "-y", "-i", str(video_path),
@@ -782,7 +784,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "-loop", "0", str(path),
                 ],
                 capture_output=True, text=True, timeout=120,
-                creationflags=0x08000000,  # CREATE_NO_WINDOW on Windows
+                **subprocess_kwargs(),
             )
             if result.returncode == 0 and Path(path).exists():
                 size_mb = Path(path).stat().st_size / 1e6

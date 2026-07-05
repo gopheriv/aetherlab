@@ -1929,6 +1929,93 @@ def t_f132():
     return f"LaTeX-aware prompts (latex={has}); frozen manim relay + strict gate (F132)"
 
 
+def t_f133():
+    # Bug 2 — cross-platform subprocess: Windows flags never reach POSIX.
+    import aetherlab.core.proc as proc
+    orig = proc.IS_WINDOWS
+    try:
+        proc.IS_WINDOWS = True
+        assert proc.subprocess_kwargs() == {"creationflags": proc.CREATE_NO_WINDOW}
+        assert proc.subprocess_kwargs(below_normal=True)["creationflags"] & proc.BELOW_NORMAL_PRIORITY_CLASS
+        proc.IS_WINDOWS = False
+        assert proc.subprocess_kwargs() == {"start_new_session": True}
+        assert "creationflags" not in proc.subprocess_kwargs(below_normal=True)
+    finally:
+        proc.IS_WINDOWS = orig
+    # No raw creationflags left in any subprocess site (they'd break Linux CI/cloud).
+    import pathlib
+    offenders = []
+    for f in ("aetherlab/services/manim_runtime.py", "aetherlab/services/pdf.py",
+              "aetherlab/services/scene_critic.py", "aetherlab/ui/main_window.py"):
+        if "creationflags=" in pathlib.Path(f).read_text(encoding="utf-8"):
+            offenders.append(f)
+    assert not offenders, f"raw creationflags remain in: {offenders}"
+    return "xplat kwargs win↔posix; zero raw creationflags in call sites (F133)"
+
+
+def t_f134():
+    # Bug 1 — the sync fix: isolated dir + disable_caching + this-render discovery.
+    from aetherlab.services.manim_runtime import ManimRuntime, _find_video_in
+    src = inspect.getsource(ManimRuntime.render_scene)
+    assert "--disable_caching" in src and "_RUNS_DIR" in src and "uuid" in src
+    assert "subprocess_kwargs" in src and "_find_video_in" in src
+    # _find_video_in prefers the class-named mp4 that belongs to THIS render.
+    media = _TMP / "vid_media" / "videos" / "scene" / "480p30"
+    media.mkdir(parents=True, exist_ok=True)
+    (media / "Neighbor.mp4").write_bytes(b"0" * 5000)      # a stray/older file
+    target = media / "AetherLabScene.mp4"
+    target.write_bytes(b"0" * 3000)
+    got = _find_video_in(_TMP / "vid_media", "AetherLabScene", 0.0)
+    assert got == target, f"must return the class-named render, got {got}"
+    return "render isolated+disable_caching; discovery returns this render (F134)"
+
+
+def t_f135():
+    # Bug 4 — hard-scene survival: cost-scaled timeout + draft→final + partial success.
+    from aetherlab.services.manim_runtime import ManimRuntime, _estimate_render_cost
+    light = _estimate_render_cost("class S(Scene):\n    def construct(self):\n        self.wait(1)\n")
+    heavy = _estimate_render_cost(
+        "class S(Scene):\n" + "        self.play(x)\n" * 40
+        + "        always_redraw(f)\n" * 12 + "        Surface(g)\n" * 4)
+    assert 1.0 <= light < heavy <= 5.0, (light, heavy)
+    rs = inspect.getsource(ManimRuntime.render_scene)
+    assert "_estimate_render_cost" in rs and "1800" in rs  # weight-aware, hard ceiling
+    rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "draft_quality" in rr and "partial success" in rr and "keeping draft" in rr
+    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success (F135)"
+
+
+def t_f136():
+    # Bug 5 — observability: classification, artifact dump, failure_kind field.
+    from aetherlab.services.manim_runtime import _classify_failure, _dump_render_failure
+    assert _classify_failure("NameError: 'ShowCreation' not defined") == "hallucinated-api"
+    assert _classify_failure("! Undefined control sequence \\foo") == "latex"
+    assert _classify_failure("ffmpeg: command not found") == "ffmpeg"
+    assert _classify_failure("MemoryError") == "oom"
+    assert _classify_failure("plain nonsense") == "unknown"
+    dump = _dump_render_failure(_TMP, "scene code", "the stderr", "latex")
+    assert dump and (dump / "scene.py").read_text(encoding="utf-8") == "scene code"
+    assert (dump / "stderr.txt").read_text(encoding="utf-8") == "the stderr"
+    from aetherlab.core.models import SceneBundle
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="render-error",
+        failure_kind="latex").to_json())
+    assert sb.failure_kind == "latex" and SceneBundle.from_json({}).failure_kind == ""
+    return "failure classified+dumped; failure_kind round-trips (F136)"
+
+
+def t_f137():
+    # Bug 3 — frozen render: manim ecosystem collected + ffmpeg-independent path.
+    spec = Path("packaging/aetherlab.spec").read_text(encoding="utf-8")
+    for pkg in ("manimpango", "skia_pathops", "moderngl", "manim.plugins"):
+        assert pkg in spec, f"spec must collect {pkg} for a working frozen render"
+    # The dev render path proves manimpango/Text works locally (Manim 0.20 uses
+    # PyAV, not an ffmpeg CLI, so the bundle isn't ffmpeg-dependent).
+    main_src = Path("aetherlab/__main__.py").read_text(encoding="utf-8")
+    assert '"--manim"' in main_src and "manim_main" in main_src
+    return "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

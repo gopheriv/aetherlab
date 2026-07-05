@@ -129,6 +129,10 @@ class SceneBundle:
     # Creative treatment the scene implements (see SceneGenerator.storyboard).
     # The visual critic judges renders against it. Old cache rows load as None.
     storyboard: dict | None = None
+    # Classified render-failure kind (latex/hallucinated-api/timeout/ffmpeg/oom/
+    # spawn/""), set by the renderer so the UI and repair loop can react. Old
+    # cache rows load as "".
+    failure_kind: str = ""
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -143,6 +147,7 @@ class SceneBundle:
             engine=str(payload.get("engine", "cached")),
             status=str(payload.get("status", "cached")),
             diagnostics=list(payload.get("diagnostics", [])),
+            failure_kind=str(payload.get("failure_kind", "")),
             cached=cached,
             video_path=str(payload.get("video_path", "")),
             storyboard=storyboard if isinstance(storyboard, dict) else None,

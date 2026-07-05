@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=212971 + skip-existing"
+    "note": "URL fallback + free_disk_mb=212569 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_ycy4svsc/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_04m27r_d/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -526,5 +526,25 @@
   "F132": {
     "status": "PASS",
     "note": "LaTeX-aware prompts (latex=True); frozen manim relay + strict gate (F132)"
+  },
+  "F133": {
+    "status": "PASS",
+    "note": "xplat kwargs win\u2194posix; zero raw creationflags in call sites (F133)"
+  },
+  "F134": {
+    "status": "PASS",
+    "note": "render isolated+disable_caching; discovery returns this render (F134)"
+  },
+  "F135": {
+    "status": "PASS",
+    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success (F135)"
+  },
+  "F136": {
+    "status": "PASS",
+    "note": "failure classified+dumped; failure_kind round-trips (F136)"
+  },
+  "F137": {
+    "status": "PASS",
+    "note": "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
   }
 }

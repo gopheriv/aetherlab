@@ -132,13 +132,15 @@ def export_derivation_to_latex(
 
 def compile_latex_to_pdf(tex_path: Path) -> Path | None:
     """Compile a .tex file to PDF using pdflatex. Returns PDF path or None."""
+    from aetherlab.core.proc import subprocess_kwargs
+
     try:
         result = subprocess.run(
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
             capture_output=True,
             text=True,
             timeout=60,
-            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            **subprocess_kwargs(),
         )
         pdf_path = tex_path.with_suffix(".pdf")
         if pdf_path.exists():
