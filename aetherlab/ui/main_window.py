@@ -184,6 +184,28 @@ class SettingsDialog(QtWidgets.QDialog):
         web_hint.setWordWrap(True)
         form.addWidget(web_hint)
 
+        # ── Narration (narration↔visual sync) ──
+        form.addSpacing(4)
+        form.addWidget(self._section("NARRATION"))
+        self._narration_check = QtWidgets.QCheckBox(
+            "Add a voiceover fit to the rendered video"
+        )
+        self._narration_check.setChecked(getattr(settings, "narration_enabled", False))
+        self._narration_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        form.addWidget(self._narration_check)
+        self._tts_voice_edit = QtWidgets.QLineEdit(getattr(settings, "tts_voice", "") or "")
+        self._tts_voice_edit.setObjectName("MonoField")
+        self._tts_voice_edit.setPlaceholderText("edge-tts voice, e.g. en-US-AndrewMultilingualNeural")
+        form.addLayout(self._labeled("Voice", self._tts_voice_edit))
+        narr_hint = QtWidgets.QLabel(
+            "Narration is derived from the finished animation, then time-fit to "
+            "the video (whole-clip sync). Needs edge-tts; fail-soft — a problem "
+            "just keeps the silent render."
+        )
+        narr_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        narr_hint.setWordWrap(True)
+        form.addWidget(narr_hint)
+
         # ── Paths ──
         form.addSpacing(4)
         form.addWidget(self._section("PATHS"))
@@ -366,6 +388,8 @@ class SettingsDialog(QtWidgets.QDialog):
             "default_quality": quality_map.get(self._quality_combo.currentIndex(), "l"),
             "vision_model": self._vision_edit.text().strip() or None,
             "web_references": self._web_refs_check.isChecked(),
+            "narration_enabled": self._narration_check.isChecked(),
+            "tts_voice": self._tts_voice_edit.text().strip() or None,
         }
 
 
@@ -814,6 +838,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     "default_quality": vals["default_quality"],
                     "vision_model": vals["vision_model"],
                     "web_references": "1" if vals["web_references"] else "0",
+                    "narration_enabled": "1" if vals["narration_enabled"] else "0",
+                    "tts_voice": vals["tts_voice"],
                 }
             )
 
@@ -827,6 +853,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
                 vision_model=vals["vision_model"],
                 web_references=vals["web_references"],
+                narration_enabled=vals["narration_enabled"],
+                tts_voice=vals["tts_voice"] or self.settings.tts_voice,
             )
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")

@@ -40,7 +40,7 @@ hiddenimports = [
 # collect_all pulls each package's data files, compiled libs, and submodules.
 _COLLECT = (
     "manim", "manimpango", "skia_pathops", "moderngl", "moderngl_window",
-    "chromadb", "av", "cloup", "pygments", "imageio_ffmpeg",
+    "chromadb", "av", "cloup", "pygments", "imageio_ffmpeg", "edge_tts",
 )
 for package in _COLLECT:
     try:

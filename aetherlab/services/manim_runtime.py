@@ -490,6 +490,66 @@ class ManimRuntime:
                     )
                     break
 
+        # ── Narration↔visual sync (manim-bot decision) ───────────────────
+        # Derive a voiceover from the FINAL code and fit it to the rendered
+        # video (whole-clip sync). Fully optional and fail-soft: disabled, or
+        # missing edge-tts/ffmpeg, or any error → the silent render is kept.
+        if (
+            scene_bundle.status == "rendered"
+            and s is not None
+            and getattr(s, "narration_enabled", False)
+            and scene_bundle.video_path
+        ):
+            scene_bundle = await self._add_narration(scene_bundle, s, brief)
+
+        return scene_bundle
+
+    async def _add_narration(
+        self, scene_bundle: SceneBundle, s: "AppSettings", brief: str
+    ) -> SceneBundle:
+        """Synthesize a fit-to-video voiceover and swap it onto the bundle.
+
+        The silent render is preserved on silent_video_path; any failure leaves
+        the bundle exactly as it was (silent)."""
+        from aetherlab.services import voiceover
+
+        if not voiceover.narration_available():
+            scene_bundle.diagnostics.append(
+                "Narration enabled but edge-tts/ffmpeg unavailable; kept silent video."
+            )
+            return scene_bundle
+        try:
+            script = voiceover.storyboard_narration_script(scene_bundle.storyboard)
+            target = voiceover.storyboard_target_seconds(scene_bundle.storyboard)
+            narration = script
+            if s.openai_api_key:
+                try:
+                    narration = await SceneGenerator(s).narrate(
+                        brief or "physics animation", scene_bundle.code, script, target
+                    ) or script
+                except Exception as exc:  # noqa: BLE001
+                    scene_bundle.diagnostics.append(
+                        f"Narration script gen failed ({exc}); using storyboard lines."
+                    )
+            if not narration or not narration.strip():
+                scene_bundle.diagnostics.append("No narration text available; kept silent video.")
+                return scene_bundle
+            narrated = await voiceover.add_voiceover(
+                Path(scene_bundle.video_path),
+                narration,
+                Path(s.data_dir) / "narration",
+                voice=s.tts_voice,
+                rate=s.tts_rate,
+                fit_to_video=True,
+            )
+            if narrated:
+                scene_bundle.silent_video_path = scene_bundle.video_path
+                scene_bundle.video_path = str(narrated)
+                scene_bundle.diagnostics.append("Added fit-to-video narration.")
+            else:
+                scene_bundle.diagnostics.append("Narration synthesis failed; kept silent video.")
+        except Exception as exc:  # noqa: BLE001 — never break a good render
+            scene_bundle.diagnostics.append(f"Narration error ({exc}); kept silent video.")
         return scene_bundle
 
     def detect_engine(self) -> tuple[str, list[str]]:

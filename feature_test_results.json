@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=212569 + skip-existing"
+    "note": "URL fallback + free_disk_mb=212611 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_04m27r_d/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_1ahls9m3/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -546,5 +546,17 @@
   "F137": {
     "status": "PASS",
     "note": "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
+  },
+  "F138": {
+    "status": "PASS",
+    "note": "fit-to-video math + merge policy + fail-soft (avail=True) (F138)"
+  },
+  "F139": {
+    "status": "PASS",
+    "note": "narration derived from code+storyboard; wired + fail-soft (F139)"
+  },
+  "F140": {
+    "status": "PASS",
+    "note": "narration settings env/config + silent_video_path + dialog toggle (F140)"
   }
 }

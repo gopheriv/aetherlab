@@ -133,6 +133,9 @@ class SceneBundle:
     # spawn/""), set by the renderer so the UI and repair loop can react. Old
     # cache rows load as "".
     failure_kind: str = ""
+    # When narration is added, video_path points at the narrated mp4 and this
+    # keeps the original silent render as a fallback. Old cache rows load as "".
+    silent_video_path: str = ""
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -148,6 +151,7 @@ class SceneBundle:
             status=str(payload.get("status", "cached")),
             diagnostics=list(payload.get("diagnostics", [])),
             failure_kind=str(payload.get("failure_kind", "")),
+            silent_video_path=str(payload.get("silent_video_path", "")),
             cached=cached,
             video_path=str(payload.get("video_path", "")),
             storyboard=storyboard if isinstance(storyboard, dict) else None,

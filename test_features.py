@@ -2016,6 +2016,90 @@ def t_f137():
     return "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
 
 
+def t_f138():
+    # Narration sync engine (manim-bot decision): fit-to-video math + merge policy.
+    from aetherlab.services import voiceover as vo
+    assert vo._parse_rate("+8%") == 8 and vo._parse_rate("-20%") == -20 and vo._parse_rate(None) == 0
+    assert vo._format_rate(8) == "+8%" and vo._format_rate(-25) == "-25%"
+    # audio 20% too long → speak faster (ratio>1 raises the rate)
+    ratio, base = 1.20, 8
+    assert vo._format_rate(max(-40, min(80, base + round((ratio - 1) * 100)))) == "+28%"
+    # merge policy: audio>video pads (tpad), audio<=video copies without -shortest.
+    msrc = inspect.getsource(vo.merge)
+    assert "tpad" in msrc and "stop_mode=clone" in msrc, "long-audio path must pad video"
+    assert "no -shortest" in msrc, "short-audio path must keep full video (no -shortest)"
+    # fail-soft: missing video → None (no network needed)
+    got = asyncio.run(vo.add_voiceover(_TMP / "nope.mp4", "hi", _TMP / "narr"))
+    assert got is None
+    # empty narration → None
+    assert asyncio.run(vo.add_voiceover(_TMP / "nope.mp4", "", _TMP / "narr")) is None
+    return f"fit-to-video math + merge policy + fail-soft (avail={vo.narration_available()}) (F138)"
+
+
+def t_f139():
+    # Narration derivation from final code + storyboard; pipeline wiring + fail-soft.
+    from aetherlab.services import voiceover as vo
+    from aetherlab.services.scene_generator import SceneGenerator
+    sb = {"narration": ["Beat one.", "Beat two."],
+          "acts": [{"duration_s": 6}, {"duration_s": 8}, {"duration_s": 5}]}
+    assert vo.storyboard_narration_script(sb) == "Beat one. Beat two."
+    assert vo.storyboard_target_seconds(sb) == 19.0
+    assert vo.storyboard_narration_script(None) == "" and vo.storyboard_target_seconds({}) is None
+    # narrate() derives FROM the final code (references on-screen beats)
+    nsrc = inspect.getsource(SceneGenerator.narrate)
+    assert "Scene code" in nsrc and "in the order" in nsrc.lower()
+    # wired into the render pipeline, fail-soft
+    from aetherlab.services.manim_runtime import ManimRuntime
+    rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "_add_narration" in rr and "narration_enabled" in rr
+    an = inspect.getsource(ManimRuntime._add_narration)
+    assert "narration_available" in an and "silent_video_path" in an and "kept silent" in an
+    # disabled → the block is guarded; missing video path → kept silent (fast)
+    from dataclasses import replace
+    s_on = replace(_settings(), narration_enabled=True)
+    out = asyncio.run(ManimRuntime()._add_narration(
+        SceneBundle_(video_path="/no/such.mp4"), s_on, "brief"))
+    assert out.video_path == "/no/such.mp4"
+    return "narration derived from code+storyboard; wired + fail-soft (F139)"
+
+
+def SceneBundle_(**kw):
+    from aetherlab.core.models import SceneBundle
+    base = dict(class_name="X", code="c", engine="manim-community", status="rendered")
+    base.update(kw)
+    return SceneBundle(**base)
+
+
+def t_f140():
+    # Narration settings: env + app-config round-trip; silent_video_path persists.
+    import aetherlab.core.settings as S
+    saved = {k: os.environ.pop(k, None) for k in
+             ("AETHERLAB_NARRATION", "AETHERLAB_TTS_VOICE", "AETHERLAB_TTS_RATE")}
+    try:
+        os.environ["AETHERLAB_NARRATION"] = "1"
+        os.environ["AETHERLAB_TTS_VOICE"] = "en-GB-RyanNeural"
+        s = S.load_settings()
+        assert s.narration_enabled is True and s.tts_voice == "en-GB-RyanNeural" and s.tts_rate == "+8%"
+        del os.environ["AETHERLAB_NARRATION"]
+        assert S.load_settings().narration_enabled is False
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    from aetherlab.core.models import SceneBundle
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="rendered",
+        video_path="narrated.mp4", silent_video_path="silent.mp4").to_json())
+    assert sb.silent_video_path == "silent.mp4" and SceneBundle.from_json({}).silent_video_path == ""
+    # Settings dialog exposes the toggle
+    from aetherlab.ui.main_window import SettingsDialog
+    d = SettingsDialog(_settings())
+    assert hasattr(d, "_narration_check") and "narration_enabled" in d.get_settings()
+    d.close()
+    return "narration settings env/config + silent_video_path + dialog toggle (F140)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

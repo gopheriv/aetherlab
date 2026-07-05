@@ -34,6 +34,12 @@ class AppSettings:
     # local textbook library. Fail-soft and time-boxed; disable for offline use.
     web_references: bool = True
     web_ref_timeout: float = 8.0
+    # Narration (the narration↔visual sync feature): synthesize a voiceover fit
+    # to the rendered video. Fail-soft — off, or missing edge-tts/ffmpeg, keeps
+    # the silent render.
+    narration_enabled: bool = False
+    tts_voice: str = "en-US-AndrewMultilingualNeural"
+    tts_rate: str = "+8%"
     provider_source: str = "environment"
 
 
@@ -141,6 +147,11 @@ def load_settings() -> AppSettings:
         web_references=_as_bool(
             os.getenv("AETHERLAB_WEB_REFS"), app_cfg.get("web_references"), default=True
         ),
+        narration_enabled=_as_bool(
+            os.getenv("AETHERLAB_NARRATION"), app_cfg.get("narration_enabled"), default=False
+        ),
+        tts_voice=os.getenv("AETHERLAB_TTS_VOICE") or app_cfg.get("tts_voice") or "en-US-AndrewMultilingualNeural",
+        tts_rate=os.getenv("AETHERLAB_TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
         provider_source=source,
     )
 

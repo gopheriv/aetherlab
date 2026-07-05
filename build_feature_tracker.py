@@ -617,6 +617,18 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a student running the installer, generated scenes render from the packaged app.",
      "packaging/aetherlab.spec collect_all's the full Manim native ecosystem — manimpango (renders every Text/MarkupText — the missing piece that made frozen renders fail), skia_pathops, moderngl/moderngl_window, av, cloup — plus manim.plugins/CLI hidden imports and metadata, so `aetherlab --manim render` works in a frozen dist. Manim 0.20 encodes via PyAV, so the bundle isn't ffmpeg-CLI-dependent. VERIFIED: the frozen build.py smoke rendered a video inside the bundle ('Scene status: rendered').",
      "packaging/aetherlab.spec / __main__.py", "headless", "Documented", ""),
+    ("F138", "Narration", "Voiceover engine (fit-to-video whole-clip sync)",
+     "As a user, the generated video can carry a voiceover that stays in step with the animation.",
+     "services/voiceover.py (ported from manim-bot's decision): edge-tts synthesize → measure video vs audio (PyAV, no ffprobe) → if the durations diverge >10%/15%, re-synthesize ONCE at an adjusted speaking rate → merge with imageio-ffmpeg's bundled binary. Audio longer than video pads the last frame (tpad); audio shorter keeps the FULL video (no -shortest) so closing beats survive. Cross-platform via core.proc.subprocess_kwargs; fully fail-soft (no edge-tts/ffmpeg → None, silent render kept).",
+     "services/voiceover.py", "headless", "Documented", ""),
+    ("F139", "Narration", "Narration derived from the final animation",
+     "As a user, the spoken narration describes what's actually on screen, in order.",
+     "SceneGenerator.narrate() writes a flowing voiceover FROM the final scene code (seeded by the storyboard's per-beat lines, length-budgeted to the storyboard's act durations) — not the impossible per-beat sync. render_scene_with_repair calls _add_narration after a successful render when settings.narration_enabled: derive script → add_voiceover(fit_to_video) → swap video_path to the narrated mp4, keeping the silent render on silent_video_path. Any failure keeps the silent video.",
+     "services/scene_generator.py / manim_runtime.py / core/models.py", "headless", "Documented", ""),
+    ("F140", "Narration", "Narration settings + toggle",
+     "As a user, I turn narration on/off and pick a voice; it persists.",
+     "AppSettings.narration_enabled/tts_voice/tts_rate resolved from env (AETHERLAB_NARRATION/TTS_VOICE/TTS_RATE) then app-config (default off). SettingsDialog gains a NARRATION section (enable checkbox + voice field) persisted via save_app_config. Old cache rows keep working (silent_video_path defaults to '').",
+     "core/settings.py / ui/main_window.py / core/models.py", "headless", "Documented", ""),
 ]
 # fmt: on
 

@@ -35,6 +35,12 @@ rag = [
     "chromadb>=0.4.0",
     "PyMuPDF>=1.23.0",
 ]
+narration = [
+    # Voiceover: edge-tts synthesizes speech; imageio-ffmpeg ships a portable
+    # ffmpeg binary so no system install is needed (and it bundles cleanly).
+    "edge-tts>=6.1.0",
+    "imageio-ffmpeg>=0.4.9",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",

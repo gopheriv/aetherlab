@@ -546,6 +546,52 @@ class SceneGenerator:
             raise ValueError("Revise reply was truncated at the max_tokens limit.")
         return self._extract_code(choice.message.content or "", class_name)
 
+    async def narrate(
+        self,
+        prompt: str,
+        code: str,
+        storyboard_script: str = "",
+        target_seconds: float | None = None,
+    ) -> str:
+        """Derive a flowing voiceover script FROM the final scene code.
+
+        Following the manim-bot decision, narration is derived from the code
+        that actually renders (so it tracks the on-screen beats in order), seeded
+        by the storyboard's per-beat lines when available. The audio is later fit
+        to the video length, so we target a word budget proportional to duration.
+        """
+        code_ctx = code if len(code) <= 6000 else code[:4000] + "\n# … middle omitted …\n" + code[-2000:]
+        length_rule = ""
+        try:
+            secs = float(target_seconds) if target_seconds else None
+        except (TypeError, ValueError):
+            secs = None
+        if secs and secs > 0:
+            lo, hi = int(secs * 1.4), int(secs * 2.0)
+            length_rule = (
+                f" The video is about {int(secs)}s, so write roughly {lo}-{hi} words "
+                "(~1.5-2 words/sec) — narrate every beat with no long silences."
+            )
+        seed = f"\n\nPlanned per-beat narration (keep its order and meaning):\n{storyboard_script}" if storyboard_script else ""
+        system = (
+            "You are a physics narrator. Given the Manim scene code that produces "
+            "an animation, write a single natural, flowing voiceover that narrates "
+            "the visual events IN THE ORDER they appear on screen. Plain spoken "
+            "prose only — no stage directions, no markdown, no lists, no LaTeX." + length_rule
+        )
+        user = f"## Problem\n{prompt}\n\n## Scene code\n```python\n{code_ctx}\n```{seed}\n\nWrite the voiceover now."
+        client = self._ensure_client()
+        response = await client.chat.completions.create(
+            model=self.settings.llm_model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.5,
+            max_tokens=1200,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        # Strip any accidental markdown fences/headers a model may add.
+        text = re.sub(r"```[a-z]*", "", text).replace("`", "").strip()
+        return text
+
     def _extract_code(self, content: str, class_name: str) -> str:
         """Strip reasoning blocks and markdown fences, validate the code."""
         code = content.strip()
