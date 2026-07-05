@@ -12,7 +12,7 @@ narrated, animated explanation you can actually learn from.</b></p>
 AetherLab is a desktop physics workbench for students, educators, and the
 curious. It works two ways from the same prompt bar:
 
-### ▶ Solve — one problem, visualized
+### Solve — one problem, visualized
 Type a problem, press **Run**, and watch a four-stage pipeline:
 
 | Stage | What you get |
@@ -25,7 +25,7 @@ Type a problem, press **Run**, and watch a four-stage pipeline:
 Plus a **live parametric canvas**: drag sliders (damping, stiffness, gravity…)
 and watch the solution curves respond in real time.
 
-### 🎓 Learn — a whole topic, taught
+### Learn — a whole topic, taught
 Type a *topic*, press **Learn**, and AetherLab builds a **narrated,
 multi-chapter video lesson** — hook → intuition → the math, built up → worked
 example → recap. The Lesson page is a self-contained classroom:
