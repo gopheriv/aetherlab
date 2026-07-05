@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=213833 + skip-existing"
+    "note": "URL fallback + free_disk_mb=212971 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_5eciax8v/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_ycy4svsc/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -525,6 +525,6 @@
   },
   "F132": {
     "status": "PASS",
-    "note": "LaTeX-aware prompts (latex=True); packaging+CI+docs present (F132)"
+    "note": "LaTeX-aware prompts (latex=True); frozen manim relay + strict gate (F132)"
   }
 }

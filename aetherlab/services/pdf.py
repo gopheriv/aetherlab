@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -132,7 +133,7 @@ def export_derivation_to_latex(
 def compile_latex_to_pdf(tex_path: Path) -> Path | None:
     """Compile a .tex file to PDF using pdflatex. Returns PDF path or None."""
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
             capture_output=True,
             text=True,

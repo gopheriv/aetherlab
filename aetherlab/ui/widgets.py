@@ -7,9 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 from aetherlab.core.models import RagResult, SceneBundle, SolverResult
-from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state
-from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
-from aetherlab.ui.theme import current_theme
 from aetherlab.ui import icons
 from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
@@ -31,7 +28,6 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         self._angle = 0.0
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
         self.setMinimumSize(300, 200)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
@@ -53,16 +49,12 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-        theme = current_theme()
-        rect = self.rect()
-        painter.fillRect(rect, QtGui.QColor(theme.bg))
         rect = self.rect()
         painter.fillRect(rect, QtGui.QColor("#0A0A0F"))
 
         cx, cy = rect.width() // 2, rect.height() // 2
 
         # Subtle grid
-        grid_pen = QtGui.QPen(QtGui.QColor(theme.surface), 1)
         grid_pen = QtGui.QPen(QtGui.QColor("#13131A"), 1)
         painter.setPen(grid_pen)
         for x in range(0, rect.width(), 48):
@@ -71,7 +63,6 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
             painter.drawLine(0, y, rect.width(), y)
 
         # Crosshair axes
-        accent_pen = QtGui.QPen(QtGui.QColor(theme.accent_soft), 1)
         accent_pen = QtGui.QPen(QtGui.QColor("#164E63"), 1)
         accent_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
         painter.setPen(accent_pen)
@@ -81,21 +72,18 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         # Concentric rings
         for i, radius in enumerate([40, 80, 120, 160, 200]):
             opacity = max(0.08, 0.25 - i * 0.04)
-            color = QtGui.QColor(theme.accent)
             color = QtGui.QColor("#06B6D4")
             color.setAlphaF(opacity)
             painter.setPen(QtGui.QPen(color, 1))
             painter.drawEllipse(QtCore.QPoint(cx, cy), radius, radius)
 
         # Primary rotating arc
-        arc_pen = QtGui.QPen(QtGui.QColor(theme.accent), 3)
         arc_pen = QtGui.QPen(QtGui.QColor("#06B6D4"), 3)
         arc_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen)
         painter.drawArc(cx - 35, cy - 35, 70, 70, int(self._angle * 16), 100 * 16)
 
         # Counter-rotating secondary arc
-        arc_pen2 = QtGui.QPen(QtGui.QColor(theme.success), 2)
         arc_pen2 = QtGui.QPen(QtGui.QColor("#10B981"), 2)
         arc_pen2.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen2)
@@ -103,9 +91,6 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Orbiting dots
         for radius, speed, color_hex, dot_r in [
-            (80, 1.0, theme.accent, 4),
-            (120, -0.7, theme.success, 3),
-            (160, 0.5, theme.curve3, 3),
             (80, 1.0, "#06B6D4", 4),
             (120, -0.7, "#10B981", 3),
             (160, 0.5, "#8B5CF6", 3),
@@ -119,10 +104,6 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Center dot with glow
         glow = QtGui.QRadialGradient(float(cx), float(cy), 16)
-        glow.setColorAt(0, QtGui.QColor(theme.accent + "40"))
-        glow.setColorAt(1, QtGui.QColor("#00000000"))
-        painter.fillRect(cx - 16, cy - 16, 32, 32, glow)
-        painter.setBrush(QtGui.QColor(theme.accent))
         glow.setColorAt(0, QtGui.QColor("#06B6D440"))
         glow.setColorAt(1, QtGui.QColor("#00000000"))
         painter.fillRect(cx - 16, cy - 16, 32, 32, glow)
@@ -136,8 +117,6 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 # ────────────────────────────────────────────────────────────────────────────
 
 
-class SidebarNav(QtWidgets.QWidget):
-    """Vertical sidebar navigation with icon+label buttons."""
 class _NavRailButton(QtWidgets.QToolButton):
     """Icon-over-label rail item with a painted cyan left-edge indicator."""
 
@@ -189,11 +168,6 @@ class SidebarNav(QtWidgets.QWidget):
     item_selected = QtCore.pyqtSignal(int)
 
     _ITEMS = [
-        ("\U0001f4d0", "Solve", "Analytical derivation"),
-        ("\U0001f4da", "Refs", "Textbook references"),
-        ("\U0001f3ac", "Scene", "Visual sandbox"),
-        ("\u2699\ufe0f", "Params", "Parameter control"),
-        ("\U0001f4dc", "History", "Past pipeline runs"),
         ("sigma", "Solve", "Analytical derivation"),
         ("book-open", "Refs", "Library and references"),
         ("clapperboard", "Scene", "Visual sandbox"),
@@ -203,45 +177,6 @@ class SidebarNav(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("Sidebar")
-        self.setFixedWidth(160)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(8, 16, 8, 16)
-        layout.setSpacing(4)
-
-        # Logo
-        logo = QtWidgets.QLabel("AetherLab")
-        logo.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        logo.setObjectName("SidebarLogo")
-        layout.addWidget(logo)
-
-        # Separator
-        sep = QtWidgets.QFrame()
-        sep.setFixedHeight(1)
-        sep.setObjectName("SidebarSep")
-        layout.addWidget(sep)
-
-        layout.addSpacing(8)
-
-        # Nav buttons
-        self._buttons: list[QtWidgets.QPushButton] = []
-        for idx, (icon, label, _tooltip) in enumerate(self._ITEMS):
-            btn = QtWidgets.QPushButton(f"  {icon}  {label}")
-            btn.setObjectName("SidebarItem")
-            btn.setCheckable(True)
-            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            btn.setToolTip(_tooltip)
-            btn.clicked.connect(lambda checked, i=idx: self._on_click(i))
-            self._buttons.append(btn)
-            layout.addWidget(btn)
-
-        layout.addStretch()
-
-        # Select first by default
-        if self._buttons:
-            self._buttons[0].setChecked(True)
-
         self.setObjectName("NavRail")
         self.setFixedWidth(56)  # v2: 56px rail
 
@@ -300,79 +235,6 @@ class SidebarNav(QtWidgets.QWidget):
 
 
 class PipelineStepper(QtWidgets.QWidget):
-    """Horizontal 4-stage pipeline progress indicator."""
-
-    STAGES = ["Solve", "RAG", "Scene", "Render"]
-
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("PipelineStepper")
-        self.setFixedHeight(64)
-
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(20, 8, 20, 8)
-        layout.setSpacing(0)
-
-        self._stage_labels: list[QtWidgets.QLabel] = []
-        self._stage_dots: list[QtWidgets.QLabel] = []
-
-        for i, name in enumerate(self.STAGES):
-            # Dot + label column
-            col = QtWidgets.QWidget()
-            col_layout = QtWidgets.QVBoxLayout(col)
-            col_layout.setContentsMargins(0, 0, 0, 0)
-            col_layout.setSpacing(4)
-            col_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-            dot = QtWidgets.QLabel("\u25cf")
-            dot.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            dot.setObjectName("StepPending")
-            dot.setStyleSheet("font-size: 16px;")
-            self._stage_dots.append(dot)
-
-            label = QtWidgets.QLabel(name)
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            label.setObjectName("StepPending")
-            label.setStyleSheet("font-size: 11px; font-weight: 600;")
-            self._stage_labels.append(label)
-
-            col_layout.addWidget(dot)
-            col_layout.addWidget(label)
-
-            layout.addWidget(col, 1)
-
-            # Connector line (except last)
-            if i < len(self.STAGES) - 1:
-                connector = QtWidgets.QFrame()
-                connector.setFixedHeight(2)
-                connector.setObjectName("StepConnector")
-                layout.addWidget(connector, 2)
-
-        self._current_stage = -1
-
-    def set_stage(self, stage: int, status: str = "active") -> None:
-        """Update pipeline stage. status: 'active', 'complete', 'error'."""
-        self._current_stage = stage
-        for i in range(len(self.STAGES)):
-            if i < stage:
-                self._stage_dots[i].setObjectName("StepComplete")
-                self._stage_labels[i].setObjectName("StepComplete")
-            elif i == stage:
-                obj_name = "StepError" if status == "error" else "StepActive"
-                self._stage_dots[i].setObjectName(obj_name)
-                self._stage_labels[i].setObjectName(obj_name)
-            else:
-                self._stage_dots[i].setObjectName("StepPending")
-                self._stage_labels[i].setObjectName("StepPending")
-
-            # Force style refresh
-            self._stage_dots[i].style().unpolish(self._stage_dots[i])
-            self._stage_dots[i].style().polish(self._stage_dots[i])
-            self._stage_labels[i].style().unpolish(self._stage_labels[i])
-            self._stage_labels[i].style().polish(self._stage_labels[i])
-
-    def reset(self) -> None:
-        self.set_stage(-1)
     """Pipeline timeline \u2014 the design's hero component.
 
     Design: components/pipeline/PipelineTimeline.jsx. 32px circular nodes with
@@ -614,7 +476,6 @@ class HistoryPanel(QtWidgets.QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        title = QtWidgets.QLabel("\U0001f4dc Pipeline History")
         title = QtWidgets.QLabel("History")
         title.setObjectName("PanelTitle")
         layout.addWidget(title)
@@ -629,14 +490,11 @@ class HistoryPanel(QtWidgets.QWidget):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
 
         self._count_label = QtWidgets.QLabel("0 entries")
-        self._count_label.setObjectName("MutedLabel")
         self._count_label.setStyleSheet("color: #64748B; font-size: 11px;")
         bottom_layout.addWidget(self._count_label)
         bottom_layout.addStretch()
 
         clear_btn = QtWidgets.QPushButton("Clear")
-        clear_btn.setFixedWidth(80)
-        clear_btn.setObjectName("GhostButton")
         clear_btn.setObjectName("GhostButton")
         clear_btn.setIcon(icons.icon("trash", 13, "#94A3B8"))
         clear_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -653,14 +511,6 @@ class HistoryPanel(QtWidgets.QWidget):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         import sqlite3
         conn = sqlite3.connect(str(db_path))
-        conn.execute(self._HISTORY_TABLE_SQL)
-        conn.commit()
-        # Load last 100 entries
-        rows = conn.execute(
-            "SELECT prompt, cache_key, scene_status, num_refs, created_at "
-            "FROM history ORDER BY id DESC LIMIT 100"
-        ).fetchall()
-        conn.close()
         try:
             conn.execute(self._HISTORY_TABLE_SQL)
             conn.commit()
@@ -681,26 +531,6 @@ class HistoryPanel(QtWidgets.QWidget):
         if self._db_path:
             import sqlite3
             conn = sqlite3.connect(str(self._db_path))
-            conn.execute(self._HISTORY_TABLE_SQL)
-            conn.execute(
-                "INSERT INTO history (prompt, cache_key, scene_status, num_refs, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (prompt, cache_key, scene_status, num_refs, datetime.now().isoformat()),
-            )
-            conn.commit()
-            conn.close()
-
-    def _add_entry_ui(self, prompt: str, cache_key: str, scene_status: str,
-                      num_refs: int, ts: str) -> None:
-        # Normalize timestamp — strip date part if ISO format
-        if "T" in ts:
-            ts = ts.split("T")[1][:8]
-        status_icon = "\u2705" if scene_status in ("rendered", "compiled") else "\u26a0\ufe0f"
-        text = f"{status_icon}  {ts}  [{cache_key[:12]}]  {prompt[:80]}"
-        item = QtWidgets.QListWidgetItem(text)
-        item.setData(QtCore.Qt.ItemDataRole.UserRole, prompt)
-        item.setToolTip(prompt)
-        self._list.insertItem(0, item)
             try:
                 conn.execute(self._HISTORY_TABLE_SQL)
                 conn.execute(
@@ -765,9 +595,6 @@ class HistoryPanel(QtWidgets.QWidget):
         if self._db_path:
             import sqlite3
             conn = sqlite3.connect(str(self._db_path))
-            conn.execute("DELETE FROM history")
-            conn.commit()
-            conn.close()
             try:
                 conn.execute("DELETE FROM history")
                 conn.commit()
@@ -799,7 +626,6 @@ EXAMPLE_PROMPTS = [
 
 
 class CommandBar(QtWidgets.QWidget):
-    """Single-line command input with example prompts, quality selector, run/cancel (#2)."""
     """Command bar (design: components/forms/CommandBar.jsx).
 
     A raised shell containing: Examples popup (lightbulb + chevron), hairline
@@ -810,30 +636,6 @@ class CommandBar(QtWidgets.QWidget):
     submitted = QtCore.pyqtSignal(str)
     cancel_requested = QtCore.pyqtSignal()
 
-    _QUALITIES = {"480p": "l", "720p": "m", "1080p": "h"}
-
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 16)
-        layout.setSpacing(12)
-
-        # Example prompts dropdown
-        self._examples = QtWidgets.QComboBox()
-        self._examples.setObjectName("ExamplesCombo")
-        self._examples.addItem("\U0001f4cb Examples\u2026")
-        for p in EXAMPLE_PROMPTS:
-            label = p[:48] + "\u2026" if len(p) > 48 else p
-            self._examples.addItem(label)
-        self._examples.setFixedWidth(180)
-        self._examples.activated.connect(self._on_example_selected)
-        layout.addWidget(self._examples)
-
-        # Input field
-        self.input = QtWidgets.QLineEdit()
-        self.input.setObjectName("CommandBar")
-        self.input.setPlaceholderText(
-            "\u2318  Enter a physics problem, derivation, or simulation request\u2026"
     _QUALITIES = {"Draft": "l", "Standard": "m", "High": "h"}
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -880,13 +682,6 @@ class CommandBar(QtWidgets.QWidget):
         self._quality.setObjectName("QualityCombo")
         self._quality.addItems(list(self._QUALITIES.keys()))
         self._quality.setCurrentIndex(0)
-        self._quality.setFixedWidth(72)
-        self._quality.setToolTip("Render quality")
-        layout.addWidget(self._quality)
-
-        # Run button
-        self.run_button = QtWidgets.QPushButton("\u25b6  Run")
-        self.run_button.setObjectName("RunButton")
         self._quality.setFixedWidth(104)
         self._quality.setToolTip(
             "Render quality — Draft 480p / Standard 720p / High 1080p"
@@ -901,9 +696,6 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.clicked.connect(self._submit)
         layout.addWidget(self.run_button)
 
-        # Cancel button (#2) — hidden by default
-        self.cancel_button = QtWidgets.QPushButton("\u2715  Cancel")
-        self.cancel_button.setObjectName("CancelButton")
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.cancel_button.setObjectName("CancelButton")
         self.cancel_button.setIcon(icons.icon("square", 14, "#F43F5E"))
@@ -951,36 +743,6 @@ class CommandBar(QtWidgets.QWidget):
         label = self._quality.currentText()
         return self._QUALITIES.get(label, "l")
 
-    def set_busy(self, busy: bool) -> None:
-        self.run_button.setDisabled(busy)
-        self.run_button.setText("\u23f3  Running\u2026" if busy else "\u25b6  Run")
-        self.input.setDisabled(busy)
-        self.cancel_button.setVisible(busy)
-        # Restore cancel button state (may have been put in 'Cancelling' mode).
-        self.cancel_button.setEnabled(True)
-        self.cancel_button.setText("\u2715  Cancel")
-
-    def set_cancelling(self) -> None:
-        """Cancel requested: keep Run disabled until the worker actually finishes.
-
-        Re-enabling Run immediately would mislead - the pipeline thread may
-        still be finishing its current stage. The worker's finished signal
-        calls set_busy(False), which restores everything.
-        """
-        self.cancel_button.setDisabled(True)
-        self.cancel_button.setText("\u23f3  Cancelling\u2026")
-
-    def _on_example_selected(self, index: int) -> None:
-        if index > 0:
-            self.input.setText(EXAMPLE_PROMPTS[index - 1])
-            self.input.setFocus()
-        self._examples.blockSignals(True)
-        self._examples.setCurrentIndex(0)
-        self._examples.blockSignals(False)
-
-    def _submit(self) -> None:
-        prompt = self.input.text().strip()
-        if prompt and self.run_button.isEnabled():
     def set_quality(self, flag: str) -> None:
         """Select quality by Manim flag (used by the Settings default)."""
         for label, value in self._QUALITIES.items():
@@ -1014,9 +776,6 @@ class ParameterDock(QtWidgets.QWidget):
         super().__init__(parent)
         # (slider, spinbox, value_label, original_value)
         self._sliders: dict[str, tuple[QtWidgets.QSlider, QtWidgets.QDoubleSpinBox, QtWidgets.QLabel, float]] = {}
-        # Per-parameter (lo, hi) slider/spinbox range. lo is negative when the
-        # original value is negative so e.g. charge=-1.0 is representable (#F62).
-        self._ranges: dict[str, tuple[float, float]] = {}
         self._spans: dict[str, float] = {}
         self._collapsed = False
 
@@ -1030,7 +789,6 @@ class ParameterDock(QtWidgets.QWidget):
         header_layout.setSpacing(8)
 
         self._toggle_btn = QtWidgets.QPushButton("\u25bc  Parameters")
-        self._toggle_btn.setObjectName("DockToggle")
         self._toggle_btn.setStyleSheet(
             "background: transparent; border: none; color: #64748B; "
             "font-size: 11px; font-weight: 700; text-transform: uppercase; "
@@ -1064,22 +822,10 @@ class ParameterDock(QtWidgets.QWidget):
     def _span_for(self, value: float) -> float:
         return max(abs(float(value)) * 2.0, 1.0)
 
-    def _range_for(self, value: float) -> tuple[float, float]:
-        """Slider/spinbox range: [0, span] for non-negative values, symmetric
-        [-span, span] when the value is negative so it stays representable (#F62)."""
-        span = self._span_for(value)
-        return (-span if value < 0 else 0.0, span)
-
     def set_variables(self, variables: dict[str, float]) -> None:
         self._clear()
         for name, value in sorted(variables.items()):
             value = float(value)
-            lo, hi = self._range_for(value)
-            self._ranges[name] = (lo, hi)
-
-            slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-            slider.setRange(0, self._SLIDER_TICKS)
-            slider.setValue(self._value_to_tick(value, lo, hi))
             span = self._span_for(value)
             self._spans[name] = span
 
@@ -1090,14 +836,6 @@ class ParameterDock(QtWidgets.QWidget):
                 lambda raw, key=name: self._on_slider_change(key, raw)
             )
 
-            # Spin box for precise numeric input (#7)
-            spinbox = QtWidgets.QDoubleSpinBox()
-            spinbox.setRange(lo, hi)
-            spinbox.setValue(value)
-            spinbox.setDecimals(4)
-            spinbox.setSingleStep((hi - lo) / 100)
-            spinbox.setFixedWidth(90)
-            spinbox.setObjectName("ThemedSpinBox")
             # Spin box for precise numeric input (#7) — allow negative values
             spinbox = QtWidgets.QDoubleSpinBox()
             spinbox.setRange(-span, span)
@@ -1119,7 +857,6 @@ class ParameterDock(QtWidgets.QWidget):
             reset_btn = QtWidgets.QPushButton("\u21ba")
             reset_btn.setFixedWidth(28)
             reset_btn.setToolTip(f"Reset {name} to {value:g}")
-            reset_btn.setObjectName("IconGhostButton")
             reset_btn.setStyleSheet(
                 "background: transparent; border: 1px solid #334155; border-radius: 4px; "
                 "color: #64748B; font-size: 14px; padding: 2px;"
@@ -1158,8 +895,6 @@ class ParameterDock(QtWidgets.QWidget):
         return label
 
     def _on_slider_change(self, name: str, raw: int) -> None:
-        lo, hi = self._ranges.get(name, (0.0, 1.0))
-        value = lo + raw / self._SLIDER_TICKS * (hi - lo)
         span = self._spans.get(name, 1.0)
         value = (raw / self._SLIDER_TICKS) * 2 * span - span  # map [0,1000] to [-span, +span]
         if name in self._sliders:
@@ -1169,24 +904,6 @@ class ParameterDock(QtWidgets.QWidget):
             spinbox.blockSignals(False)
         self.parameter_changed.emit(name, value)
 
-    def _grow_range(self, name: str, value: float) -> tuple[float, float]:
-        """Expand the stored range so ``value`` fits; sync the spinbox limits."""
-        lo, hi = self._ranges.get(name, self._range_for(value))
-        if value > hi or value < lo:
-            span = self._span_for(value)
-            lo = min(lo, -span if value < 0 else lo)
-            hi = max(hi, span)
-            self._ranges[name] = (lo, hi)
-            if name in self._sliders:
-                self._sliders[name][1].setRange(lo, hi)
-        return self._ranges.get(name, (lo, hi))
-
-    def _on_spinbox_change(self, name: str, value: float) -> None:
-        if name in self._sliders:
-            slider, _, _, _ = self._sliders[name]
-            lo, hi = self._grow_range(name, value)
-            slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, lo, hi))
     def _on_spinbox_change(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, _, _, _ = self._sliders[name]
@@ -1204,21 +921,11 @@ class ParameterDock(QtWidgets.QWidget):
     def _reset_param(self, name: str, original_value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            lo, hi = self._ranges.get(name, self._range_for(original_value))
             span = self._spans.get(name, self._span_for(original_value))
             spinbox.blockSignals(True)
             spinbox.setValue(original_value)
             spinbox.blockSignals(False)
             slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(original_value, lo, hi))
-            slider.blockSignals(False)
-            self.parameter_changed.emit(name, original_value)
-
-    def _value_to_tick(self, value: float, lo: float, hi: float) -> int:
-        if hi <= lo:
-            return 0
-        tick = int((value - lo) / (hi - lo) * self._SLIDER_TICKS)
-        return max(0, min(self._SLIDER_TICKS, tick))
             slider.setValue(self._value_to_tick(original_value, span))
             slider.blockSignals(False)
             self.parameter_changed.emit(name, original_value)
@@ -1231,9 +938,6 @@ class ParameterDock(QtWidgets.QWidget):
     def update_variable(self, name: str, value: float) -> None:
         if name in self._sliders:
             slider, spinbox, _, _ = self._sliders[name]
-            lo, hi = self._grow_range(name, value)
-            slider.blockSignals(True)
-            slider.setValue(self._value_to_tick(value, lo, hi))
             span = self._spans.get(name, self._span_for(value))
             if abs(value) > span:
                 span = self._span_for(value)
@@ -1250,7 +954,6 @@ class ParameterDock(QtWidgets.QWidget):
         while self._container_layout.rowCount():
             self._container_layout.removeRow(0)
         self._sliders.clear()
-        self._ranges.clear()
         self._spans.clear()
 
 
@@ -1276,13 +979,6 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         self._arrow = QtWidgets.QLabel("\u25b6")
         self._arrow.setFixedWidth(14)
-        self._arrow.setStyleSheet(
-            f"color: {current_theme().text_faint}; font-size: 10px;"
-        )
-        header_layout.addWidget(self._arrow)
-
-        step_num = QtWidgets.QLabel(f"Step {index}")
-        step_num.setObjectName("StepNumLabel")
         self._arrow.setStyleSheet("color: #475569; font-size: 10px;")
         header_layout.addWidget(self._arrow)
 
@@ -1295,13 +991,6 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         preview = text[:60] + "\u2026" if len(text) > 60 else text
         preview_label = QtWidgets.QLabel(preview)
-        preview_label.setObjectName("DimLabel")
-        header_layout.addWidget(preview_label, 1)
-
-        copy_btn = QtWidgets.QPushButton("\U0001f4cb")
-        copy_btn.setFixedWidth(28)
-        copy_btn.setToolTip("Copy step")
-        copy_btn.setObjectName("MiniIconButton")
         preview_label.setStyleSheet("color: #94A3B8; font-size: 11px;")
         header_layout.addWidget(preview_label, 1)
 
@@ -1318,7 +1007,6 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         self._body = QtWidgets.QLabel(text)
         self._body.setWordWrap(True)
-        self._body.setObjectName("StepBody")
         self._body.setStyleSheet(
             "color: #E2E8F0; font-size: 12px; padding: 8px 8px 8px 28px; "
             "background-color: #0F0F17; border-radius: 6px; margin-top: 4px;"
@@ -1336,9 +1024,6 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         self._expanded = not self._expanded
         self._body.setVisible(self._expanded)
         self._arrow.setText("\u25bc" if self._expanded else "\u25b6")
-        theme = current_theme()
-        color = theme.accent if self._expanded else theme.text_faint
-        self._arrow.setStyleSheet(f"color: {color}; font-size: 10px;")
         self._arrow.setStyleSheet(
             f"color: {'#06B6D4' if self._expanded else '#475569'}; font-size: 10px;"
         )
@@ -1356,54 +1041,6 @@ def _copy_to_clipboard(text: str) -> None:
 
 
 class AnalysisPanel(QtWidgets.QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        title = QtWidgets.QLabel("\U0001f4d0 Analytical Core")
-        title.setObjectName("PanelTitle")
-        layout.addWidget(title)
-
-        # Summary card with copy button (#3)
-        self._summary_frame = QtWidgets.QFrame()
-        self._summary_frame.setObjectName("CardFrame")
-        summary_layout = QtWidgets.QVBoxLayout(self._summary_frame)
-        summary_layout.setContentsMargins(14, 10, 14, 10)
-        summary_layout.setSpacing(6)
-
-        summary_header = QtWidgets.QWidget()
-        sh_layout = QtWidgets.QHBoxLayout(summary_header)
-        sh_layout.setContentsMargins(0, 0, 0, 0)
-        sh_label = QtWidgets.QLabel("Derivation")
-        sh_label.setObjectName("SectionTitle")
-        sh_layout.addWidget(sh_label)
-        sh_layout.addStretch()
-        copy_btn = QtWidgets.QPushButton("\U0001f4cb Copy")
-        copy_btn.setFixedHeight(24)
-        copy_btn.setObjectName("GhostButton")
-        copy_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        copy_btn.clicked.connect(lambda: _copy_to_clipboard(self.summary.toPlainText()))
-        sh_layout.addWidget(copy_btn)
-        summary_layout.addWidget(summary_header)
-
-        self.summary = QtWidgets.QPlainTextEdit()
-        self.summary.setReadOnly(True)
-        self.summary.setMinimumHeight(60)
-        summary_layout.addWidget(self.summary)
-
-        # Steps card with collapsible steps (#9)
-        self._steps_frame = QtWidgets.QFrame()
-        self._steps_frame.setObjectName("CardFrame")
-        steps_layout = QtWidgets.QVBoxLayout(self._steps_frame)
-        steps_layout.setContentsMargins(14, 10, 14, 10)
-        steps_layout.setSpacing(6)
-
-        steps_header = QtWidgets.QWidget()
-        sth_layout = QtWidgets.QHBoxLayout(steps_header)
-        sth_layout.setContentsMargins(0, 0, 0, 0)
-        sth_label = QtWidgets.QLabel("Steps")
     """Derivation block (design: components/content/DerivationBlock.jsx).
 
     Card with a cyan mono summary banner, violet keyword chips, collapsible
@@ -1453,16 +1090,10 @@ class AnalysisPanel(QtWidgets.QWidget):
         sth_layout.addWidget(sth_label)
         sth_layout.addStretch()
         self._expand_all_btn = QtWidgets.QPushButton("Expand all")
-        self._expand_all_btn.setFixedHeight(24)
         self._expand_all_btn.setObjectName("GhostButton")
         self._expand_all_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._expand_all_btn.clicked.connect(self._toggle_all_steps)
         sth_layout.addWidget(self._expand_all_btn)
-        steps_layout.addWidget(steps_header)
-
-        self._steps_scroll = QtWidgets.QScrollArea()
-        self._steps_scroll.setWidgetResizable(True)
-        self._steps_scroll.setMinimumHeight(100)
         card_layout.addWidget(steps_header)
 
         # Collapsible steps in a scroll area
@@ -1478,22 +1109,6 @@ class AnalysisPanel(QtWidgets.QWidget):
         self._steps_vbox.setSpacing(4)
         self._steps_vbox.addStretch()
         self._steps_scroll.setWidget(self._steps_container)
-        steps_layout.addWidget(self._steps_scroll)
-
-        # Empty state (#12)
-        self._empty_label = QtWidgets.QLabel(
-            "\U0001f52c  Solve a problem to see the analytical derivation and step-by-step breakdown."
-        )
-        self._empty_label.setWordWrap(True)
-        self._empty_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setObjectName("EmptyStateLabel")
-        steps_layout.addWidget(self._empty_label)
-
-        layout.addWidget(self._summary_frame, 2)
-        layout.addWidget(self._steps_frame, 3)
-
-        self._step_widgets: list[_CollapsibleStepWidget] = []
-        self._all_expanded = False
         card_layout.addWidget(self._steps_scroll, 1)
 
         # Empty state
@@ -1550,13 +1165,6 @@ class AnalysisPanel(QtWidgets.QWidget):
         for w in self._step_widgets:
             if w._expanded != self._all_expanded:
                 w._toggle()
-        self._expand_all_btn.setText("Collapse all" if self._all_expanded else "Expand all")
-
-    def set_solver_result(self, solver: SolverResult) -> None:
-        cache_note = " [cache]" if solver.cached else ""
-        self.summary.setPlainText(f"{solver.summary}{cache_note}")
-        self._empty_label.hide()
-
         self._expand_all_btn.setText(
             "Collapse all" if self._all_expanded else "Expand all"
         )
@@ -1618,17 +1226,6 @@ class AnalysisPanel(QtWidgets.QWidget):
 
 
 class _RagHitCard(QtWidgets.QFrame):
-    """Single RAG hit card with source, score, excerpt, and copy button (#10)."""
-
-    def __init__(self, source: str, page: int | None, score: float, excerpt: str,
-                 parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("CardFrame")
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
-
-        # Header row: source + score + copy
     """Reference card (design: components/content/ReferenceCard.jsx).
 
     Book icon + source + page, threshold-colored score pill, excerpt,
@@ -1655,30 +1252,6 @@ class _RagHitCard(QtWidgets.QFrame):
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(8)
 
-        source_text = source
-        if page:
-            source_text += f" \u2022 p.{page}"
-        src_label = QtWidgets.QLabel(source_text)
-        src_label.setObjectName("SourceLabel")
-        h_layout.addWidget(src_label)
-        h_layout.addStretch()
-
-        theme = current_theme()
-        score_label = QtWidgets.QLabel(f"{score:.2f}")
-        score_color = (
-            theme.success if score > 0.7 else theme.warning if score > 0.4 else theme.text_muted
-        )
-        score_label.setStyleSheet(
-            f"color: {score_color}; font-size: 11px; font-weight: 700; "
-            f"font-family: '{theme.font_mono}', monospace;"
-        )
-        h_layout.addWidget(score_label)
-
-        copy_btn = QtWidgets.QPushButton("\U0001f4cb")
-        copy_btn.setFixedWidth(28)
-        copy_btn.setToolTip("Copy excerpt")
-        copy_btn.setObjectName("MiniIconButton")
-        h_layout.addWidget(icons.icon_label("book-open", 14, "#06B6D4"))
         # Web references get a globe + violet accent; library keeps the book/cyan.
         icon_name = "globe" if is_web else "book-open"
         icon_color = "#8B5CF6" if is_web else "#06B6D4"
@@ -1725,33 +1298,6 @@ class _RagHitCard(QtWidgets.QFrame):
         # Excerpt
         excerpt_label = QtWidgets.QLabel(excerpt)
         excerpt_label.setWordWrap(True)
-        excerpt_label.setObjectName("ExcerptLabel")
-        layout.addWidget(excerpt_label)
-
-
-class ReferencePanel(QtWidgets.QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        title = QtWidgets.QLabel("\U0001f4da Textbook Viewport")
-        title.setObjectName("PanelTitle")
-        layout.addWidget(title)
-
-        # Backend label
-        self._backend_label = QtWidgets.QLabel("")
-        self._backend_label.setObjectName("MutedLabel")
-        layout.addWidget(self._backend_label)
-
-        # Scrollable card container (#10)
-        self._scroll = QtWidgets.QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._card_container = QtWidgets.QWidget()
-        self._card_layout = QtWidgets.QVBoxLayout(self._card_container)
-        self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(8)
         excerpt_label.setStyleSheet("color: #94A3B8; font-size: 12px;")
         layout.addWidget(excerpt_label)
 
@@ -1802,14 +1348,6 @@ class ReferencePanel(QtWidgets.QWidget):
         self._scroll.setWidget(self._card_container)
         layout.addWidget(self._scroll, 1)
 
-        # Empty state (#12)
-        self._empty_label = QtWidgets.QLabel(
-            "\U0001f4d6  Textbook references will appear here after a pipeline run.\n"
-            "Add PDFs to your library directory for richer results."
-        )
-        self._empty_label.setWordWrap(True)
-        self._empty_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setObjectName("EmptyStateLabel")
         # Empty state (design copy: name the missing thing, one action)
         self._empty_label = QtWidgets.QLabel(
             "Textbook references will appear here after a run.\n"
@@ -1839,8 +1377,6 @@ class ReferencePanel(QtWidgets.QWidget):
             return
 
         self._empty_label.hide()
-        self._backend_label.setText(f"Backend: {rag.backend} \u2022 {len(rag.hits)} hits")
-        self._backend_label.setText(f"{rag.backend} · {len(rag.hits)} hits")
         n_web = sum(1 for h in rag.hits if getattr(h, "is_web", False))
         n_lib = len(rag.hits) - n_web
         provenance = f"{n_lib} library"
@@ -1892,11 +1428,6 @@ class SimulationPanel(QtWidgets.QWidget):
         err_layout.setSpacing(12)
 
         self._error_icon = QtWidgets.QLabel("\u26a0\ufe0f")
-        self._error_icon.setObjectName("ErrorIcon")
-        err_layout.addWidget(self._error_icon)
-
-        self._error_text = QtWidgets.QLabel("")
-        self._error_text.setObjectName("ErrorText")
         self._error_icon.setStyleSheet("font-size: 14px; color: #F43F5E;")
         err_layout.addWidget(self._error_icon)
 
@@ -1907,7 +1438,6 @@ class SimulationPanel(QtWidgets.QWidget):
 
         self._error_detail_btn = QtWidgets.QPushButton("Details")
         self._error_detail_btn.setFixedWidth(72)
-        self._error_detail_btn.setObjectName("ErrorGhostButton")
         self._error_detail_btn.setStyleSheet(
             "background: transparent; border: 1px solid #F43F5E; border-radius: 6px;"
             " color: #FDA4AF; font-size: 11px; padding: 4px 8px;"
@@ -1918,7 +1448,6 @@ class SimulationPanel(QtWidgets.QWidget):
 
         dismiss_btn = QtWidgets.QPushButton("\u2715")
         dismiss_btn.setFixedWidth(28)
-        dismiss_btn.setObjectName("MiniIconButton")
         dismiss_btn.setStyleSheet(
             "background: transparent; border: none; color: #64748B; font-size: 14px;"
         )
@@ -1933,7 +1462,6 @@ class SimulationPanel(QtWidgets.QWidget):
         # Top bar with pill tabs for view switching + phase portrait toggle
         top_bar = QtWidgets.QWidget()
         top_bar.setFixedHeight(48)
-        top_bar.setObjectName("SimTopBar")
         top_bar.setStyleSheet("background-color: #0D0D14; border-bottom: 1px solid #1E293B;")
         top_layout = QtWidgets.QHBoxLayout(top_bar)
         top_layout.setContentsMargins(16, 6, 16, 6)
@@ -1941,11 +1469,6 @@ class SimulationPanel(QtWidgets.QWidget):
 
         self.status = QtWidgets.QLabel("Waiting for pipeline\u2026")
         self.status.setObjectName("StatusIdle")
-        top_layout.addWidget(self.status, 1)
-
-        # Phase portrait toggle checkbox
-        self._phase_check = QtWidgets.QCheckBox("Phase")
-        self._phase_check.setObjectName("PhaseCheck")
         self.status.setStyleSheet("font-size: 12px;")
         top_layout.addWidget(self.status, 1)
 
@@ -2008,15 +1531,6 @@ class SimulationPanel(QtWidgets.QWidget):
         ch_layout = QtWidgets.QHBoxLayout(code_header)
         ch_layout.setContentsMargins(0, 0, 0, 0)
         ch_label = QtWidgets.QLabel("Generated Scene Code")
-        ch_label.setObjectName("SectionTitle")
-        ch_layout.addWidget(ch_label)
-        ch_layout.addStretch()
-        copy_code_btn = QtWidgets.QPushButton("\U0001f4cb Copy code")
-        copy_code_btn.setFixedHeight(26)
-        copy_code_btn.setObjectName("GhostButton")
-        copy_code_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        copy_code_btn.clicked.connect(lambda: _copy_to_clipboard(self.code.toPlainText()))
-        ch_layout.addWidget(copy_code_btn)
         ch_label.setStyleSheet(
             "color: #64748B; font-size: 9pt; font-weight: 700; "
             "text-transform: uppercase; letter-spacing: 1.2px;"
@@ -2099,40 +1613,6 @@ class SimulationPanel(QtWidgets.QWidget):
         stage_layout.setContentsMargins(0, 0, 0, 0)
         self._video_widget = QVideoWidget()
         self._video_widget.setMinimumSize(400, 225)
-        self._video_widget.setObjectName("VideoSurface")
-        container_layout.addWidget(self._video_widget, 1)
-
-        # Controls
-        controls = QtWidgets.QWidget()
-        controls.setMaximumHeight(44)
-        controls_layout = QtWidgets.QHBoxLayout(controls)
-        controls_layout.setContentsMargins(8, 4, 8, 4)
-        controls_layout.setSpacing(8)
-
-        # Frame step buttons (#14)
-        self._prev_frame_btn = QtWidgets.QPushButton("\u23ea")
-        self._prev_frame_btn.setFixedWidth(36)
-        self._prev_frame_btn.setObjectName("VideoControlBtn")
-        self._prev_frame_btn.setToolTip("Previous frame")
-
-        self._play_btn = QtWidgets.QPushButton("\u25b6")
-        self._play_btn.setFixedWidth(36)
-        self._play_btn.setObjectName("VideoControlBtn")
-
-        self._pause_btn = QtWidgets.QPushButton("\u23f8")
-        self._pause_btn.setFixedWidth(36)
-        self._pause_btn.setObjectName("VideoControlBtn")
-
-        self._stop_btn = QtWidgets.QPushButton("\u23f9")
-        self._stop_btn.setFixedWidth(36)
-        self._stop_btn.setObjectName("VideoControlBtn")
-
-        self._next_frame_btn = QtWidgets.QPushButton("\u23e9")
-        self._next_frame_btn.setFixedWidth(36)
-        self._video_widget.setStyleSheet(
-            "background-color: #0A0A0F; border-radius: 8px;"
-        )
-        container_layout.addWidget(self._video_widget, 1)
         self._video_widget.setStyleSheet("background-color: #000000;")
         stage_layout.addWidget(self._video_widget, 0, 0)
         self._manim_badge = ManimBadge(small=True)
@@ -2201,21 +1681,12 @@ class SimulationPanel(QtWidgets.QWidget):
         self._time_label = QtWidgets.QLabel("0:00 / 0:00")
         self._time_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self._time_label.setObjectName("VideoTimeLabel")
-        self._time_label.setMinimumWidth(100)
         self._time_label.setMinimumWidth(90)
 
         self._speed_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._speed_slider.setRange(25, 200)
         self._speed_slider.setValue(100)
         self._speed_slider.setToolTip("Playback speed")
-        self._speed_slider.setFixedWidth(80)
-        speed_label = QtWidgets.QLabel("1.0x")
-        speed_label.setObjectName("MutedLabel")
-
-        controls_layout.addWidget(self._prev_frame_btn)  # #14
-        controls_layout.addWidget(self._play_btn)
-        controls_layout.addWidget(self._pause_btn)
-        controls_layout.addWidget(self._stop_btn)
         self._speed_slider.setFixedWidth(72)
         speed_label = QtWidgets.QLabel("1.0x")
         speed_label.setObjectName("VideoTimeLabel")
@@ -2403,15 +1874,6 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
-        diagnostics = "\n".join(scene.diagnostics)
-        self.code.setPlainText(
-            scene.code if not diagnostics else f"{scene.code}\n# Diagnostics:\n# {diagnostics}"
-        )
-        if scene.diagnostics:
-            diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-            self.code.setPlainText(f"{scene.code}\n\n# Diagnostics:\n{diag_lines}")
-        else:
-            self.code.setPlainText(scene.code)
         self.code.setPlainText(scene.code)  # diagnostics now live in the drawer
         self._apply_scene_meta(scene)
         pills = self._pill_group.buttons()
@@ -2425,8 +1887,6 @@ class SimulationPanel(QtWidgets.QWidget):
         if scene.video_path and Path(scene.video_path).exists():
             self._stack.setCurrentIndex(2)
             self._player.setSource(QUrl.fromLocalFile(scene.video_path))
-            self._player.play()
-            self.status.setText(f"\U0001f3ac Playing: {Path(scene.video_path).name}")
             # Play when media is loaded (async loading)
             try:
                 self._player.mediaStatusChanged.disconnect(self._auto_play)
@@ -2451,12 +1911,6 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
-            if scene.diagnostics:
-                self.code.setPlainText(
-                    scene.code + "\n\n# Diagnostics:\n# " + "\n# ".join(scene.diagnostics)
-                )
-                diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-                self.code.setPlainText(scene.code + "\n\n# Diagnostics:\n" + diag_lines)
             self._apply_scene_meta(scene)
 
     def _seek_fraction(self, frac: float) -> None:
@@ -2507,8 +1961,6 @@ class SimulationPanel(QtWidgets.QWidget):
         detail.setPlainText(self._error_traceback)
         detail.setWindowTitle("Pipeline Traceback")
         detail.resize(900, 500)
-        detail.show()
-        detail.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         detail.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         detail.destroyed.connect(lambda: setattr(self, "_detail_window", None))
         self._detail_window = detail

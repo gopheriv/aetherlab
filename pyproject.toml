@@ -55,14 +55,6 @@ packages = { find = { where = ["."] } }
 [tool.setuptools.package-data]
 "*" = ["*.py"]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-# Use a project-local basetemp. This keeps `pytest -q` green on Windows, where
-# cleaning up the default `pytest-current` symlink can raise PermissionError
-# (WinError 5) during teardown even when every test passed.
-addopts = "--basetemp=.pytest_tmp"
-
 [tool.black]
 line-length = 100
 target-version = ['py310', 'py311', 'py312']
