@@ -172,3 +172,155 @@ class PipelineError:
     stage: str
     message: str
     traceback: str = ""
+
+
+# ── Topic-explainer lesson model (multi-chapter narrated lessons) ────────────
+
+
+@dataclass
+class LessonChapter:
+    """One teaching beat of a lesson.
+
+    kind: 'scene' (a rendered Manim chapter), 'equation_card' (a typeset
+    still), 'interactive' (hand off to the live canvas), or 'recap'.
+    """
+    id: str
+    title: str
+    goal: str = ""
+    kind: str = "scene"
+    beats: list[str] = field(default_factory=list)
+    narration: str = ""
+    key_equations: list[str] = field(default_factory=list)
+    citation_query: str = ""
+    # Resolved textbook citations (source labels) + a fact-check note, filled by
+    # services/fact_check.py. Old caches load with empty defaults.
+    citations: list[str] = field(default_factory=list)
+    fact_check: str = ""
+
+    def to_json(self) -> JsonDict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, payload: JsonDict) -> "LessonChapter":
+        data = dict(payload)
+        return cls(
+            id=str(data.get("id", "")),
+            title=str(data.get("title", "")),
+            goal=str(data.get("goal", "")),
+            kind=str(data.get("kind", "scene")),
+            beats=[str(b) for b in data.get("beats", [])],
+            narration=str(data.get("narration", "")),
+            key_equations=[str(e) for e in data.get("key_equations", [])],
+            citation_query=str(data.get("citation_query", "")),
+            citations=[str(c) for c in data.get("citations", [])],
+            fact_check=str(data.get("fact_check", "")),
+        )
+
+
+@dataclass
+class LessonQuestion:
+    """A check-yourself item. Empty ``choices`` => an open question."""
+    q: str
+    answer: str = ""
+    why: str = ""
+    choices: list[str] = field(default_factory=list)
+
+    @property
+    def is_open(self) -> bool:
+        return not self.choices
+
+    def to_json(self) -> JsonDict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, payload: JsonDict) -> "LessonQuestion":
+        data = dict(payload)
+        return cls(
+            q=str(data.get("q", "")),
+            answer=str(data.get("answer", "")),
+            why=str(data.get("why", "")),
+            choices=[str(c) for c in data.get("choices", [])],
+        )
+
+
+@dataclass
+class LessonPlan:
+    """A topic turned into a structured, narrated curriculum (see
+    services/lesson_planner.py). Defensive from_json so old caches load."""
+    title: str
+    topic: str = ""
+    audience: str = "undergrad"  # high_school | ap | undergrad
+    prerequisites: list[str] = field(default_factory=list)
+    objectives: list[str] = field(default_factory=list)
+    misconception: str = ""
+    chapters: list[LessonChapter] = field(default_factory=list)
+    questions: list[LessonQuestion] = field(default_factory=list)
+    model_name: str = ""
+    cached: bool = False
+
+    def to_json(self) -> JsonDict:
+        return {
+            "title": self.title,
+            "topic": self.topic,
+            "audience": self.audience,
+            "prerequisites": self.prerequisites,
+            "objectives": self.objectives,
+            "misconception": self.misconception,
+            "chapters": [c.to_json() for c in self.chapters],
+            "questions": [q.to_json() for q in self.questions],
+            "model_name": self.model_name,
+            "cached": self.cached,
+        }
+
+    @classmethod
+    def from_json(cls, payload: JsonDict, *, cached: bool = False) -> "LessonPlan":
+        data = dict(payload)
+        audience = str(data.get("audience", "undergrad")).lower().replace(" ", "_")
+        if audience not in {"high_school", "ap", "undergrad"}:
+            audience = "undergrad"
+        return cls(
+            title=str(data.get("title", "")) or "Untitled lesson",
+            topic=str(data.get("topic", "")),
+            audience=audience,
+            prerequisites=[str(p) for p in data.get("prerequisites", [])],
+            objectives=[str(o) for o in data.get("objectives", [])],
+            misconception=str(data.get("misconception", "")),
+            chapters=[LessonChapter.from_json(c) for c in data.get("chapters", []) if isinstance(c, dict)],
+            questions=[LessonQuestion.from_json(q) for q in data.get("questions", []) if isinstance(q, dict)],
+            model_name=str(data.get("model_name", "cached")),
+            cached=bool(data.get("cached", cached)),
+        )
+
+
+@dataclass
+class LessonBundle:
+    """A planned (and, after Phase 3, rendered + assembled) lesson.
+
+    chapter_scenes and video_path are populated by the lesson pipeline; the
+    plan alone is a valid Phase-1 result (status 'planned').
+    """
+    plan: LessonPlan
+    chapter_scenes: list[SceneBundle] = field(default_factory=list)
+    video_path: str = ""
+    status: str = "planned"  # planned | rendering | assembled | error
+    cached: bool = False
+
+    def to_json(self) -> JsonDict:
+        return {
+            "plan": self.plan.to_json(),
+            "chapter_scenes": [s.to_json() for s in self.chapter_scenes],
+            "video_path": self.video_path,
+            "status": self.status,
+            "cached": self.cached,
+        }
+
+    @classmethod
+    def from_json(cls, payload: JsonDict, *, cached: bool = False) -> "LessonBundle":
+        data = dict(payload)
+        return cls(
+            plan=LessonPlan.from_json(data.get("plan", {}), cached=cached),
+            chapter_scenes=[SceneBundle.from_json(s, cached=cached) for s in data.get("chapter_scenes", []) if isinstance(s, dict)],
+            video_path=str(data.get("video_path", "")),
+            status=str(data.get("status", "planned")),
+            cached=bool(data.get("cached", cached)),
+        )

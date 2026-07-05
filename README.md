@@ -4,23 +4,43 @@
 
 <h1 align="center">AetherLab</h1>
 
-<p align="center"><b>Type a physics question. Get a derivation, textbook
-references, an animated video, and a live interactive plot.</b></p>
+<p align="center"><b>Ask a physics question — or a whole topic — and get a
+narrated, animated explanation you can actually learn from.</b></p>
 
 ---
 
 AetherLab is a desktop physics workbench for students, educators, and the
-curious. One prompt drives a four-stage pipeline:
+curious. It works two ways from the same prompt bar:
+
+### ▶ Solve — one problem, visualized
+Type a problem, press **Run**, and watch a four-stage pipeline:
 
 | Stage | What you get |
 |---|---|
 | **Solve** | An analytical derivation with typeset equations (AI-written, or a built-in scaffold without AI) |
 | **RAG** | Citations from *real* textbooks — free OpenStax books download & index in one click, your own PDFs too |
 | **Scene** | A storyboarded animation, directed and coded by AI, rendered with [Manim Community](https://www.manim.community/) |
-| **Render** | A self-healing MP4 render — crashes and timeouts are auto-repaired; a vision model can review and revise the result |
+| **Render** | A self-healing MP4 — crashes and timeouts auto-repair; a vision model can review and revise the result |
 
 Plus a **live parametric canvas**: drag sliders (damping, stiffness, gravity…)
 and watch the solution curves respond in real time.
+
+### 🎓 Learn — a whole topic, taught
+Type a *topic*, press **Learn**, and AetherLab builds a **narrated,
+multi-chapter video lesson** — hook → intuition → the math, built up → worked
+example → recap. The Lesson page is a self-contained classroom:
+
+- an **inline narrated video** assembled from the chapters,
+- a clickable **chapter outline** that seeks the video,
+- a **transcript** with per-chapter fact-check notes,
+- interactive **check-yourself questions** (multiple-choice with instant
+  feedback + open questions with model answers),
+- **textbook references**, and a **Play with it** tab — a live canvas seeded
+  with the topic's parameters so you can experiment,
+- one-click **study-guide PDF** export.
+
+Lessons are grounded in real textbooks and fact-checked against them; without an
+AI key you still get a coherent, domain-matched template lesson.
 
 ## Install
 
@@ -41,27 +61,32 @@ python -m aetherlab
 - **Local AI (free, private):** install [Ollama](https://ollama.com); AetherLab
   detects it and enables it in one click.
 - **Cloud AI:** any OpenAI-compatible endpoint (Settings → paste base URL,
-  key, model → Test connection).
+  key, model → Test connection). A separate **vision model** (optional) lets the
+  critic watch renders and revise them.
 
 Advanced configuration (env vars override everything):
 `AETHERLAB_OPENAI_API_KEY`/`OPENAI_API_KEY`, `AETHERLAB_OPENAI_BASE_URL`,
 `AETHERLAB_LLM_MODEL`, `AETHERLAB_VISION_MODEL`, `AETHERLAB_PROVIDER=ollama`,
-`AETHERLAB_DATA_DIR`, `AETHERLAB_LIBRARY_DIR`, `AETHERLAB_LLM_TIMEOUT`.
-Data lives under `%LOCALAPPDATA%\AetherLab` (or `~/.aetherlab`). Logs:
-`%LOCALAPPDATA%\AetherLab\logs\aetherlab.log`.
+`AETHERLAB_NARRATION=1`, `AETHERLAB_DATA_DIR`, `AETHERLAB_LIBRARY_DIR`,
+`AETHERLAB_LLM_TIMEOUT`. Data lives under `%LOCALAPPDATA%\AetherLab` (or
+`~/.aetherlab`); logs in `…\AetherLab\logs\aetherlab.log`.
 
 ## Highlights
 
+- **Two modes, one bar** — *Run* a single problem or *Learn* a whole topic.
 - **Typeset math everywhere** — governing equations render as real math, from
   the hero banner to the parameter sliders (γ, ω, ℓ).
-- **Storyboarded animations** — the AI first *directs* (3 acts, hero frame,
-  narration script), then implements; a static safety/lint battery and a
-  bounded self-repair loop keep renders reliable.
-- **Real textbook grounding** — ChromaDB vector search over an OpenStax
-  starter library with page-level citations; filesystem keyword fallback
-  without ChromaDB.
-- **Exports** — LaTeX/PDF derivations, MP4/GIF animations, runnable Manim
-  scene code.
+- **Storyboarded, self-healing animations** — the AI first *directs* (acts,
+  hero frame, narration), then implements; a static safety/lint battery + a
+  bounded repair loop keep renders reliable; an optional vision critic revises
+  weak results.
+- **Real textbook grounding** — ChromaDB vector search over an OpenStax starter
+  library with page-level citations (filesystem keyword fallback without
+  ChromaDB); lessons are fact-checked against the sources.
+- **Optional narration** — edge-tts voiceover fit to the animation (`.srt`
+  subtitles for lessons).
+- **Exports** — LaTeX/PDF derivations, lesson study guides, MP4/GIF animations,
+  runnable Manim scene code.
 
 ## Run
 
@@ -76,13 +101,14 @@ On Windows, `start.bat` launches the app under a crash-restart watchdog.
 ## Development
 
 ```bash
-python test_features.py            # behavioural suite (offscreen-safe)
+python test_features.py            # behavioural suite, 145 features (offscreen-safe)
 python build_feature_tracker.py    # regenerate the canonical feature tracker
 ```
 
-The feature catalog lives in `AetherLab_Feature_Tracker.xlsx` (generated —
-edit `build_feature_tracker.py`). Architecture notes:
-`MANIM_PIPELINE_QUALITY_ANALYSIS.md`, `PHYSICS_SOURCES.md`. Docs for users:
+The feature catalog lives in `AetherLab_Feature_Tracker.xlsx` (generated — edit
+`build_feature_tracker.py`). Design & architecture notes:
+`TOPIC_EXPLAINER_BRIEF.md`, `MANIM_PIPELINE_QUALITY_ANALYSIS.md`,
+`RENDER_RELIABILITY_AND_CLOUD.md`, `PHYSICS_SOURCES.md`. User docs:
 [`docs/QUICKSTART.md`](docs/QUICKSTART.md),
 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 

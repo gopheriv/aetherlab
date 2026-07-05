@@ -197,3 +197,38 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         if solver.model_name not in {"deterministic-fallback", self.settings.llm_model}:
             return False
         return True
+
+
+class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
+    """Runs the topic-explainer LessonPipeline off the UI thread."""
+
+    progress = QtCore.pyqtSignal(str, int, int)   # message, done, total
+    lesson_ready = QtCore.pyqtSignal(object)       # LessonBundle
+    failure = QtCore.pyqtSignal(object)            # PipelineError
+
+    def __init__(self, topic: str, settings: AppSettings, *,
+                 audience: str = "undergrad", quality: str = "l") -> None:
+        super().__init__()
+        self.topic = topic
+        self.settings = settings
+        self.audience = audience
+        self.quality = quality
+
+    def run(self) -> None:
+        try:
+            from aetherlab.services.lesson_pipeline import LessonPipeline
+
+            pipeline = LessonPipeline(self.settings)
+            bundle = asyncio.run(
+                pipeline.run(
+                    self.topic,
+                    audience=self.audience,
+                    quality=self.quality,
+                    progress=lambda m, d, t: self.progress.emit(m, d, t),
+                )
+            )
+            self.lesson_ready.emit(bundle)
+        except Exception as exc:  # noqa: BLE001
+            self.failure.emit(
+                PipelineError(stage="lesson", message=str(exc), traceback=traceback.format_exc())
+            )

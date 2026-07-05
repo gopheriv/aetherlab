@@ -213,6 +213,65 @@ def narration_available() -> bool:
     return _ffmpeg_exe() is not None
 
 
+# ── Lesson support: per-chapter narration + transcript timeline (Phase 2) ────
+#
+# For a multi-chapter LESSON, the natural narration unit is the chapter: each
+# chapter is a short, single-focus scene, so whole-clip fitting per chapter
+# gives exact-enough narration↔visual sync WITHOUT the fragility of per-beat
+# sync (which this module deliberately avoids) or a manim-voiceover dependency.
+# narrate_segment narrates one chapter and reports its spoken duration so the
+# lesson pipeline can accumulate a transcript timeline → .srt subtitles.
+
+
+async def narrate_segment(
+    video: Path,
+    narration: str,
+    out_dir: Path,
+    *,
+    voice: str = DEFAULT_VOICE,
+    rate: str = DEFAULT_RATE,
+) -> tuple[Path | None, float]:
+    """Narrate one chapter clip. Returns (narrated_path_or_None, spoken_seconds).
+
+    The narrated path is None (caller keeps the silent clip) when narration is
+    unavailable; the duration is always the final clip length so the transcript
+    timeline stays correct either way.
+    """
+    video = Path(video)
+    narrated = await add_voiceover(video, narration, out_dir, voice=voice, rate=rate)
+    final = narrated or (video if video.exists() else None)
+    duration = await get_duration(final) if final else 0.0
+    return narrated, duration
+
+
+def _fmt_srt_time(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(segments: list[tuple[str, float]]) -> str:
+    """Build .srt subtitles from ordered (text, clip_duration_seconds) pairs.
+
+    Each chapter becomes one cue spanning its clip; blank narration is skipped.
+    """
+    cues: list[str] = []
+    t = 0.0
+    index = 1
+    for text, duration in segments:
+        duration = max(float(duration), 0.0)
+        text = " ".join(str(text).split())
+        if text:
+            cues.append(
+                f"{index}\n{_fmt_srt_time(t)} --> {_fmt_srt_time(t + duration)}\n{text}\n"
+            )
+            index += 1
+        t += duration
+    return "\n".join(cues)
+
+
 def storyboard_narration_script(storyboard: dict | None) -> str:
     """Join a storyboard's per-beat narration lines into one seed script."""
     if not isinstance(storyboard, dict):

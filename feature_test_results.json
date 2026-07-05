@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=212611 + skip-existing"
+    "note": "URL fallback + free_disk_mb=212648 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_1ahls9m3/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_qm2qip8d/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -558,5 +558,25 @@
   "F140": {
     "status": "PASS",
     "note": "narration settings env/config + silent_video_path + dialog toggle (F140)"
+  },
+  "F141": {
+    "status": "PASS",
+    "note": "lesson plan model round-trips; keyless domain templates coherent (F141)"
+  },
+  "F142": {
+    "status": "PASS",
+    "note": "srt timeline (cumulative, blank-skip) + narrate_segment fail-soft (F142)"
+  },
+  "F143": {
+    "status": "PASS",
+    "note": "lesson pipeline: 4 chapters \u2192 assembled mp4 (F143)"
+  },
+  "F144": {
+    "status": "PASS",
+    "note": "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)"
+  },
+  "F145": {
+    "status": "PASS",
+    "note": "LessonView + MCQ + worker + main-window Learn wiring (F145)"
   }
 }

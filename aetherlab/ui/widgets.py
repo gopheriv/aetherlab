@@ -635,6 +635,7 @@ class CommandBar(QtWidgets.QWidget):
 
     submitted = QtCore.pyqtSignal(str)
     cancel_requested = QtCore.pyqtSignal()
+    learn_requested = QtCore.pyqtSignal(str)  # topic → build a full lesson
 
     _QUALITIES = {"Draft": "l", "Standard": "m", "High": "h"}
 
@@ -687,6 +688,15 @@ class CommandBar(QtWidgets.QWidget):
             "Render quality — Draft 480p / Standard 720p / High 1080p"
         )
         layout.addWidget(self._quality)
+
+        # Learn button (topic explainer): build a full narrated lesson.
+        self.learn_button = QtWidgets.QPushButton("Learn")
+        self.learn_button.setObjectName("SecondaryButton")
+        self.learn_button.setIcon(icons.icon("book-open", 14, "#94A3B8"))
+        self.learn_button.setToolTip("Build a full multi-chapter video lesson for this topic")
+        self.learn_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.learn_button.clicked.connect(self._learn)
+        layout.addWidget(self.learn_button)
 
         # Run button (primary) / Cancel (danger) swap
         self.run_button = QtWidgets.QPushButton("Run")
@@ -752,6 +762,7 @@ class CommandBar(QtWidgets.QWidget):
 
     def set_busy(self, busy: bool) -> None:
         self.run_button.setVisible(not busy)
+        self.learn_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.input.setDisabled(busy)
 
@@ -759,6 +770,12 @@ class CommandBar(QtWidgets.QWidget):
         prompt = self.input.text().strip()
         if prompt and self.run_button.isVisible():
             self.submitted.emit(prompt)
+            self.input.clear()
+
+    def _learn(self) -> None:
+        topic = self.input.text().strip()
+        if topic and self.learn_button.isVisible():
+            self.learn_requested.emit(topic)
             self.input.clear()
 
 
@@ -3393,3 +3410,293 @@ class BlueprintBackdrop(QtWidgets.QWidget):
         for x in range(0, rect.width(), 40):
             for y in range(0, rect.height(), 40):
                 painter.drawEllipse(QtCore.QPointF(x, y), 1.1, 1.1)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Lesson view (topic explainer — outline · transcript · questions · references)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _QuestionCard(QtWidgets.QFrame):
+    """One check-yourself item: MCQ radios with immediate feedback, or an open
+    question that reveals a model answer."""
+
+    def __init__(self, index: int, question, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CardFrame")
+        self._q = question
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        prompt = QtWidgets.QLabel(f"{index}. {question.q}")
+        prompt.setWordWrap(True)
+        prompt.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
+        layout.addWidget(prompt)
+
+        self._feedback = QtWidgets.QLabel("")
+        self._feedback.setWordWrap(True)
+        self._feedback.setStyleSheet("color: #94A3B8; font-size: 12px;")
+
+        if question.choices:  # MCQ
+            self._group = QtWidgets.QButtonGroup(self)
+            for choice in question.choices:
+                rb = QtWidgets.QRadioButton(choice)
+                rb.setStyleSheet("color: #E2E8F0; font-size: 12.5px; spacing: 8px;")
+                rb.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                rb.toggled.connect(lambda checked, c=choice: checked and self._answer_mcq(c))
+                self._group.addButton(rb)
+                layout.addWidget(rb)
+            layout.addWidget(self._feedback)
+        else:  # open question
+            reveal = QtWidgets.QPushButton("Reveal answer")
+            reveal.setObjectName("SecondaryButton")
+            reveal.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            reveal.clicked.connect(self._reveal_open)
+            layout.addWidget(reveal)
+            layout.addWidget(self._feedback)
+
+    def _answer_mcq(self, choice: str) -> None:
+        correct = str(choice).strip() == str(self._q.answer).strip()
+        why = f" — {self._q.why}" if self._q.why else ""
+        self._feedback.setText(
+            ("✓ Correct" if correct else f"✗ Not quite. Answer: {self._q.answer}") + why
+        )
+        self._feedback.setStyleSheet(
+            f"color: {'#10B981' if correct else '#F43F5E'}; font-size: 12px;"
+        )
+
+    def _reveal_open(self) -> None:
+        self._feedback.setText(f"Model answer: {self._q.answer}")
+        self._feedback.setStyleSheet("color: #10B981; font-size: 12px;")
+
+
+class LessonView(QtWidgets.QWidget):
+    """The topic-explainer lesson surface: a chapter outline that seeks the
+    assembled video, plus transcript, interactive questions, and references."""
+
+    chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
+    export_requested = QtCore.pyqtSignal()
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._bundle = None
+        self._chapter_offsets: list[float] = []
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        header = QtWidgets.QHBoxLayout()
+        self._title = QtWidgets.QLabel("Lesson")
+        self._title.setObjectName("PanelTitle")
+        header.addWidget(self._title)
+        header.addStretch()
+        self._audience = QtWidgets.QLabel("")
+        self._audience.setStyleSheet("color: #64748B; font-size: 11px;")
+        header.addWidget(self._audience)
+        export_btn = QtWidgets.QPushButton("Export study guide")
+        export_btn.setObjectName("SecondaryButton")
+        export_btn.setIcon(icons.icon("download", 13, "#94A3B8"))
+        export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        export_btn.clicked.connect(self.export_requested.emit)
+        header.addWidget(export_btn)
+        layout.addLayout(header)
+
+        self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self._outline = QtWidgets.QListWidget()
+        self._outline.setObjectName("HistoryList")
+        self._outline.setMaximumWidth(280)
+        self._outline.itemClicked.connect(self._on_outline_click)
+        self._split.addWidget(self._outline)
+
+        self._tabs = QtWidgets.QTabWidget()
+        self._tabs.addTab(self._build_video(), "Video")
+        self._transcript = QtWidgets.QTextEdit()
+        self._transcript.setReadOnly(True)
+        self._tabs.addTab(self._transcript, "Transcript")
+
+        self._questions_scroll = QtWidgets.QScrollArea()
+        self._questions_scroll.setWidgetResizable(True)
+        self._questions_host = QtWidgets.QWidget()
+        self._questions_layout = QtWidgets.QVBoxLayout(self._questions_host)
+        self._questions_layout.setSpacing(10)
+        self._questions_layout.addStretch()
+        self._questions_scroll.setWidget(self._questions_host)
+        self._tabs.addTab(self._questions_scroll, "Questions")
+
+        self._references = QtWidgets.QTextEdit()
+        self._references.setReadOnly(True)
+        self._tabs.addTab(self._references, "References")
+
+        # "Play with it" — an embedded live canvas seeded from the lesson's
+        # domain, completing the pedagogy loop (interactive chapter).
+        explore = QtWidgets.QWidget()
+        ex_layout = QtWidgets.QVBoxLayout(explore)
+        ex_layout.setContentsMargins(0, 0, 0, 0)
+        ex_layout.setSpacing(6)
+        self._explore_hint = QtWidgets.QLabel("")
+        self._explore_hint.setWordWrap(True)
+        self._explore_hint.setStyleSheet("color: #94A3B8; font-size: 12px; padding: 4px 2px;")
+        ex_layout.addWidget(self._explore_hint)
+        self._explore_canvas = LiveCanvas()
+        ex_layout.addWidget(self._explore_canvas, 1)
+        self._tabs.addTab(explore, "Play with it")
+
+        self._split.addWidget(self._tabs)
+        self._split.setSizes([260, 640])
+        layout.addWidget(self._split, 1)
+
+        self._empty = QtWidgets.QLabel("Enter a topic and press Learn to generate a lesson.")
+        self._empty.setObjectName("EmptyHint")
+        self._empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._empty)
+        self._set_populated(False)
+
+    def _build_video(self) -> QtWidgets.QWidget:
+        """Inline lesson player (true-black stage + play/pause/stop). Guarded so
+        the widget still builds if QtMultimedia is unavailable."""
+        container = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        self._player = None
+        try:
+            from PyQt6.QtMultimedia import QMediaPlayer
+            from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+            self._video_widget = QVideoWidget()
+            self._video_widget.setMinimumSize(360, 200)
+            self._video_widget.setStyleSheet("background-color: #000; border-radius: 8px;")
+            v.addWidget(self._video_widget, 1)
+            self._player = QMediaPlayer()
+            self._player.setVideoOutput(self._video_widget)
+
+            controls = QtWidgets.QHBoxLayout()
+            for label, slot in (("play", lambda: self._player.play()),
+                                ("pause", lambda: self._player.pause()),
+                                ("square", lambda: self._player.stop())):
+                b = QtWidgets.QPushButton()
+                b.setIcon(icons.icon(label, 14, "#94A3B8"))
+                b.setFixedSize(28, 28)
+                b.setObjectName("VideoControlBtn")
+                b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                b.clicked.connect(slot)
+                controls.addWidget(b)
+            controls.addStretch()
+            v.addLayout(controls)
+        except Exception:  # noqa: BLE001 — multimedia optional
+            placeholder = QtWidgets.QLabel("Assembled lesson video will play here.")
+            placeholder.setObjectName("EmptyHint")
+            placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            v.addWidget(placeholder, 1)
+        return container
+
+    def set_video(self, path: str) -> None:
+        """Load the assembled lesson MP4 into the inline player."""
+        if not self._player or not path or not Path(path).exists():
+            return
+        from PyQt6.QtCore import QUrl
+
+        self._player.setSource(QUrl.fromLocalFile(str(path)))
+        self._tabs.setCurrentIndex(0)  # Video tab
+
+    def _set_populated(self, populated: bool) -> None:
+        self._split.setVisible(populated)
+        self._empty.setVisible(not populated)
+
+    def set_lesson(self, bundle) -> None:
+        """Populate the view from a LessonBundle (plan + rendered chapters)."""
+        self._bundle = bundle
+        plan = bundle.plan
+        self._title.setText(plan.title or "Lesson")
+        self._audience.setText(plan.audience.replace("_", " "))
+
+        self._outline.clear()
+        transcript_html: list[str] = []
+        self._chapter_offsets = []
+        t = 0.0
+        durations = _bundle_chapter_durations(bundle)
+        for i, ch in enumerate(plan.chapters):
+            item = QtWidgets.QListWidgetItem(f"{i + 1}. {ch.title}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, t)
+            self._outline.addItem(item)
+            self._chapter_offsets.append(t)
+            fc = f" <span style='color:#64748B'>({ch.fact_check})</span>" if ch.fact_check else ""
+            transcript_html.append(
+                f"<p><b style='color:#06B6D4'>{i + 1}. {ch.title}</b>{fc}<br>"
+                f"<span style='color:#E2E8F0'>{ch.narration or ch.goal}</span></p>"
+            )
+            t += durations[i] if i < len(durations) else 0.0
+        self._transcript.setHtml("".join(transcript_html))
+
+        while self._questions_layout.count() > 1:
+            w = self._questions_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        for i, q in enumerate(plan.questions, 1):
+            self._questions_layout.insertWidget(
+                self._questions_layout.count() - 1, _QuestionCard(i, q)
+            )
+
+        cites: list[str] = []
+        for ch in plan.chapters:
+            for c in ch.citations:
+                if c not in cites:
+                    cites.append(c)
+        self._references.setHtml(
+            "<br>".join(f"• {c}" for c in cites) if cites
+            else "<span style='color:#64748B'>No citations available.</span>"
+        )
+
+        self._seed_explore(plan)
+        self._set_populated(True)
+
+    def _seed_explore(self, plan) -> None:
+        """Seed the 'Play with it' canvas from the lesson's domain + the
+        interactive chapter's guiding prompt (fail-soft)."""
+        try:
+            from aetherlab.services.llm import DEFAULT_VARIABLES, extract_keywords
+            from aetherlab.services.scene_templates import detect_domain
+
+            domain = detect_domain(extract_keywords(plan.topic) or [plan.topic], {})
+            params = {
+                "oscillator": {"damping": 0.15, "stiffness": 1.0, "mass": 1.0},
+                "pendulum": {"gravity": 9.81, "length": 1.0},
+                "orbit": {"eccentricity": 0.5, "semi_major": 1.0},
+                "wave": {"frequency": 2.0, "wave_speed": 1.0},
+            }.get(domain, dict(DEFAULT_VARIABLES))
+            interactive = next((c for c in plan.chapters if c.kind == "interactive"), None)
+            hint = (interactive.narration if interactive and interactive.narration
+                    else "Drag the parameters and watch the curves respond.")
+            self._explore_hint.setText("▶ " + hint)
+            state = build_canvas_state(plan.title[:50], params)
+            self._explore_canvas.set_state(state)
+        except Exception:  # noqa: BLE001 — exploration is a bonus, never fatal
+            self._explore_hint.setText("Interactive exploration unavailable for this lesson.")
+
+    def _on_outline_click(self, item: QtWidgets.QListWidgetItem) -> None:
+        seconds = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if seconds is None:
+            return
+        seconds = float(seconds)
+        self.chapter_seek_requested.emit(seconds)
+        # Seek the inline player to the chapter start and show the Video tab.
+        if self._player is not None:
+            self._player.setPosition(int(seconds * 1000))
+            self._tabs.setCurrentIndex(0)
+            self._player.play()
+
+
+def _bundle_chapter_durations(bundle) -> list[float]:
+    """Best-effort per-chapter clip durations (seconds) for outline seeking."""
+    durations: list[float] = []
+    try:
+        from pathlib import Path as _P
+
+        from aetherlab.services.voiceover import _duration_sync
+        for scene in bundle.chapter_scenes:
+            vp = getattr(scene, "video_path", "")
+            durations.append(_duration_sync(_P(vp)) if vp and _P(vp).exists() else 0.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return durations

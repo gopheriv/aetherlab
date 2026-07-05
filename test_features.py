@@ -2100,6 +2100,158 @@ def t_f140():
     return "narration settings env/config + silent_video_path + dialog toggle (F140)"
 
 
+def t_f141():
+    # Topic-explainer Phase 1: lesson planner + LessonPlan/LessonBundle model.
+    from dataclasses import replace
+    from aetherlab.core.models import LessonPlan, LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import plan_lesson, _template_lesson
+    # model round-trip incl. nested chapters/questions; old caches load with defaults
+    p = _template_lesson("Solve the simple pendulum", "ap")
+    p2 = LessonPlan.from_json(p.to_json())
+    assert p2.audience == "ap" and p2.chapters and p2.questions
+    assert LessonPlan.from_json({}).title == "Untitled lesson"
+    assert LessonPlan.from_json({"audience": "weird"}).audience == "undergrad"
+    b2 = LessonBundle.from_json(LessonBundle(
+        plan=p, chapter_scenes=[SceneBundle(class_name="X", code="c", engine="e", status="rendered")]
+    ).to_json())
+    assert b2.plan.title == p.title and len(b2.chapter_scenes) == 1
+    # keyless fail-soft → coherent domain templates (per domain)
+    keyless = replace(_settings(), openai_api_key=None)
+    for topic, need in (("Kepler orbit", "orbit"), ("damped oscillator", "oscillator"),
+                        ("simple pendulum", "pendulum"), ("Fourier wave", "wave")):
+        lp = asyncio.run(plan_lesson(topic, keyless))
+        assert lp.model_name == "deterministic-template" and 4 <= len(lp.chapters) <= 7
+        kinds = {c.kind for c in lp.chapters}
+        assert "interactive" in kinds and "recap" in kinds and lp.misconception
+        assert any(c.key_equations for c in lp.chapters)
+    return "lesson plan model round-trips; keyless domain templates coherent (F141)"
+
+
+def t_f142():
+    # Phase 2: per-chapter narration timeline → .srt + fail-soft narrate_segment.
+    from aetherlab.services.voiceover import build_srt, narrate_segment
+    srt = build_srt([("Chapter one.", 4.0), ("", 1.0), ("Chapter two.", 6.5)])
+    assert "00:00:00,000 --> 00:00:04,000" in srt and "Chapter two." in srt
+    assert srt.count("-->") == 2  # blank consumes time but emits no cue
+    assert "00:00:05,000 --> 00:00:11,500" in srt  # ch2 offset by the blank
+    res, dur = asyncio.run(narrate_segment(_TMP / "nope.mp4", "hi", _TMP))
+    assert res is None and dur == 0.0  # missing video → fail-soft
+    return "srt timeline (cumulative, blank-skip) + narrate_segment fail-soft (F142)"
+
+
+def t_f143():
+    # Phase 3: chapter synthesis + per-chapter cache + orchestration + assembly.
+    from dataclasses import replace
+    from pathlib import Path
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import (
+        LessonPipeline, _ChapterCache, _chapter_key, _chapter_prompt, _chapter_solver,
+    )
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    ch = next(c for c in plan.chapters if c.key_equations)
+    solver = _chapter_solver(ch, plan)
+    assert solver.key_equations and solver.derivation_steps and solver.keywords
+    assert plan.topic in _chapter_prompt(ch, plan)
+    assert _chapter_key(ch, plan) != _chapter_key(plan.chapters[0], plan)
+
+    # A tiny real mp4 to drive assembly (imageio-ffmpeg is bundled with manim).
+    import subprocess
+    import imageio_ffmpeg
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    clip = _TMP / "seg.mp4"
+    subprocess.run([ff, "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=30:duration=1", "-pix_fmt", "yuv420p", str(clip)],
+                   capture_output=True)
+    assert clip.exists()
+
+    cache = _ChapterCache(_TMP)
+    k = _chapter_key(ch, plan)
+    cache.put(k, SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(clip)))
+    assert cache.get(k) is not None and cache.get("missing") is None
+
+    s = replace(_settings(), openai_api_key=None, narration_enabled=False)
+    lp = LessonPipeline(s)
+    n = {"i": 0}
+    async def _gen(request, solver, rag, settings):
+        return SceneBundle(class_name="AetherLabScene", code="x", engine="manim-community", status="compiled")
+    async def _render(scene, settings, quality="l", brief="", **kw):
+        n["i"] += 1
+        scene.status = "rendered"; scene.video_path = str(clip)
+        return scene
+    lp.manim.generate_scene_async = _gen
+    lp.manim.render_scene_with_repair = _render
+    prog = []
+    bundle = asyncio.run(lp.run("Kepler orbit", progress=lambda m, d, t: prog.append(m)))
+    assert bundle.status == "assembled" and bundle.video_path and Path(bundle.video_path).exists()
+    assert len(bundle.chapter_scenes) >= 3 and any("Assembling" in m for m in prog)
+    return f"lesson pipeline: {len(bundle.chapter_scenes)} chapters → assembled mp4 (F143)"
+
+
+def t_f144():
+    # Phase 4: RAG fact-check (fail-soft) + Phase 5 study-guide export.
+    from dataclasses import replace
+    from aetherlab.services.fact_check import fact_check_lesson
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.pdf import export_lesson_study_guide
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    keyless = replace(_settings(), openai_api_key=None)
+    out = asyncio.run(fact_check_lesson(plan, keyless))
+    assert out is plan and len(out.chapters) >= 3  # in-place, never raises
+    tex = _TMP / "guide.tex"
+    export_lesson_study_guide(plan, tex)
+    body = tex.read_text(encoding="utf-8")
+    assert r"\section*{Learning objectives}" in body and r"\section*{Check yourself}" in body
+    assert "Watch out for" in body and r"\[" in body  # misconception + display-math equations
+    return "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)"
+
+
+def t_f145():
+    # Phase 5: LessonView populates + interactive questions; LessonWorker wiring.
+    from aetherlab.core.models import LessonBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.ui.widgets import LessonView, _QuestionCard
+    from aetherlab.ui.workers import LessonWorker
+    plan = _template_lesson("simple pendulum", "ap")
+    lv = LessonView()
+    lv.set_lesson(LessonBundle(plan=plan))
+    assert lv._outline.count() == len(plan.chapters)
+    assert lv._questions_layout.count() - 1 == len(plan.questions)
+    assert lv._split.isVisibleTo(lv) and not lv._empty.isVisibleTo(lv)
+    assert lv._tabs.tabText(0) == "Video"  # inline lesson player is first tab
+    tabs = [lv._tabs.tabText(i) for i in range(lv._tabs.count())]
+    assert "Play with it" in tabs  # interactive exploration embedded
+    assert lv._explore_canvas._state is not None  # canvas seeded from the domain
+    got = []
+    lv.chapter_seek_requested.connect(lambda s: got.append(s))
+    lv._on_outline_click(lv._outline.item(0))
+    assert got == [0.0] and lv._tabs.currentIndex() == 0  # click seeks + shows Video
+    mcq = next(q for q in plan.questions if q.choices)
+    qc = _QuestionCard(1, mcq)
+    qc._answer_mcq(mcq.answer)
+    assert "Correct" in qc._feedback.text()
+    lv.close(); qc.close()
+    w = LessonWorker("simple pendulum", _settings())
+    assert hasattr(w, "lesson_ready") and hasattr(w, "progress") and hasattr(w, "failure")
+    # Main-window wiring: Learn button + lesson page + on_lesson_ready.
+    from aetherlab.core.models import LessonBundle
+    from aetherlab.ui.main_window import MainWindow, PAGE_LESSON
+    mw = MainWindow(_settings())
+    assert mw._workspace.widget(PAGE_LESSON) is mw.lesson_view
+    assert hasattr(mw.command_bar, "learn_button") and callable(mw.start_lesson)
+    got = []
+    mw.command_bar.learn_requested.connect(lambda t: got.append(t))
+    mw.show()  # child button isVisible() needs the window shown
+    _app.processEvents()
+    mw.command_bar.input.setText("Kepler orbit")
+    mw.command_bar._learn()
+    assert got == ["Kepler orbit"]
+    mw.on_lesson_ready(LessonBundle(plan=_template_lesson("Kepler orbit", "undergrad")))
+    assert mw._workspace.currentIndex() == PAGE_LESSON and mw.lesson_view._outline.count() >= 4
+    mw.close()
+    return "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

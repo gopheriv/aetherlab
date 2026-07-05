@@ -22,6 +22,7 @@ from aetherlab.ui.widgets import (
     CommandBar,
     EmptyStateView,
     HistoryPanel,
+    LessonView,
     LibraryPanel,
     ParameterDock,
     PipelineStepper,
@@ -32,7 +33,7 @@ from aetherlab.ui.widgets import (
     TitleBar,
     Toast,
 )
-from aetherlab.ui.workers import PipelineWorker
+from aetherlab.ui.workers import LessonWorker, PipelineWorker
 
 require_qt()
 
@@ -44,6 +45,7 @@ PAGE_SOLVE = 2
 PAGE_SCENE = 3
 PAGE_LIBRARY = 4
 PAGE_HISTORY = 5
+PAGE_LESSON = 6
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -450,6 +452,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.parameter_dock = ParameterDock()
         self.library_panel = LibraryPanel()
         self.history_panel = HistoryPanel()
+        self.lesson_view = LessonView()
+        self.lesson_worker: LessonWorker | None = None
 
         # ── Solve page: derivation | references ──
         solve_page = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -487,6 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace.addWidget(scene_page)           # 3
         self._workspace.addWidget(self.library_panel)   # 4
         self._workspace.addWidget(self.history_panel)   # 5
+        self._workspace.addWidget(self.lesson_view)     # 6
         self._workspace.setCurrentIndex(PAGE_EMPTY)
 
         # ── Timeline strip (hidden until first run) ──
@@ -583,7 +588,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.title_bar.settings_requested.connect(self._open_settings)
 
         self.command_bar.submitted.connect(self.start_pipeline)
+        self.command_bar.learn_requested.connect(self.start_lesson)
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
+        self.lesson_view.export_requested.connect(self._export_study_guide)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
         self.history_panel.prompt_selected.connect(self.start_pipeline)
@@ -891,9 +898,72 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
+        if self.lesson_worker and self.lesson_worker.isRunning():
+            self.lesson_worker.wait(5000)
         super().closeEvent(event)
 
     # ── pipeline ──
+
+    # ── topic explainer (Learn) ──
+
+    def start_lesson(self, topic: str) -> None:
+        if self.lesson_worker and self.lesson_worker.isRunning():
+            self.statusBar().showMessage("A lesson is already being built.")
+            return
+        if self.worker and self.worker.isRunning():
+            self.statusBar().showMessage("Finish or cancel the current run first.")
+            return
+
+        self.lesson_worker = LessonWorker(
+            topic, self.settings, quality=self.command_bar.get_render_quality()
+        )
+        self.lesson_worker.progress.connect(self._on_lesson_progress)
+        self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
+        self.lesson_worker.failure.connect(self.on_failure)
+        self.lesson_worker.finished.connect(lambda: self.command_bar.set_busy(False))
+
+        self.command_bar.set_busy(True)
+        self.toast.hide()
+        self.running_view.set_stage_text("Building lesson…", topic[:80])
+        self._workspace.setCurrentIndex(PAGE_RUNNING)
+        self.statusBar().showMessage(f"Building lesson: {topic}")
+        self.lesson_worker.start()
+
+    def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
+        self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
+        self.statusBar().showMessage(f"Lesson · {message}")
+
+    def on_lesson_ready(self, bundle) -> None:
+        self.command_bar.set_busy(False)
+        self._last_lesson = bundle
+        self.lesson_view.set_lesson(bundle)
+        if bundle.video_path:
+            self.lesson_view.set_video(bundle.video_path)
+        self._workspace.setCurrentIndex(PAGE_LESSON)
+        note = bundle.status
+        self.statusBar().showMessage(
+            f"Lesson ready · {len(bundle.plan.chapters)} chapters · {note}"
+        )
+        self.toast.show_message(
+            "success",
+            f"Lesson '{bundle.plan.title}' built ({note}). "
+            "Watch it, read the transcript, or try the questions.",
+        )
+
+    def _export_study_guide(self) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if not bundle:
+            self.statusBar().showMessage("No lesson to export yet.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export study guide", "study_guide.tex", "LaTeX Files (*.tex)"
+        )
+        if not path:
+            return
+        from aetherlab.services.pdf import export_lesson_study_guide
+
+        export_lesson_study_guide(bundle.plan, Path(path))
+        self.statusBar().showMessage(f"Study guide exported: {path}")
 
     def start_pipeline(self, prompt: str) -> None:
         if self.worker and self.worker.isRunning():
