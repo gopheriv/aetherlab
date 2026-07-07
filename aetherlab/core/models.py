@@ -304,6 +304,15 @@ class LessonBundle:
     video_path: str = ""
     status: str = "planned"  # planned | rendering | assembled | error
     cached: bool = False
+    # Start time (seconds) of each rendered chapter clip WITHIN the assembled
+    # video, accounting for intro/chapter title cards + crossfades. Used to seek
+    # the inline player and to time subtitles; empty for old caches / plain
+    # concats, where the UI falls back to a plain cumulative sum.
+    chapter_offsets: list[float] = field(default_factory=list)
+    # Plan-chapter indexes for chapter_scenes/chapter_offsets. A failed middle
+    # render leaves a gap in plan.chapters; this keeps surviving clips mapped to
+    # their original titles/narration/UI outline rows. Empty for old caches.
+    rendered_chapter_indexes: list[int] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return {
@@ -312,6 +321,8 @@ class LessonBundle:
             "video_path": self.video_path,
             "status": self.status,
             "cached": self.cached,
+            "chapter_offsets": list(self.chapter_offsets),
+            "rendered_chapter_indexes": list(self.rendered_chapter_indexes),
         }
 
     @classmethod
@@ -323,4 +334,6 @@ class LessonBundle:
             video_path=str(data.get("video_path", "")),
             status=str(data.get("status", "planned")),
             cached=bool(data.get("cached", cached)),
+            chapter_offsets=[float(x) for x in data.get("chapter_offsets", []) if isinstance(x, (int, float))],
+            rendered_chapter_indexes=[int(x) for x in data.get("rendered_chapter_indexes", []) if isinstance(x, int)],
         )

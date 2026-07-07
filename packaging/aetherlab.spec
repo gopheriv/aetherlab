@@ -18,7 +18,13 @@ from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = Path(SPECPATH).parent  # repo root (spec lives in packaging/)
 
-datas = [(str(ROOT / "assets" / "aetherlab.ico"), "assets")]
+datas = [
+    (str(ROOT / "assets" / "aetherlab.ico"), "assets"),
+    # DejaVu fonts drive the produced-lesson title cards (services/cards.py);
+    # miss them and cards fall back to PIL's tiny bitmap font.
+    (str(ROOT / "assets" / "fonts" / "DejaVuSans.ttf"), "assets/fonts"),
+    (str(ROOT / "assets" / "fonts" / "DejaVuSans-Bold.ttf"), "assets/fonts"),
+]
 binaries = []
 hiddenimports = [
     "aetherlab",
