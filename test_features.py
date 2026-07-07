@@ -3375,6 +3375,19 @@ def t_f163():
     return "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
 
 
+def t_f164():
+    from tools.feature_surface_audit import audit
+
+    report = audit()
+    assert report["feature_count"] >= 164, report
+    assert report["surface_count"] >= 60, report
+    assert report["uncovered_count"] == 0, report["uncovered"]
+    return (
+        f"feature-surface audit covers {report['covered_count']}/"
+        f"{report['surface_count']} current surfaces (F164)"
+    )
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

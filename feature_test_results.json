@@ -650,5 +650,9 @@
   "F163": {
     "status": "PASS",
     "note": "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
+  },
+  "F164": {
+    "status": "PASS",
+    "note": "feature-surface audit covers 62/62 current surfaces (F164)"
   }
 }
