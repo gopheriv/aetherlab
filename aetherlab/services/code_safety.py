@@ -43,12 +43,18 @@ BANNED_NAMES: frozenset[str] = frozenset(
         "eval",
         "compile",
         "__import__",
+        "__builtins__",
         "open",
         "input",
         "breakpoint",
         "globals",
         "locals",
         "vars",
+        "getattr",
+        "setattr",
+        "delattr",
+        "dir",
+        "type",
     }
 )
 
@@ -58,11 +64,19 @@ BANNED_ATTRIBUTES: frozenset[str] = frozenset(
     {
         "__globals__",
         "__builtins__",
+        "__class__",
+        "__dict__",
         "__subclasses__",
         "__bases__",
         "__mro__",
         "__import__",
         "__code__",
+        "__getattribute__",
+        "__getattr__",
+        "__setattr__",
+        "__delattr__",
+        "__loader__",
+        "__spec__",
     }
 )
 
@@ -126,6 +140,12 @@ def validate_code_safety(code: str) -> tuple[bool, list[str]]:
             if node.attr in BANNED_ATTRIBUTES:
                 issues.append(
                     f"Access to banned attribute '{node.attr}' (line {node.lineno})."
+                )
+        # --- string-based dunder escape helpers -----------------------------
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in BANNED_ATTRIBUTES or node.value in BANNED_NAMES:
+                issues.append(
+                    f"Reference to banned runtime handle '{node.value}' (line {node.lineno})."
                 )
 
     return (not issues), issues

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 
@@ -225,7 +224,14 @@ HARD CONSTRAINTS (violating any ruins the render):
 8. End with the storyboard's idle loop via ValueTracker + always_redraw —
    never a frozen last frame.
 9. Use the storyboard's palette consistently; the accent color appears ONLY at
-   the hero frame."""
+   the hero frame.
+10. Maintain scene hygiene: before a new act introduces unrelated content, fade
+    out or transform the previous act's group; never stack unrelated mobjects at
+    the same `.move_to(...)` coordinate; use `VGroup(...).arrange(...)` for
+    multiple labels/equations; avoid `.copy()` unless the original is transformed
+    or removed nearby; prefer `set_color_by_tex()`/`get_part_by_tex()` over deep
+    MathTex indexing like `eq[0][3]`; keep NumberPlane/Axes as subtle background
+    scaffolding with low stroke opacity."""
 
 
 SCENE_REVISE_SYSTEM_PROMPT = """You are the AetherLab scene reviser. A rendered Manim scene was reviewed by
@@ -238,7 +244,10 @@ Rules:
    `def construct(self)`).
 3. Address the critique concretely (spacing, legibility, pacing, palette,
    overlap, dead time) — do not simplify the scene into a bare plot.
-4. Use only real Manim Community APIs."""
+4. Use only real Manim Community APIs.
+5. Preserve scene hygiene: no stale copied originals, no repeated unrelated
+   move_to anchors without cleanup, no abrupt self.clear(), and no dominant bare
+   grids."""
 
 
 SCENE_REPAIR_SYSTEM_PROMPT = """You are the AetherLab Manim repair engineer. A Manim Community scene you
@@ -253,6 +262,9 @@ Rules:
    nonexistent method, bad constant) while preserving the visual design.
 4. Use only real Manim Community APIs. If unsure a kwarg exists, drop it or
    use the closest documented equivalent.
+5. If the failure involved clutter/overlap, fix with FadeOut/Transform,
+   VGroup.arrange(), or different zones rather than piling new objects onto the
+   same anchor.
 """
 
 SCENE_REPAIR_USER_TEMPLATE = """## Render error

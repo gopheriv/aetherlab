@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,6 +133,8 @@ def compile_latex_to_pdf(tex_path: Path) -> Path | None:
     """Compile a .tex file to PDF using pdflatex. Returns PDF path or None."""
     from aetherlab.core.proc import subprocess_kwargs
 
+    pdf_path = tex_path.with_suffix(".pdf")
+    pdf_path.unlink(missing_ok=True)
     try:
         result = subprocess.run(
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
@@ -142,8 +143,7 @@ def compile_latex_to_pdf(tex_path: Path) -> Path | None:
             timeout=60,
             **subprocess_kwargs(),
         )
-        pdf_path = tex_path.with_suffix(".pdf")
-        if pdf_path.exists():
+        if result.returncode == 0 and pdf_path.exists():
             return pdf_path
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass

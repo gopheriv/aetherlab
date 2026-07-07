@@ -171,6 +171,7 @@ class LibraryIngestor:
                 progress(path.name, file_index, total_files, "reading")
 
             chunks = self._chunks_for_file(path)
+            self._delete_existing_chunks(collection, path)
             file_chunks = 0
             cancelled = False
             for start in range(0, len(chunks), batch_size):
@@ -207,6 +208,22 @@ class LibraryIngestor:
             return True
         sig = self._file_signature(path)
         return entry.get("mtime") != sig["mtime"] or entry.get("size") != sig["size"]
+
+    @staticmethod
+    def _delete_existing_chunks(collection, path: Path) -> None:
+        """Drop stale chunks for a changed file before re-upserting it.
+
+        Chroma upsert replaces matching ids but does not remove ids that no
+        longer exist after a file shrinks or a PDF extraction changes shape.
+        Those orphan chunks keep showing up in retrieval unless we delete by
+        the stable path metadata first.
+        """
+        try:
+            collection.delete(where={"path": str(path)})
+        except Exception:
+            # Older/alternate Chroma clients may reject metadata deletes; keep
+            # ingestion fail-soft rather than blocking the user's library.
+            pass
 
     def _chunks_for_file(self, path: Path) -> list[TextChunk]:
         suffix = path.suffix.lower()

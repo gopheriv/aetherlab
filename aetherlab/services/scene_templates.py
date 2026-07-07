@@ -92,6 +92,31 @@ def detect_domain(keywords: list[str], variables: dict[str, float]) -> str:
     return "oscillator"
 
 
+# Lesson "aspects": one topic renders across several chapters, and each chapter
+# is given an aspect so the SAME domain template produces a visually distinct
+# clip instead of N identical ones. The aspect changes the composition (how the
+# text is laid out and introduced) AND the pacing (run_time scale of the domain
+# animation), keyed off the chapter's role — not the domain.
+ASPECTS = ("setup", "evolution", "math", "recap", "full")
+
+
+def _aspect_knobs(aspect: str) -> dict:
+    """Composition + pacing knobs for a chapter aspect.
+
+    ``header`` selects one of the header layouts below; ``run`` scales the
+    domain animation's main sweep so an introductory chapter feels brisk and an
+    evolution chapter lingers on the motion.
+    """
+    table = {
+        "setup":     {"header": "hero",     "run": 0.75},
+        "evolution": {"header": "top",      "run": 1.30},
+        "math":      {"header": "equation", "run": 0.85},
+        "recap":     {"header": "bullets",  "run": 0.80},
+        "full":      {"header": "top",      "run": 1.00},
+    }
+    return table.get(aspect, table["full"])
+
+
 def build_scene(
     class_name: str,
     domain: str,
@@ -100,18 +125,24 @@ def build_scene(
     steps: list[str],
     variables: dict[str, float],
     palette: dict[str, str] | None = None,
+    aspect: str = "full",
 ) -> str:
     """Build a complete, self-contained Manim scene for ``domain``.
 
     ``title``/``summary``/``steps`` are raw strings (escaped here);
     ``variables`` parameterize the animation; ``palette`` (hex strings, see
-    ``DEFAULT_SCENE_PALETTE``) colors the scene to match the UI theme.
+    ``DEFAULT_SCENE_PALETTE``) colors the scene to match the UI theme;
+    ``aspect`` (see ``ASPECTS``) varies the composition + pacing so a lesson's
+    chapters look distinct even when they share a domain template.
     """
     builder = _BUILDERS.get(domain, _oscillator_scene)
     pal = _resolve_palette(palette)
+    knobs = _aspect_knobs(aspect)
     header = _header_block(class_name, title, summary, steps)
     header["txt"] = _lit(pal["text"])
     header["background"] = pal["background"]
+    header["run"] = float(knobs["run"])
+    header["header_code"] = _build_header_code(knobs["header"], header, pal)
     return builder(header, variables, pal).strip() + "\n"
 
 
@@ -140,15 +171,39 @@ def _header_block(class_name: str, title: str, summary: str, steps: list[str]) -
     step_lines = ",\n            ".join(
         _lit(_shorten(step, 82)) for step in steps[:3]
     ) or _lit("No derivation steps available.")
+    # The "equation/idea" hero line for the math aspect: the first derivation
+    # step reads as the governing idea, and it is plain Text (LaTeX-free) by the
+    # module's contract, so it renders with no TeX toolchain.
+    eqn = steps[0] if steps else summary
     return {
         "class_name": class_name,
         "title": _lit(_shorten(title, 70)),
         "summary": _lit(_shorten(summary, 110)),
         "step_lines": step_lines,
+        "eqn": _lit(_shorten(eqn, 70)),
     }
 
 
-_TEXT_HEADER = '''
+def _build_header_code(style: str, header: dict, pal: dict[str, str]) -> str:
+    """Return construct-body code that lays out and reveals the chapter text.
+
+    Each style is a distinct composition so chapters of the same domain look
+    different: ``top`` is the classic title strip; ``hero`` opens with a big
+    centered title (the "setup"); ``equation`` frames the governing idea in a
+    boxed banner (the "math"); ``bullets`` reveals takeaways one by one (the
+    "recap"). All are Text-only and self-contained.
+    """
+    ctx = dict(header)
+    ctx["accent"] = _lit(pal["accent"])
+    ctx["curve"] = _lit(pal["curve"])
+    ctx["secondary"] = _lit(pal["secondary"])
+    template = _HEADER_STYLES.get(style, _HEADER_STYLES["top"])
+    return template.format(**ctx)
+
+
+# Classic title strip — the Solve path and "evolution"/"full" chapters. Static
+# (added, not played) so the domain animation owns the motion.
+_HEADER_TOP = '''
         TXT = {txt}
         title = Text({title}, color=TXT).scale(0.5)
         title.to_edge(UP)
@@ -163,6 +218,51 @@ _TEXT_HEADER = '''
         self.add(title, summary, rows)
 '''
 
+# "setup": a big centered title that Writes on, then settles up — the chapter
+# opens by naming the question before the object animates in below.
+_HEADER_HERO = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.72)
+        summary = Text({summary}, color={accent}).scale(0.34)
+        summary.next_to(title, DOWN, buff=0.28)
+        head = VGroup(title, summary).move_to(ORIGIN).to_edge(UP, buff=0.7)
+        self.play(Write(title), run_time=1.0)
+        self.play(FadeIn(summary, shift=UP * 0.2), run_time=0.6)
+'''
+
+# "math": frame the governing idea in a boxed banner under a small title.
+_HEADER_EQUATION = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.42).to_edge(UP)
+        eqn = Text({eqn}, color={accent}).scale(0.42)
+        eqn.next_to(title, DOWN, buff=0.35)
+        box = SurroundingRectangle(eqn, color={curve}, buff=0.22, corner_radius=0.1)
+        self.play(Write(title), run_time=0.6)
+        self.play(FadeIn(eqn), Create(box), run_time=1.0)
+'''
+
+# "recap": reveal takeaway bullets one at a time under the title.
+_HEADER_BULLETS = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.5).to_edge(UP)
+        _steps = [
+            {step_lines}
+        ]
+        rows = VGroup(*[Text("* " + s, color=TXT).scale(0.3) for s in _steps])
+        rows.arrange(DOWN, aligned_edge=LEFT, buff=0.24)
+        rows.next_to(title, DOWN, buff=0.4)
+        self.play(Write(title), run_time=0.6)
+        for _row in rows:
+            self.play(FadeIn(_row, shift=RIGHT * 0.25), run_time=0.4)
+'''
+
+_HEADER_STYLES = {
+    "top": _HEADER_TOP,
+    "hero": _HEADER_HERO,
+    "equation": _HEADER_EQUATION,
+    "bullets": _HEADER_BULLETS,
+}
+
 
 # ── oscillator (default) ─────────────────────────────────────────────────────
 
@@ -173,7 +273,7 @@ def _oscillator_scene(header: dict, variables: dict[str, float], pal: dict[str, 
     return _IMPORT_BLOCK.format(domain="oscillator", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
-    def construct(self):{_TEXT_HEADER.format(**header)}
+    def construct(self):{header["header_code"]}
         axes = Axes(x_range=[-3, 3, 1], y_range=[-2, 2, 1]).scale(0.5)
         axes.to_edge(DOWN)
         damping = ValueTracker({damping!r})
@@ -189,9 +289,9 @@ class {header["class_name"]}(Scene):
 
         curve = always_redraw(curve_fn)
         self.add(axes)
-        self.play(Create(curve_fn()), run_time=1.5)
+        self.play(Create(curve_fn()), run_time={1.5 * header["run"]:.2f})
         self.add(curve)
-        self.play(damping.animate.set_value({damping * 3 + 0.1!r}), run_time=2.5,
+        self.play(damping.animate.set_value({damping * 3 + 0.1!r}), run_time={2.5 * header["run"]:.2f},
                   rate_func=there_and_back)
         self.wait(1)
 '''
@@ -207,7 +307,7 @@ def _pendulum_scene(header: dict, variables: dict[str, float], pal: dict[str, st
     return _IMPORT_BLOCK.format(domain="pendulum", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
-    def construct(self):{_TEXT_HEADER.format(**header)}
+    def construct(self):{header["header_code"]}
         g = {gravity!r}
         length = {length!r}
         damping = {damping!r}
@@ -244,7 +344,7 @@ class {header["class_name"]}(Scene):
         label.next_to(axes, UP, buff=0.1)
 
         self.add(anchor, rod, bob, axes, trace, label)
-        self.play(t.animate.set_value(8.0), run_time=6, rate_func=linear)
+        self.play(t.animate.set_value(8.0), run_time={6 * header["run"]:.2f}, rate_func=linear)
         self.wait(0.5)
 '''
 
@@ -257,7 +357,7 @@ def _orbit_scene(header: dict, variables: dict[str, float], pal: dict[str, str])
     return _IMPORT_BLOCK.format(domain="orbit", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
-    def construct(self):{_TEXT_HEADER.format(**header)}
+    def construct(self):{header["header_code"]}
         a = 2.6
         e = {ecc!r}
         b = a * math.sqrt(1 - e * e)
@@ -278,7 +378,7 @@ class {header["class_name"]}(Scene):
                                             stroke_width=2))
 
         self.add(orbit, star, radius, planet)
-        self.play(t.animate.set_value(2 * math.pi), run_time=5, rate_func=linear)
+        self.play(t.animate.set_value(2 * math.pi), run_time={5 * header["run"]:.2f}, rate_func=linear)
         self.wait(0.5)
 '''
 
@@ -291,7 +391,7 @@ def _wave_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) 
     return _IMPORT_BLOCK.format(domain="wave", background=header["background"]) + f'''
 
 class {header["class_name"]}(Scene):
-    def construct(self):{_TEXT_HEADER.format(**header)}
+    def construct(self):{header["header_code"]}
         axes = Axes(x_range=[0, 8, 2], y_range=[-1.6, 1.6, 1]).scale(0.5)
         axes.to_edge(DOWN)
         k = {stiffness!r}
@@ -306,9 +406,9 @@ class {header["class_name"]}(Scene):
 
         wave = always_redraw(wave_fn)
         self.add(axes)
-        self.play(Create(wave_fn()), run_time=1.5)
+        self.play(Create(wave_fn()), run_time={1.5 * header["run"]:.2f})
         self.add(wave)
-        self.play(t.animate.set_value(2 * math.pi), run_time=4, rate_func=linear)
+        self.play(t.animate.set_value(2 * math.pi), run_time={4 * header["run"]:.2f}, rate_func=linear)
         self.wait(0.5)
 '''
 

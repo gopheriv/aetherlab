@@ -108,7 +108,7 @@ def _extract_with_pyav(video: Path, out_dir: Path, count: int) -> list[Path]:
                 container.seek(0)
             if total <= 0:
                 return []
-            wanted = sorted({min(int(i * total / count), total - 1) for i in range(count)})
+            wanted = _sample_indices(total, count)
             for index, frame in enumerate(container.decode(stream)):
                 if index in wanted:
                     image = frame.to_image()
@@ -125,23 +125,44 @@ def _extract_with_pyav(video: Path, out_dir: Path, count: int) -> list[Path]:
         return []
 
 
+def _sample_indices(total: int, count: int) -> list[int]:
+    """Inclusive, uniformly spaced frame indexes for a decoded stream."""
+    if total <= 0 or count <= 0:
+        return []
+    if count == 1:
+        return [total // 2]
+    count = min(count, total)
+    if count == 1:
+        return [0]
+    return sorted({round(i * (total - 1) / (count - 1)) for i in range(count)})
+
+
+def _sample_times(duration: float, count: int) -> list[float]:
+    """Inclusive timestamps for ffmpeg fallback extraction."""
+    if duration <= 0 or count <= 0:
+        return []
+    if count == 1:
+        return [duration / 2]
+    end = max(duration - 0.05, 0.0)
+    return [i * end / (count - 1) for i in range(count)]
+
+
 def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
-    """CLI fallback: one frame per interval, downscaled to 640px wide."""
+    """CLI fallback: exact timestamps, including the end frame."""
     try:
         from aetherlab.core.proc import subprocess_kwargs
 
         duration = _probe_duration(video)
-        interval = max(duration / count, 0.1)
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-i", str(video),
-                "-vf", f"fps=1/{interval:.3f},scale=640:-1",
-                "-frames:v", str(count),
-                str(out_dir / "frame_%02d.png"),
-            ],
-            capture_output=True, text=True, timeout=60,
-            **subprocess_kwargs(),
-        )
+        for i, t in enumerate(_sample_times(duration, count)):
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(video), "-ss", f"{t:.3f}",
+                    "-frames:v", "1", "-vf", "scale=640:-1",
+                    str(out_dir / f"frame_{i:02d}.png"),
+                ],
+                capture_output=True, text=True, timeout=20,
+                **subprocess_kwargs(),
+            )
         return sorted(out_dir.glob("frame_*.png"))[:count]
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         log.info("Frame extraction unavailable (%s); skipping critique.", exc)

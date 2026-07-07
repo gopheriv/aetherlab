@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ import uuid
 from datetime import datetime
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
 from aetherlab.core.proc import subprocess_kwargs
@@ -55,21 +56,47 @@ def _detect_render_tier() -> dict:
     Always passing an explicit --fps prevents Manim from silently producing
     15fps output at low quality.
     """
-    try:
-        import os as _os
+    tiers = {
+        "cinematic": {"name": "cinematic", "fps": 60, "below_normal": False},
+        "standard": {"name": "standard", "fps": 30, "below_normal": False},
+        "constrained": {"name": "constrained", "fps": 30, "below_normal": True},
+        "cloud_cinematic": {"name": "cloud_cinematic", "fps": 60, "below_normal": False},
+    }
+    forced = (os.getenv("AETHERLAB_RENDER_TIER") or os.getenv("RENDER_TIER") or "auto").strip().lower()
+    if forced in tiers:
+        tier = dict(tiers[forced])
+    else:
+        try:
+            import psutil
 
-        import psutil
+            total_gb = psutil.virtual_memory().total / 1024**3
+            cpu = os.cpu_count() or 2
+        except Exception:
+            total_gb, cpu = 8.0, 2
 
-        total_gb = psutil.virtual_memory().total / 1024**3
-        cpu = _os.cpu_count() or 2
-    except Exception:
-        total_gb, cpu = 8.0, 2
+        if total_gb >= 16 and cpu >= 6:
+            tier = dict(tiers["cinematic"])
+        elif total_gb >= 10:
+            tier = dict(tiers["standard"])
+        else:
+            tier = dict(tiers["constrained"])
 
-    if total_gb >= 16 and cpu >= 6:
-        return {"name": "cinematic", "fps": 60, "below_normal": False}
-    if total_gb >= 10:
-        return {"name": "standard", "fps": 30, "below_normal": False}
-    return {"name": "constrained", "fps": 30, "below_normal": True}
+    fps_override = _env_int("AETHERLAB_MANIM_FPS", "MANIM_FPS", default=0)
+    if fps_override > 0:
+        tier["fps"] = fps_override
+    return tier
+
+
+def _env_int(*names: str, default: int = 0) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if value is None or not value.strip():
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            continue
+    return default
 
 
 _RENDER_TIER = _detect_render_tier()
@@ -86,15 +113,23 @@ class ManimRuntime:
         rag: RagResult,
         settings: "AppSettings | None" = None,
         max_retries: int = 1,
+        aspect: str = "full",
     ) -> SceneBundle:
-        """Generate a dynamic Manim scene using LLM, with retry on failure."""
+        """Generate a dynamic Manim scene using LLM, with retry on failure.
+
+        ``aspect`` (setup/evolution/math/recap/full) only steers the
+        deterministic template fallback, so a keyless lesson's chapters render
+        as visually distinct clips instead of N copies of one domain template.
+        """
         s = settings or self._settings
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
 
         if s and s.openai_api_key:
             from aetherlab.services.code_safety import validate_code_safety
-            from aetherlab.services.scene_validation import estimate_duration, validate_scene
+            from aetherlab.services.scene_validation import (
+                estimate_duration, scene_hygiene_warnings, validate_scene,
+            )
 
             generator = SceneGenerator(s)
             for attempt in range(max_retries + 1):
@@ -130,6 +165,9 @@ class ManimRuntime:
                     f"Estimated duration ~{est.total_seconds:.0f}s "
                     f"({est.play_calls} beats, {est.wait_calls} waits)."
                 )
+                hygiene = scene_hygiene_warnings(code)
+                if hygiene:
+                    diagnostics.append("Scene hygiene warnings: " + "; ".join(hygiene[:4]))
                 return SceneBundle(
                     class_name=class_name,
                     code=code,
@@ -142,9 +180,9 @@ class ManimRuntime:
                 )
             # All retries exhausted — fall back to static template
             diagnostics.append("All LLM attempts failed; using deterministic fallback.")
-            code = self._build_scene_code(class_name, request, solver, rag)
+            code = self._build_scene_code(class_name, request, solver, rag, aspect)
         else:
-            code = self._build_scene_code(class_name, request, solver, rag)
+            code = self._build_scene_code(class_name, request, solver, rag, aspect)
 
         try:
             compile(code, "<aetherlab-generated-scene>", "exec")
@@ -307,6 +345,7 @@ class ManimRuntime:
         max_repairs: int = 2,
         max_revisions: int = 2,
         brief: str = "",
+        progress: Callable[[str], None] | None = None,
     ) -> SceneBundle:
         """Render; repair crashes/timeouts; then (optionally) critique and revise.
 
@@ -326,7 +365,7 @@ class ManimRuntime:
         """
         s = settings or self._settings
         draft_quality = "l"  # validate/repair cheaply here; promote to `quality`
-        scene_bundle = self.render_scene(scene_bundle, s, draft_quality)
+        scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
 
         learner = None
         if s is not None:
@@ -393,7 +432,7 @@ class ManimRuntime:
             scene_bundle.code = fixed
             scene_bundle.status = "compiled"
             scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
-            scene_bundle = self.render_scene(scene_bundle, s, draft_quality)
+            scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
 
         # ── Promote the working code to the requested quality (Bug 4) ──
         # The draft rendered; render the final at the target quality. If that
@@ -408,7 +447,7 @@ class ManimRuntime:
                 diagnostics=list(scene_bundle.diagnostics),
                 storyboard=scene_bundle.storyboard,
             )
-            hq = self.render_scene(hq, s, quality)
+            hq = await self._render_once(hq, s, quality, progress)
             if hq.status == "rendered":
                 scene_bundle = hq
                 final_quality = quality
@@ -440,8 +479,10 @@ class ManimRuntime:
                 if scene_bundle.storyboard
                 else (brief or "A short cinematic physics explainer scene.")
             )
-            for round_no in range(1, max_revisions + 1):
-                crit = await critique_video(scene_bundle.video_path, board_brief, s)
+            revision_limit = int(getattr(s, "visual_critic_max_passes", max_revisions) or max_revisions)
+            frame_count = int(getattr(s, "visual_critic_keyframes", 6) or 6)
+            for round_no in range(1, revision_limit + 1):
+                crit = await critique_video(scene_bundle.video_path, board_brief, s, frame_count=frame_count)
                 if crit.verdict == "skipped":
                     break
                 scene_bundle.diagnostics.append(
@@ -480,7 +521,7 @@ class ManimRuntime:
                     diagnostics=list(scene_bundle.diagnostics),
                     storyboard=scene_bundle.storyboard,
                 )
-                trial = self.render_scene(trial, s, final_quality)
+                trial = await self._render_once(trial, s, final_quality, progress)
                 if trial.status == "rendered":
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
@@ -503,6 +544,56 @@ class ManimRuntime:
             scene_bundle = await self._add_narration(scene_bundle, s, brief)
 
         return scene_bundle
+
+    async def _render_once(
+        self,
+        scene_bundle: SceneBundle,
+        settings: "AppSettings | None",
+        quality: str,
+        progress: Callable[[str], None] | None = None,
+    ) -> SceneBundle:
+        """One render attempt through the selected backend, with local fallback."""
+        s = settings or self._settings
+        if s is None:
+            return self.render_scene(scene_bundle, settings, quality)
+        from aetherlab.services.render_backend import (
+            CLOUD_UNAVAILABLE,
+            LocalRenderBackend,
+            render_timeout_for,
+            select_backend,
+        )
+
+        backend = select_backend(s, scene_bundle.code, quality)
+        timeout = render_timeout_for(scene_bundle.code, quality, s)
+        rendered = await backend.render(
+            scene_bundle,
+            quality=quality,
+            settings=s,
+            timeout=timeout,
+            progress=progress,
+        )
+        if rendered.status != CLOUD_UNAVAILABLE:
+            return rendered
+        # Cloud is optional. Restore the compiled status before handing the same
+        # bundle to local rendering; the diagnostic stays so UI/tests can report
+        # the fallback without poisoning the render guard.
+        rendered.status = "compiled"
+        rendered.failure_kind = ""
+        if progress:
+            try:
+                progress("Cloud render unavailable; rendering locally")
+            except Exception:  # noqa: BLE001
+                pass
+        local = await LocalRenderBackend().render(
+            rendered,
+            quality=quality,
+            settings=s,
+            timeout=timeout,
+            progress=progress,
+        )
+        if local.status == "rendered":
+            local.diagnostics.append("Cloud render unavailable; rendered locally.")
+        return local
 
     async def _add_narration(
         self, scene_bundle: SceneBundle, s: "AppSettings", brief: str
@@ -589,12 +680,14 @@ class ManimRuntime:
         request: ProblemRequest,
         solver: SolverResult,
         rag: RagResult,
+        aspect: str = "full",
     ) -> str:
         """Deterministic domain-aware fallback (services/scene_templates).
 
         Chooses a pendulum/orbit/wave/oscillator visualization matching the
         problem instead of one generic damped-wave plot, themed to the app
-        palette when the UI has persisted one.
+        palette when the UI has persisted one. ``aspect`` varies the
+        composition/pacing so lesson chapters sharing a domain look distinct.
         """
         from aetherlab.services.scene_templates import (
             build_scene,
@@ -612,6 +705,7 @@ class ManimRuntime:
             steps=[_shorten(step, 82) for step in solver.derivation_steps[:4]],
             variables=solver.variables,
             palette=palette,
+            aspect=aspect,
         )
 
 

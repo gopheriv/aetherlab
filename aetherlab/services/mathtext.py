@@ -171,7 +171,7 @@ def render_math(
         from matplotlib import figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-        from aetherlab.ui.qt_compat import QtCore, QtGui
+        from aetherlab.ui.qt_compat import QtGui
 
         prepared = _prepare(expr)
 
