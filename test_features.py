@@ -43,6 +43,16 @@ os.environ["QWEN_SETTINGS_PATH"] = str(_TMP / "no-qwen-settings.json")
 os.environ.pop("AETHERLAB_QWEN_AUTOLOAD", None)
 os.environ.pop("AETHERLAB_PROVIDER", None)
 os.environ.pop("AETHERLAB_VISION_MODEL", None)
+for _compat_key in (
+    "GPT_API_KEY", "DASHSCOPE_API_KEY", "GPT_BASE_URL", "LLM_BASE_URL",
+    "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL", "LLM_TIMEOUT",
+    "VISION_MODEL", "VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_KEYFRAMES",
+    "VOICEOVER_ENABLED", "TTS_ENABLED", "TTS_VOICE", "TTS_RATE",
+    "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO", "CLOUD_RENDER_WORKFLOW",
+    "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_POLL",
+    "RENDER_TIER", "MANIM_FPS",
+):
+    os.environ.pop(_compat_key, None)
 
 results: dict[str, dict] = {}
 
@@ -106,7 +116,7 @@ def t_f02():
                        capture_output=True, text=True, timeout=600, env={**os.environ})
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr[-300:]}"
     assert "smoke pipeline complete" in r.stdout.lower(), r.stdout[-300:]
-    return f"smoke exit 0; scene status line present"
+    return "smoke exit 0; scene status line present"
 
 
 def t_f03():
@@ -137,7 +147,34 @@ def t_f05():
 def t_f06():
     s = _settings()
     assert s.llm_model and s.data_dir and s.cache_path
-    return f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}"
+    import aetherlab.core.settings as S
+    keys = (
+        "AETHERLAB_LLM_MODEL", "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY",
+        "AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "MANIM_MODEL",
+        "GPT_API_KEY", "GPT_BASE_URL", "LLM_TIMEOUT",
+        "AETHERLAB_VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_MAX_PASSES",
+        "AETHERLAB_VISUAL_CRITIC_KEYFRAMES", "VISUAL_CRITIC_KEYFRAMES",
+    )
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        os.environ["MANIM_MODEL"] = "manim-bot-code-model"
+        os.environ["GPT_API_KEY"] = "sk-gpt"
+        os.environ["GPT_BASE_URL"] = "https://example.test/v1"
+        os.environ["LLM_TIMEOUT"] = "77"
+        os.environ["VISUAL_CRITIC_MAX_PASSES"] = "3"
+        os.environ["VISUAL_CRITIC_KEYFRAMES"] = "4"
+        compat = S.load_settings()
+        assert compat.llm_model == "manim-bot-code-model"
+        assert compat.openai_api_key == "sk-gpt"
+        assert compat.openai_base_url == "https://example.test/v1"
+        assert compat.llm_timeout_seconds == 77.0
+        assert compat.visual_critic_max_passes == 3 and compat.visual_critic_keyframes == 4
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; manim-bot aliases load"
 
 
 def t_f07():
@@ -435,7 +472,7 @@ def t_f30():
 
 def t_f31():
     from aetherlab.core.cache import SessionCache
-    from aetherlab.core.models import ProblemRequest, SolverResult, RagResult
+    from aetherlab.core.models import ProblemRequest, RagResult
     c = SessionCache(_settings().cache_path)
     req = ProblemRequest(prompt="incremental-test-xyz")
     key = c.ensure_request(req)
@@ -564,12 +601,21 @@ def t_f43():
     # Real incremental ingest into chromadb (deps present).
     lib = Path(_settings().library_path)
     lib.mkdir(parents=True, exist_ok=True)
-    (lib / "ingest_me.txt").write_text("kinematics energy momentum " * 80, encoding="utf-8")
+    source = lib / "ingest_me.txt"
+    source.write_text("kinematics energy momentum. " * 420, encoding="utf-8")
     ing = LibraryIngestor(_settings())
     n1 = ing.ingest(reset=True)
     n2 = ing.ingest()  # nothing new
     assert n1 > 0 and n2 == 0, (n1, n2)
-    return f"ingest upserted {n1}; re-run 0 (incremental)"
+    source.write_text("replacement-only tiny note.", encoding="utf-8")
+    n3 = ing.ingest()
+    import chromadb
+    client = chromadb.PersistentClient(path=str(_settings().chroma_path))
+    collection = client.get_collection("textbooks")
+    source_chunks = collection.get(where={"path": str(source)}, include=[])
+    assert len(source_chunks.get("ids", [])) == 1, "changed file must delete stale old chunks"
+    assert n3 == 1, n3
+    return f"ingest upserted {n1}; re-run 0; stale chunks purged on change"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -635,7 +681,7 @@ def t_f48():
 # ══════════════════════════════════════════════════════════════════════════
 
 def t_f49():
-    from aetherlab.services.scene_generator import SceneGenerator, SCENE_GENERATION_SYSTEM_PROMPT
+    from aetherlab.services.scene_generator import SceneGenerator
     _gr = inspect.getsource(SceneGenerator._generate_remote)
     # Two-call split: codegen runs cold (0.15), single-call fallback stays 0.4.
     assert "max_tokens=32768" in _gr and "temperature = 0.15" in _gr and "temperature = 0.4" in _gr
@@ -693,7 +739,18 @@ def t_f55():
     from aetherlab.services.manim_runtime import _detect_render_tier, _RENDER_TIER
     t = _detect_render_tier()
     assert t["fps"] in {30, 60} and "name" in t
-    return f"tier={_RENDER_TIER['name']} fps={_RENDER_TIER['fps']}"
+    saved = {k: os.environ.pop(k, None) for k in ("AETHERLAB_RENDER_TIER", "RENDER_TIER", "AETHERLAB_MANIM_FPS", "MANIM_FPS")}
+    try:
+        os.environ["RENDER_TIER"] = "constrained"
+        os.environ["MANIM_FPS"] = "24"
+        forced = _detect_render_tier()
+        assert forced["name"] == "constrained" and forced["fps"] == 24
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return f"tier={_RENDER_TIER['name']} fps={_RENDER_TIER['fps']}; env override honored"
 
 
 def t_f56():
@@ -743,10 +800,19 @@ def t_f103():
     # escape-chain attributes
     ok3, iss3 = validate_code_safety("y = ().__class__.__bases__[0].__subclasses__()")
     assert not ok3 and any("__subclasses__" in i for i in iss3)
+    # string-based escape helpers (getattr + __builtins__/dunder strings) used
+    # to bypass the previous gate because they do not appear as ast.Attribute.
+    for payload in (
+        "getattr(__builtins__, 'open')('x','w')",
+        "getattr(type, '__subclasses__')(type)",
+        "().__getattribute__('__class__')",
+    ):
+        ok, bypass_issues = validate_code_safety(payload)
+        assert not ok, (payload, bypass_issues)
     # wired into generation + repair
     src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
     assert src.count("validate_code_safety") >= 2
-    return "safety gate blocks imports/builtins/escapes; wired twice (F103)"
+    return "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)"
 
 
 def t_f104():
@@ -789,12 +855,28 @@ def t_f105():
 def t_f106():
     from aetherlab.services.scene_validation import (
         validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
+        scene_hygiene_warnings,
     )
     bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
     issues = lint_manim_names(bad)
     assert any("ShowCreation" in i for i in issues), issues
     tex_bad = 'from manim import *\nclass S(Scene):\n    def construct(self):\n        e = MathTex(r"\\frac{a}{b")\n'
     assert check_latex_strings(tex_bad), "unclosed brace must be flagged"
+    messy = """from manim import *
+class S(Scene):
+    def construct(self):
+        a = Text("A").move_to(ORIGIN)
+        b = Text("B").move_to(ORIGIN)
+        c = a.copy()
+        plane = NumberPlane()
+        self.play(Write(a), Write(b), FadeIn(c), Create(plane))
+        self.clear()
+"""
+    hygiene = scene_hygiene_warnings(messy)
+    assert any("HYGIENE:OVERLAP" in i for i in hygiene), hygiene
+    assert any("HYGIENE:STALE_COPY" in i for i in hygiene), hygiene
+    assert any("HYGIENE:GRID" in i for i in hygiene), hygiene
+    assert any("HYGIENE:CLEAR" in i for i in hygiene), hygiene
     from aetherlab.services.scene_templates import build_scene
     clean = build_scene("S", "wave", "T", "S", ["s1"], {"frequency": 2.0})
     ok, iss = validate_scene(clean)
@@ -804,7 +886,8 @@ def t_f106():
     # wired into generation and repair paths
     mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
     assert mr_src.count("validate_scene") >= 2 and "estimate_duration" in mr_src
-    return "lint+LaTeX+duration checks work; wired into gen+repair (F106)"
+    assert "scene_hygiene_warnings" in mr_src
+    return "lint+LaTeX+duration+hygiene checks work; wired into gen+repair (F106)"
 
 
 def t_f102():
@@ -833,7 +916,7 @@ def t_f107():
     # Storyboard→codegen split: hot directing pass, cold implementation pass,
     # fail-soft to the single-call cinematic path.
     from dataclasses import replace
-    from aetherlab.core.models import ProblemRequest, SolverResult, RagResult
+    from aetherlab.core.models import ProblemRequest
     from aetherlab.services.scene_generator import SceneGenerator
     keyless = replace(_settings(), openai_api_key=None)
     board = asyncio.run(SceneGenerator(keyless).storyboard(
@@ -875,7 +958,7 @@ def t_f108():
     # frame extraction works on a real render when one exists.
     from dataclasses import replace
     from aetherlab.core.models import SceneBundle
-    from aetherlab.services.scene_critic import Critique, critique_video, extract_frames
+    from aetherlab.services.scene_critic import Critique, _sample_indices, critique_video, extract_frames
     no_vlm = replace(_settings(), vision_model=None)
     crit = asyncio.run(critique_video("missing.mp4", "brief", no_vlm))
     assert crit.verdict == "skipped" and not crit.should_revise
@@ -886,6 +969,8 @@ def t_f108():
         storyboard={"acts": []}).to_json())
     assert sb.storyboard == {"acts": []}
     assert SceneBundle.from_json({}).storyboard is None
+    assert _sample_indices(10, 4) == [0, 3, 6, 9]
+    assert _sample_indices(5, 99) == [0, 1, 2, 3, 4]
     # loop is wired into the runtime after successful renders
     src = inspect.getsource(__import__(
         "aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]
@@ -902,7 +987,7 @@ def t_f108():
         frames = extract_frames(vids[-1], count=3)
         assert len(frames) >= 1, "PyAV should sample frames from a real render"
         note = f"sampled {len(frames)} frames via PyAV"
-    return f"critique loop wired + fail-soft; {note} (F108)"
+    return f"critique loop wired + fail-soft + final-frame sampling; {note} (F108)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -938,10 +1023,12 @@ def t_f60():
 
 def t_f61():
     from aetherlab.ui.widgets import SimulationPanel
+    from aetherlab.ui.widgets import _frame_step_ms_for_video
     sp = SimulationPanel()
     assert hasattr(sp, "_player") and hasattr(sp, "_seek_slider")
     sp._on_duration_changed(65000)  # 1:05
     assert "1:05" in sp._time_label.text()
+    assert _frame_step_ms_for_video(_TMP / "missing.mp4") == 33
     sp.close()
     return "video player + time label formatting"
 
@@ -1676,7 +1763,6 @@ def t_f123():
     p._storyboard_strip.set_storyboard({"acts": [
         {"name": "ESTABLISH", "duration_s": 5}, {"name": "REVEAL", "duration_s": 5}]})
     # find an act card and click it
-    from aetherlab.ui.qt_compat import QtGui, QtCore
     cards = [p._storyboard_strip._layout.itemAt(i).widget()
              for i in range(p._storyboard_strip._layout.count())]
     cards[1].mousePressEvent(None)  # second act → frac 0.5
@@ -2074,7 +2160,10 @@ def t_f140():
     # Narration settings: env + app-config round-trip; silent_video_path persists.
     import aetherlab.core.settings as S
     saved = {k: os.environ.pop(k, None) for k in
-             ("AETHERLAB_NARRATION", "AETHERLAB_TTS_VOICE", "AETHERLAB_TTS_RATE")}
+             (
+                 "AETHERLAB_NARRATION", "AETHERLAB_TTS_VOICE", "AETHERLAB_TTS_RATE",
+                 "VOICEOVER_ENABLED", "TTS_ENABLED", "TTS_VOICE", "TTS_RATE",
+             )}
     try:
         os.environ["AETHERLAB_NARRATION"] = "1"
         os.environ["AETHERLAB_TTS_VOICE"] = "en-GB-RyanNeural"
@@ -2082,6 +2171,14 @@ def t_f140():
         assert s.narration_enabled is True and s.tts_voice == "en-GB-RyanNeural" and s.tts_rate == "+8%"
         del os.environ["AETHERLAB_NARRATION"]
         assert S.load_settings().narration_enabled is False
+        os.environ.pop("AETHERLAB_TTS_VOICE", None)
+        os.environ.pop("AETHERLAB_TTS_RATE", None)
+        os.environ["VOICEOVER_ENABLED"] = "true"
+        os.environ["TTS_VOICE"] = "en-US-AndrewMultilingualNeural"
+        os.environ["TTS_RATE"] = "+10%"
+        alias = S.load_settings()
+        assert alias.narration_enabled is True and alias.tts_voice.endswith("MultilingualNeural")
+        assert alias.tts_rate == "+10%"
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
@@ -2097,7 +2194,7 @@ def t_f140():
     d = SettingsDialog(_settings())
     assert hasattr(d, "_narration_check") and "narration_enabled" in d.get_settings()
     d.close()
-    return "narration settings env/config + silent_video_path + dialog toggle (F140)"
+    return "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)"
 
 
 def t_f141():
@@ -2129,21 +2226,22 @@ def t_f141():
 
 def t_f142():
     # Phase 2: per-chapter narration timeline → .srt + fail-soft narrate_segment.
-    from aetherlab.services.voiceover import build_srt, narrate_segment
+    from aetherlab.services.voiceover import _fmt_srt_time, build_srt, narrate_segment
     srt = build_srt([("Chapter one.", 4.0), ("", 1.0), ("Chapter two.", 6.5)])
     assert "00:00:00,000 --> 00:00:04,000" in srt and "Chapter two." in srt
     assert srt.count("-->") == 2  # blank consumes time but emits no cue
     assert "00:00:05,000 --> 00:00:11,500" in srt  # ch2 offset by the blank
+    assert _fmt_srt_time(11.9996) == "00:00:12,000"
     res, dur = asyncio.run(narrate_segment(_TMP / "nope.mp4", "hi", _TMP))
     assert res is None and dur == 0.0  # missing video → fail-soft
-    return "srt timeline (cumulative, blank-skip) + narrate_segment fail-soft (F142)"
+    return "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)"
 
 
 def t_f143():
     # Phase 3: chapter synthesis + per-chapter cache + orchestration + assembly.
     from dataclasses import replace
     from pathlib import Path
-    from aetherlab.core.models import SceneBundle
+    from aetherlab.core.models import LessonChapter, SceneBundle
     from aetherlab.services.lesson_planner import _template_lesson
     from aetherlab.services.lesson_pipeline import (
         LessonPipeline, _ChapterCache, _chapter_key, _chapter_prompt, _chapter_solver,
@@ -2172,8 +2270,32 @@ def t_f143():
 
     s = replace(_settings(), openai_api_key=None, narration_enabled=False)
     lp = LessonPipeline(s)
+    # BUG-9 regression: a failed middle render must not compact chapter scenes
+    # and then narrate/title the surviving next scene with the failed chapter's
+    # text. Keep the original plan index with every rendered scene.
+    narr_lp = LessonPipeline(replace(s, narration_enabled=True))
+    one = LessonChapter(id="1", title="One", kind="scene", narration="narration one")
+    three = LessonChapter(id="3", title="Three", kind="scene", narration="narration three")
+    calls = []
+    import aetherlab.services.voiceover as voiceover
+
+    async def _fake_narrate(video, narration, out_dir, **kw):
+        calls.append((Path(video).name, narration))
+        return Path(video), 1.0
+
+    orig_narrate = voiceover.narrate_segment
+    voiceover.narrate_segment = _fake_narrate
+    try:
+        clips, segments, titles = asyncio.run(narr_lp._narrate_chapters([
+            (0, one, SceneBundle("S1", "", "e", "rendered", video_path="one.mp4")),
+            (2, three, SceneBundle("S3", "", "e", "rendered", video_path="three.mp4")),
+        ], _TMP))
+    finally:
+        voiceover.narrate_segment = orig_narrate
+    assert calls == [("one.mp4", "narration one"), ("three.mp4", "narration three")], calls
+    assert titles == ["One", "Three"] and segments[-1][0] == "narration three"
     n = {"i": 0}
-    async def _gen(request, solver, rag, settings):
+    async def _gen(request, solver, rag, settings, aspect="full"):
         return SceneBundle(class_name="AetherLabScene", code="x", engine="manim-community", status="compiled")
     async def _render(scene, settings, quality="l", brief="", **kw):
         n["i"] += 1
@@ -2185,7 +2307,8 @@ def t_f143():
     bundle = asyncio.run(lp.run("Kepler orbit", progress=lambda m, d, t: prog.append(m)))
     assert bundle.status == "assembled" and bundle.video_path and Path(bundle.video_path).exists()
     assert len(bundle.chapter_scenes) >= 3 and any("Assembling" in m for m in prog)
-    return f"lesson pipeline: {len(bundle.chapter_scenes)} chapters → assembled mp4 (F143)"
+    assert len(bundle.rendered_chapter_indexes) == len(bundle.chapter_scenes)
+    return f"lesson pipeline: {len(bundle.chapter_scenes)} chapters → assembled mp4; partial-render narration aligned (F143)"
 
 
 def t_f144():
@@ -2208,10 +2331,12 @@ def t_f144():
 
 def t_f145():
     # Phase 5: LessonView populates + interactive questions; LessonWorker wiring.
-    from aetherlab.core.models import LessonBundle
+    from aetherlab.core.models import LessonBundle, SceneBundle
     from aetherlab.services.lesson_planner import _template_lesson
     from aetherlab.ui.widgets import LessonView, _QuestionCard
     from aetherlab.ui.workers import LessonWorker
+    from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+    from aetherlab.ui.qt_compat import QtCore
     plan = _template_lesson("simple pendulum", "ap")
     lv = LessonView()
     lv.set_lesson(LessonBundle(plan=plan))
@@ -2226,6 +2351,22 @@ def t_f145():
     lv.chapter_seek_requested.connect(lambda s: got.append(s))
     lv._on_outline_click(lv._outline.item(0))
     assert got == [0.0] and lv._tabs.currentIndex() == 0  # click seeks + shows Video
+    # BUG-9 UI regression: if a middle renderable chapter failed, offsets are
+    # mapped by plan index, not by compacted rendered-list position.
+    renderable_indexes = [i for i, ch in enumerate(plan.chapters) if ch.kind in _RENDERED_KINDS]
+    assert len(renderable_indexes) >= 3
+    partial = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "", "e", "rendered", video_path="missing-one.mp4"),
+            SceneBundle("S3", "", "e", "rendered", video_path="missing-three.mp4"),
+        ],
+        chapter_offsets=[4.5, 12.25],
+        rendered_chapter_indexes=[renderable_indexes[0], renderable_indexes[2]],
+    )
+    lv.set_lesson(partial)
+    assert lv._outline.item(renderable_indexes[0]).data(QtCore.Qt.ItemDataRole.UserRole) == 4.5
+    assert lv._outline.item(renderable_indexes[2]).data(QtCore.Qt.ItemDataRole.UserRole) == 12.25
     mcq = next(q for q in plan.questions if q.choices)
     qc = _QuestionCard(1, mcq)
     qc._answer_mcq(mcq.answer)
@@ -2250,6 +2391,417 @@ def t_f145():
     assert mw._workspace.currentIndex() == PAGE_LESSON and mw.lesson_view._outline.count() >= 4
     mw.close()
     return "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+
+
+def t_f146():
+    # P1.1: per-chapter template "aspect" makes keyless lesson chapters visually
+    # distinct instead of N identical domain templates.
+    from aetherlab.services.scene_templates import build_scene, ASPECTS, _BUILDERS
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_validation import validate_scene
+    steps = ["m x'' + c x' + k x = 0", "solution decays", "energy drains away"]
+    for domain in _BUILDERS:
+        codes = {}
+        for asp in ASPECTS:
+            code = build_scene("AetherLabScene", domain, "Why does it move?",
+                               "a short intuition", steps, {"damping": 0.15}, aspect=asp)
+            compile(code, "<t>", "exec")  # every aspect must compile
+            safe, _ = validate_code_safety(code)
+            lint, _ = validate_scene(code)
+            assert safe and lint, f"{domain}/{asp} failed gates"
+            codes[asp] = code
+        # setup/math/recap must each differ from the plain evolution render.
+        assert codes["setup"] != codes["evolution"]
+        assert codes["math"] != codes["evolution"]
+        assert codes["recap"] != codes["evolution"]
+    # "full" (the Solve path default) keeps the classic top-strip header.
+    full = build_scene("AetherLabScene", "oscillator", "t", "s", steps, {}, aspect="full")
+    assert "self.add(title, summary, rows)" in full
+    return "aspect setup/evolution/math/recap → distinct, gate-passing scenes per domain (F146)"
+
+
+def t_f147():
+    # P1.1: the lesson pipeline assigns aspects by chapter role so the four
+    # renderable chapters of a keyless lesson get four different compositions.
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _chapter_aspect, _RENDERED_KINDS
+    plan = _template_lesson("the simple pendulum", "undergrad")
+    aspects = {c.id: _chapter_aspect(c, plan) for c in plan.chapters}
+    renderable = [c for c in plan.chapters if c.kind in _RENDERED_KINDS]
+    got = [aspects[c.id] for c in renderable]
+    assert got[0] == "setup", got
+    assert "math" in got and "recap" in got and "evolution" in got, got
+    # equation/recap kinds map deterministically regardless of position.
+    eq = next(c for c in plan.chapters if c.kind == "equation_card")
+    rc = next(c for c in plan.chapters if c.kind == "recap")
+    assert _chapter_aspect(eq, plan) == "math" and _chapter_aspect(rc, plan) == "recap"
+    return f"chapter→aspect: first={got[0]}, roles={got} (F147)"
+
+
+def t_f148():
+    # P1.2: produced lesson — PIL title cards + crossfaded assembly.
+    import subprocess
+    import imageio_ffmpeg
+    import av
+    from aetherlab.services.cards import render_card_png
+    from aetherlab.services.assembly import assemble_lesson
+    png = render_card_png(_TMP / "card.png", kicker="Chapter 2",
+                          title="The idea", subtitle="undergrad")
+    assert png and png.exists() and png.stat().st_size > 1000
+
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    clips = []
+    for i in range(2):
+        c = _TMP / f"clip{i}.mp4"
+        subprocess.run([ff, "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=480x360:rate=30:duration=2",
+                        "-pix_fmt", "yuv420p", str(c)], capture_output=True)
+        clips.append(c)
+    # return_offsets exposes each chapter clip's readable start in the produced
+    # video (BUG-8: plain-concat timing; BUG-16: crossfade-start subtitle drift).
+    out, offsets = asyncio.run(assemble_lesson(
+        clips, _TMP / "produced.mp4",
+        lesson_title="The Pendulum", lesson_subtitle="Undergraduate level",
+        chapter_titles=["The question", "The idea"], return_offsets=True))
+    assert out and Path(out).exists()
+    assert len(offsets) == 2, offsets
+    # Chapter 1 must start AFTER the 3s intro card + its chapter card — never 0
+    # (a plain concat would have put it at 0), and offsets must be increasing.
+    assert offsets[0] > 4.6, f"ch1 offset {offsets[0]} should clear the title-card crossfade"
+    assert offsets[1] > offsets[0], offsets
+    with av.open(str(out)) as cont:
+        vs = cont.streams.video[0]
+        dur = float(cont.duration) / 1e6 if cont.duration else 0
+        # intro + 2*(card+clip) + end = 6 segments; must exceed the 4s of raw
+        # clips, proving the cards were inserted.
+        assert vs.width == 1280 and vs.height == 720
+        assert dur > 5.0, dur
+        # Every chapter offset lands within the real video timeline.
+        assert offsets[-1] < dur, (offsets, dur)
+    return (f"produced lesson: cards + crossfades → {dur:.1f}s 1280x720; "
+            f"chapter offsets {[round(o,1) for o in offsets]} past intro (F148)")
+
+
+def t_f149():
+    # P1.3: LessonPlan cache keyed by topic+audience (re-open is instant) +
+    # regenerate bypass; keyed distinctly per audience.
+    from dataclasses import replace
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _PlanCache, _topic_id
+    s = replace(_settings(), openai_api_key=None)
+    pc = _PlanCache(s)
+    assert pc.get("the wave equation", "undergrad") is None  # cold
+    plan = _template_lesson("the wave equation", "undergrad")
+    pc.put("the wave equation", "undergrad", plan)
+    hit = pc.get("the wave equation", "undergrad")
+    assert hit is not None and hit.cached and len(hit.chapters) == len(plan.chapters)
+    # case/space-insensitive key, audience-sensitive.
+    assert pc.get("  THE WAVE EQUATION  ", "undergrad") is not None
+    assert pc.get("the wave equation", "high_school") is None
+    assert _topic_id("X", "ap") != _topic_id("X", "undergrad")
+    return "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)"
+
+
+def t_f150():
+    # P2: Learn is cancellable — cancel_check stops the pipeline and returns a
+    # "cancelled" bundle; the worker exposes cancel(); the UI stays non-blank.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.lesson_pipeline import LessonPipeline
+    from aetherlab.ui.workers import LessonWorker
+    s = replace(_settings(), openai_api_key=None, narration_enabled=False)
+    lp = LessonPipeline(s)
+    calls = {"n": 0}
+    async def _gen(request, solver, rag, settings, aspect="full"):
+        return SceneBundle(class_name="AetherLabScene", code="x",
+                           engine="manim-community", status="compiled")
+    async def _render(scene, settings, quality="l", brief="", **kw):
+        calls["n"] += 1
+        scene.status = "rendered"; scene.video_path = ""
+        return scene
+    lp.manim.generate_scene_async = _gen
+    lp.manim.render_scene_with_repair = _render
+    # Cancel immediately: no chapter should render, bundle is "cancelled".
+    bundle = asyncio.run(lp.run("Kepler orbit", regenerate=True,
+                                cancel_check=lambda: True))
+    assert bundle.status == "cancelled", bundle.status
+    assert calls["n"] == 0, calls
+    # Worker exposes a cancel() that flips its event.
+    w = LessonWorker("x", s, regenerate=True)
+    assert hasattr(w, "cancel") and not w._cancel.is_set()
+    w.cancel(); assert w._cancel.is_set()
+    return "Learn cancellable: cancel_check→cancelled bundle; worker.cancel() + regenerate (F150)"
+
+
+def t_f151():
+    # Innovation: partial lessons make skipped renderable chapters visible in
+    # the outline instead of silently mapping them to a surviving clip.
+    from aetherlab.core.models import LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+    from aetherlab.ui.qt_compat import QtCore
+    from aetherlab.ui.widgets import LessonView
+
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    renderable_indexes = [i for i, ch in enumerate(plan.chapters) if ch.kind in _RENDERED_KINDS]
+    assert len(renderable_indexes) >= 3
+    bundle = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "", "e", "rendered", video_path="missing-one.mp4"),
+            SceneBundle("S3", "", "e", "rendered", video_path="missing-three.mp4"),
+        ],
+        chapter_offsets=[3.0, 9.0],
+        rendered_chapter_indexes=[renderable_indexes[0], renderable_indexes[2]],
+    )
+    lv = LessonView()
+    lv.set_lesson(bundle)
+    skipped = lv._outline.item(renderable_indexes[1])
+    assert "not rendered" in skipped.text().lower(), skipped.text()
+    assert "did not render" in skipped.toolTip().lower()
+    assert lv._outline.item(renderable_indexes[2]).data(QtCore.Qt.ItemDataRole.UserRole) == 9.0
+    lv.close()
+    return "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)"
+
+
+def t_f152():
+    # RenderBackend seam: default local, explicit cloud, auto threshold routing.
+    from dataclasses import replace
+    from aetherlab.services.render_backend import (
+        CloudRenderBackend, LocalRenderBackend, cloud_job_id, render_fps_for, select_backend,
+    )
+    from aetherlab.core.models import SceneBundle
+    s = _settings()
+    assert isinstance(select_backend(s, "light", "l"), LocalRenderBackend)
+    cloud = replace(s, render_mode="cloud", github_repo="owner/render", github_token="ghp_" + "x" * 24)
+    assert isinstance(select_backend(cloud, "light", "l"), CloudRenderBackend)
+    auto = replace(cloud, render_mode="auto", cloud_render_threshold=3.0)
+    assert isinstance(select_backend(auto, "self.play(FadeIn(x))", "l"), LocalRenderBackend)
+    heavy = "self.play(FadeIn(x))\n" * 80
+    assert isinstance(select_backend(auto, heavy, "h"), CloudRenderBackend)
+    scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
+    assert cloud_job_id(scene, quality="l", fps=30) != cloud_job_id(scene, quality="h", fps=30)
+    assert render_fps_for(heavy, "h") == 30
+    return "backend selection local/cloud/auto + stable cloud job ids (F152)"
+
+
+def t_f153():
+    # Settings round-trip for cloud render config; token is config-only and masked elsewhere.
+    from aetherlab.core.settings import save_app_config, load_settings, app_config_path
+    save_app_config({
+        "render_mode": "auto",
+        "cloud_provider": "github_actions",
+        "github_repo": "owner/render",
+        "github_token": "github_pat_TESTTOKEN",
+        "github_workflow": "render.yml",
+        "github_branch": "renders",
+        "cloud_render_threshold": "3.5",
+        "cloud_poll_seconds": "4",
+        "cloud_render_timeout": "123",
+    })
+    s = load_settings()
+    assert s.render_mode == "auto" and s.github_repo == "owner/render"
+    assert s.github_token == "github_pat_TESTTOKEN"
+    assert s.cloud_render_threshold == 3.5 and s.cloud_poll_seconds == 4
+    assert s.cloud_render_timeout == 123
+    app_config_path().unlink(missing_ok=True)
+    keys = (
+        "AETHERLAB_RENDER_MODE", "AETHERLAB_RENDER_REPO", "AETHERLAB_GITHUB_WORKFLOW",
+        "AETHERLAB_GITHUB_BRANCH", "AETHERLAB_CLOUD_POLL_SECONDS",
+        "AETHERLAB_CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO",
+        "CLOUD_RENDER_WORKFLOW", "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT",
+        "CLOUD_RENDER_POLL",
+    )
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        os.environ["CLOUD_RENDER_ENABLED"] = "true"
+        os.environ["CLOUD_RENDER_REPO"] = "owner/worker"
+        os.environ["CLOUD_RENDER_WORKFLOW"] = "render.yml"
+        os.environ["CLOUD_RENDER_BRANCH"] = "main"
+        os.environ["CLOUD_RENDER_TIMEOUT"] = "456"
+        os.environ["CLOUD_RENDER_POLL"] = "9"
+        alias = load_settings()
+        assert alias.render_mode == "auto" and alias.github_repo == "owner/worker"
+        assert alias.github_workflow == "render.yml" and alias.github_branch == "main"
+        assert alias.cloud_render_timeout == 456 and alias.cloud_poll_seconds == 9
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return "cloud render settings persist via app-config + manim-bot CLOUD_RENDER_* aliases (F153)"
+
+
+def t_f154():
+    # Cloud backend fully stubbed: success downloads MP4; identical scene reuses cache.
+    import io
+    import zipfile
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.render_backend import CloudRenderBackend, GitHubActionsClient
+
+    class FakeClient:
+        def __init__(self):
+            self.dispatches = 0
+            self.name = ""
+        def ensure_branch(self, branch): pass
+        def put_file(self, path, content, *, branch, message): pass
+        def dispatch(self, **kw):
+            self.dispatches += 1
+            return 10
+        def get_run(self, run_id, *, job_id, branch):
+            return {"id": 10, "status": "completed", "conclusion": "success"}
+        def find_run_artifact(self, run_id, name):
+            self.name = name
+            return {"id": 77, "name": name}
+        def get_artifact(self, artifact_id):
+            return {"id": artifact_id, "name": self.name, "expired": False}
+        def find_repo_artifact(self, name):
+            return None
+        def download_artifact_zip(self, artifact_id):
+            bio = io.BytesIO()
+            with zipfile.ZipFile(bio, "w") as zf:
+                zf.writestr(self.name, b"\x00\x00\x00\x18ftypmp42" + b"0" * 256)
+            return bio.getvalue()
+
+    s = replace(_settings(), render_mode="cloud", github_repo="owner/render",
+                github_token="ghp_" + "x" * 24)
+    client = FakeClient()
+    backend = CloudRenderBackend(s, client=client)
+    scene = SceneBundle("AetherLabScene", "from manim import *\nclass AetherLabScene(Scene):\n pass\n",
+                        "manim-community", "compiled")
+    out = asyncio.run(backend.render(scene, quality="l", settings=s, timeout=30))
+    assert out.status == "rendered" and Path(out.video_path).exists(), out.diagnostics
+    scene2 = SceneBundle("AetherLabScene", scene.code, "manim-community", "compiled")
+    out2 = asyncio.run(backend.render(scene2, quality="l", settings=s, timeout=30))
+    assert out2.status == "rendered" and client.dispatches == 1
+
+    class RunLookupClient(GitHubActionsClient):
+        def __init__(self, runs):
+            super().__init__("owner", "render", "token")
+            self.runs = runs
+        def _request(self, method, path, payload=None, *, raw=False):
+            if path.startswith("/repos/owner/render/actions/runs?"):
+                return {"workflow_runs": self.runs}
+            raise AssertionError(path)
+
+    wrong = RunLookupClient([{"id": 1, "status": "completed", "display_title": "AetherLab render old"}])
+    assert wrong.get_run(None, job_id="wanted", branch="renders") == {"status": "queued"}
+    right = RunLookupClient([{"id": 2, "status": "completed", "display_title": "AetherLab render wanted"}])
+    assert right.get_run(None, job_id="wanted", branch="renders")["id"] == 2
+    return "stubbed cloud success + cache reuse + strict run matching (F154)"
+
+
+def t_f155():
+    # Cloud unavailable/no token fails soft through ManimRuntime._render_once to local.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime
+    import aetherlab.services.render_backend as rb
+
+    calls = {"local": 0}
+    class FakeLocal:
+        name = "local"
+        def available(self): return True, "ok"
+        async def render(self, scene, *, quality, settings, timeout, progress=None):
+            calls["local"] += 1
+            scene.status = "rendered"
+            scene.video_path = str(_TMP / "fake.mp4")
+            return scene
+
+    orig = rb.LocalRenderBackend
+    rb.LocalRenderBackend = FakeLocal
+    try:
+        s = replace(_settings(), render_mode="cloud", github_repo="owner/render", github_token="")
+        scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
+        out = asyncio.run(ManimRuntime(s)._render_once(scene, s, "l"))
+    finally:
+        rb.LocalRenderBackend = orig
+    assert out.status == "rendered" and calls["local"] == 1
+    assert any("GitHub token" in d for d in out.diagnostics)
+    assert any("rendered locally" in d for d in out.diagnostics)
+    return "cloud unavailable falls back to local without raising (F155)"
+
+
+def t_f156():
+    # Security guard refuses likely secrets and masks tokens in diagnostics.
+    from aetherlab.services.render_backend import _mask, scan_cloud_payload
+    assert scan_cloud_payload("OPENAI_API_KEY='sk-secret'") is not None
+    assert scan_cloud_payload("from manim import *\nText('Energy')") is None
+    masked = _mask("failed with github_pat_ABCDEF1234567890 and sk-abcdef1234567890")
+    assert "github_pat_ABC" not in masked and "sk-abcdef" not in masked
+    return "cloud payload secret scan + token masking (F156)"
+
+
+def t_f157():
+    # Settings dialog exposes cloud controls; Scene panel shows backend chip.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.ui.widgets import SimulationPanel
+    s = replace(_settings(), render_mode="auto", github_repo="owner/render",
+                github_token="ghp_" + "x" * 24)
+    d = SettingsDialog(s)
+    vals = d.get_settings()
+    assert vals["render_mode"] == "auto" and vals["github_repo"] == "owner/render"
+    d.close()
+    panel = SimulationPanel()
+    scene = SceneBundle("AetherLabScene", "code", "manim-community", "rendered",
+                        diagnostics=["Rendered via GitHub Actions (abc)."],
+                        video_path=str(_TMP / "fake.mp4"))
+    panel.set_scene_bundle(scene)
+    assert panel._backend_chip.text() == "Cloud"
+    panel.close()
+    return "settings cloud controls + scene backend chip (F157)"
+
+
+def t_f158():
+    # Workflow and docs ship the concrete GitHub Actions render worker.
+    wf = Path(".github/workflows/render.yml").read_text(encoding="utf-8")
+    doc = Path("docs/CLOUD_RENDERING.md").read_text(encoding="utf-8")
+    assert "workflow_dispatch" in wf and "manim==0.20.1" in wf
+    assert "jobs/<job_id>.py" in doc and "Cloud" in doc
+    return "cloud render workflow + setup docs present (F158)"
+
+
+def t_f159():
+    # Graphic redesign pass: precision-instrument QSS hooks + bright-cyan theme.
+    from aetherlab.ui import style
+    from aetherlab.ui.theme import Theme
+    from aetherlab.ui.widgets import AnalysisPanel, EmptyStateView, LibraryPanel, RunningView, SimulationPanel
+    from aetherlab.ui.live_canvas import LiveCanvas
+
+    qss = style.AETHERLAB_QSS
+    for token in (
+        "QFrame#AnalysisCard",
+        "QWidget#SceneToolbar",
+        "QFrame#SetupStrip",
+        "QFrame#LibraryEmptyState",
+        "QToolButton#CanvasExportButton",
+        "QTabWidget::pane",
+        "QRadioButton::indicator:checked",
+    ):
+        assert token in qss, token
+    assert style.CYAN == "#22D3EE" and style.STAGE == "#000000"
+    assert Theme().accent == "#22D3EE" and Theme().curve1 == "#22D3EE"
+
+    ap = AnalysisPanel()
+    assert ap.findChild(QtWidgets.QFrame, "AnalysisCard") is not None
+    ev = EmptyStateView()
+    assert ev._setup_strip.objectName() == "SetupStrip"
+    rv = RunningView()
+    assert rv.findChild(QtWidgets.QWidget, "RunningStatusStrip") is not None
+    panel = SimulationPanel()
+    assert panel.findChild(QtWidgets.QWidget, "SceneToolbar") is not None
+    lib = LibraryPanel()
+    assert lib._empty.objectName() == "LibraryEmptyState"
+    canvas = LiveCanvas()
+    assert canvas._export_btn.objectName() == "CanvasExportButton"
+    doc = Path("docs/UI_GRAPHIC_REDESIGN.md").read_text(encoding="utf-8")
+    assert "precision" in doc.lower() and "Qt Mapping" in doc
+    for w in (ap, ev, rv, panel, lib, canvas):
+        w.close()
+    return "precision-instrument graphic redesign hooks + notes (F159)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

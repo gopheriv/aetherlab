@@ -1,4 +1,4 @@
-"""Comprehensive feature testing for AetherLab."""
+﻿"""Comprehensive feature testing for AetherLab."""
 import sys
 import asyncio
 import traceback
@@ -10,21 +10,21 @@ sys.stderr.reconfigure(line_buffering=True)
 
 results = []
 
-def test(feature_id, name, fn):
+def run_check(feature_id, name, fn):
     try:
         fn()
         results.append((feature_id, name, "PASS", ""))
         print(f"  [PASS] {feature_id}: {name}")
     except Exception as e:
         results.append((feature_id, name, "FAIL", str(e)))
-        print(f"  [FAIL] {feature_id}: {name} — {e}")
+        print(f"  [FAIL] {feature_id}: {name} вЂ” {e}")
         traceback.print_exc()
 
 print("=" * 70)
 print("AETHERLAB FEATURE TESTING")
 print("=" * 70)
 
-# ── SETTINGS ──
+# в”Ђв”Ђ SETTINGS в”Ђв”Ђ
 print("\n--- Settings ---")
 
 def test_f06():
@@ -34,14 +34,14 @@ def test_f06():
     assert s.data_dir, "Data dir should not be empty"
     assert s.cache_path, "Cache path should not be empty"
     print(f"    Model: {s.llm_model}, API key: {bool(s.openai_api_key)}, Timeout: {s.llm_timeout_seconds}s")
-test("F06", "Load Settings from Environment", test_f06)
+run_check("F06", "Load Settings from Environment", test_f06)
 
 def test_f07():
     from aetherlab.core.settings import load_qwen_settings
     q = load_qwen_settings()
     print(f"    Qwen settings keys: {list(q.keys())}")
     assert isinstance(q, dict), "Should return dict"
-test("F07", "Load Qwen Config", test_f07)
+run_check("F07", "Load Qwen Config", test_f07)
 
 def test_f77():
     from aetherlab.core.settings import _default_data_dir
@@ -50,9 +50,9 @@ def test_f77():
     if _sys.platform == "win32":
         assert "AppData" in str(d) or "AetherLab" in str(d), f"Expected AppData path, got {d}"
     print(f"    Default data dir: {d}")
-test("F77", "Platform-Aware Paths", test_f77)
+run_check("F77", "Platform-Aware Paths", test_f77)
 
-# ── MODELS ──
+# в”Ђв”Ђ MODELS в”Ђв”Ђ
 print("\n--- Models ---")
 
 def test_f75():
@@ -67,7 +67,7 @@ def test_f75():
     k2 = cache.make_key(r2)
     assert k1 == k2, f"Keys differ: {k1[:16]} vs {k2[:16]}"
     print(f"    Keys match: {k1[:16]}")
-test("F75", "Whitespace-Normalized Cache Keys", test_f75)
+run_check("F75", "Whitespace-Normalized Cache Keys", test_f75)
 
 def test_f76():
     from aetherlab.core.models import SolverResult, RagResult, SceneBundle
@@ -80,7 +80,7 @@ def test_f76():
     sb = SceneBundle.from_json({})
     assert sb.class_name == "AetherLabScene"
     print(f"    Defensive deserialization: all defaults applied")
-test("F76", "Defensive JSON Deserialization", test_f76)
+run_check("F76", "Defensive JSON Deserialization", test_f76)
 
 def test_models_serialization():
     from aetherlab.core.models import SolverResult, RagResult, RagHit, SceneBundle
@@ -112,9 +112,9 @@ def test_models_serialization():
     sb2 = SceneBundle.from_json(j, cached=True)
     assert sb2.cached == True
     print(f"    Serialization round-trip: all models OK")
-test("F68a", "Model Serialization Round-Trip", test_models_serialization)
+run_check("F68a", "Model Serialization Round-Trip", test_models_serialization)
 
-# ── CACHE ──
+# в”Ђв”Ђ CACHE в”Ђв”Ђ
 print("\n--- Cache ---")
 
 def test_f18():
@@ -125,12 +125,22 @@ def test_f18():
     cache = SessionCache(s.cache_path)
     req = ProblemRequest(prompt="Solve the simple pendulum for small angles")
     key = cache.ensure_request(req)
+    cache.store_solver(
+        key,
+        SolverResult(
+            summary="small-angle pendulum",
+            derivation_steps=[],
+            keywords=["pendulum"],
+            variables={},
+            model_name="test-batch",
+        ),
+    )
     cached = cache.get(key)
     assert cached is not None, "Should find cached session"
     assert cached.solver is not None, "Solver should be cached"
     assert cached.solver.cached == True, "Cached flag should be True"
     print(f"    Cache hit: key={key[:16]}..., solver.cached={cached.solver.cached}")
-test("F18", "Cache Hit on Repeated Prompt", test_f18)
+run_check("F18", "Cache Hit on Repeated Prompt", test_f18)
 
 def test_cache_incremental():
     from aetherlab.core.settings import load_settings
@@ -152,7 +162,7 @@ def test_cache_incremental():
     cached = cache.get(key)
     assert cached.rag is not None, "RAG should now be stored"
     print(f"    Incremental storage: solver and RAG stored independently")
-test("F68", "Incremental Stage Caching", test_cache_incremental)
+run_check("F68", "Incremental Stage Caching", test_cache_incremental)
 
 def test_cache_whitelist():
     from aetherlab.core.settings import load_settings
@@ -164,9 +174,9 @@ def test_cache_whitelist():
         assert False, "Should have raised ValueError"
     except ValueError:
         print(f"    SQL injection guard: PASS")
-test("F68b", "Cache Column Whitelist (SQL injection guard)", test_cache_whitelist)
+run_check("F68b", "Cache Column Whitelist (SQL injection guard)", test_cache_whitelist)
 
-# ── EVENTS ──
+# в”Ђв”Ђ EVENTS в”Ђв”Ђ
 print("\n--- Events ---")
 
 def test_events():
@@ -179,9 +189,9 @@ def test_events():
     assert received[0].name == "test"
     assert received[0].payload == {"data": 42}
     print(f"    Event bus: subscribe + emit OK")
-test("F-EVT", "Event Bus (StateBus)", test_events)
+run_check("F-EVT", "Event Bus (StateBus)", test_events)
 
-# ── KEYWORDS ──
+# в”Ђв”Ђ KEYWORDS в”Ђв”Ђ
 print("\n--- Keyword Extraction ---")
 
 def test_f17():
@@ -199,9 +209,9 @@ def test_f17():
     assert len(kw3) > 0, "Should extract keywords"
     print(f"    Phrases detected: navier stokes={kw}, fourier={kw2}, hyphen={kw_hyphen}")
     print(f"    Basic keywords: {kw3}")
-test("F17", "Keyword Extraction + Phrase Detection", test_f17)
+run_check("F17", "Keyword Extraction + Phrase Detection", test_f17)
 
-# ── SCENE GENERATION ──
+# в”Ђв”Ђ SCENE GENERATION в”Ђв”Ђ
 print("\n--- Scene Generation ---")
 
 def test_f26():
@@ -222,7 +232,7 @@ def test_f26():
     assert scene.engine in ("manim-community", "manimgl"), f"Unexpected engine: {scene.engine}"
     compile(scene.code, "<test>", "exec")
     print(f"    Engine: {scene.engine}, Status: {scene.status}, Code: {len(scene.code)} chars")
-test("F26", "Static Fallback Scene + Compile", test_f26)
+run_check("F26", "Static Fallback Scene + Compile", test_f26)
 
 def test_f33():
     from aetherlab.services.manim_runtime import ManimRuntime
@@ -230,7 +240,7 @@ def test_f33():
     engine, diag = mr.detect_engine()
     assert engine in ("manim-community", "manimgl", "none"), f"Unexpected: {engine}"
     print(f"    Detected engine: {engine}, diagnostics: {diag}")
-test("F33", "Engine Detection", test_f33)
+run_check("F33", "Engine Detection", test_f33)
 
 def test_f79():
     from aetherlab.services.manim_runtime import ManimRuntime
@@ -238,7 +248,7 @@ def test_f79():
     cmd = mr._find_manim_command()
     assert cmd is not None, "manim binary should be found"
     print(f"    Manim command: {cmd}")
-test("F79", "Manim Binary Detection", test_f79)
+run_check("F79", "Manim Binary Detection", test_f79)
 
 def test_sanitize_name():
     from aetherlab.services.manim_runtime import sanitize_scene_name
@@ -246,9 +256,9 @@ def test_sanitize_name():
     assert sanitize_scene_name("!!!") == "AetherLabScene"
     assert sanitize_scene_name("my-cool-scene") == "MyCoolScene"
     print(f"    sanitize_scene_name: all cases pass")
-test("F-SAN", "Scene Name Sanitization", test_sanitize_name)
+run_check("F-SAN", "Scene Name Sanitization", test_sanitize_name)
 
-# ── RAG ──
+# в”Ђв”Ђ RAG в”Ђв”Ђ
 print("\n--- RAG ---")
 
 def test_f21():
@@ -261,9 +271,9 @@ def test_f21():
     print(f"    Backend: {result.backend}, Hits: {len(result.hits)}")
     # Library might be empty, so just check it doesn't crash
     assert isinstance(result.hits, list)
-test("F21", "RAG Search (filesystem fallback)", test_f21)
+run_check("F21", "RAG Search (filesystem fallback)", test_f21)
 
-# ── PDF SERVICE ──
+# в”Ђв”Ђ PDF SERVICE в”Ђв”Ђ
 print("\n--- PDF ---")
 
 def test_pdf_service():
@@ -272,7 +282,7 @@ def test_pdf_service():
     print(f"    PyMuPDF available: {ps.available}")
     if not ps.available:
         print(f"    Import error: {ps.import_error}")
-test("F-PDF", "PdfService Availability", test_pdf_service)
+run_check("F-PDF", "PdfService Availability", test_pdf_service)
 
 def test_latex_export():
     from aetherlab.services.pdf import export_derivation_to_latex
@@ -289,20 +299,20 @@ def test_latex_export():
     assert "\\begin{document}" in content
     assert "AetherLab" in content
     print(f"    LaTeX export: {len(content)} chars, file={result}")
-test("F58", "Export Derivation as LaTeX", test_latex_export)
+run_check("F58", "Export Derivation as LaTeX", test_latex_export)
 
 def test_scene_code_export():
     from aetherlab.services.pdf import export_scene_code
     import tempfile
     out = Path(tempfile.mkdtemp()) / "test_scene.py"
-    result = export_scene_code("from manim import *\nclass Test(Scene):\n    pass", out)
+    result = export_scene_code("from manim import *\nclass run_check(Scene):\n    pass", out)
     assert result.exists()
     content = result.read_text()
     assert "from manim import *" in content
     print(f"    Scene code export: {len(content)} chars")
-test("F60", "Export Scene Code", test_scene_code_export)
+run_check("F60", "Export Scene Code", test_scene_code_export)
 
-# ── INGESTION ──
+# в”Ђв”Ђ INGESTION в”Ђв”Ђ
 print("\n--- Ingestion ---")
 
 def test_chunk_text():
@@ -318,9 +328,9 @@ def test_chunk_text():
     assert len(chunks) > 1, f"Expected multiple chunks, got {len(chunks)}"
     # Check overlap
     print(f"    Chunks from 100 sentences: {len(chunks)} chunks")
-test("F-CHK", "Text Chunking", test_chunk_text)
+run_check("F-CHK", "Text Chunking", test_chunk_text)
 
-# ── SCENE GENERATOR FALLBACK ──
+# в”Ђв”Ђ SCENE GENERATOR FALLBACK в”Ђв”Ђ
 print("\n--- SceneGenerator Fallback ---")
 
 def test_f27():
@@ -346,9 +356,9 @@ def test_f27():
     assert "ValueTracker" in code
     assert "always_redraw" in code
     print(f"    Fallback scene: {len(code)} chars, compiles OK")
-test("F27", "Dynamic Fallback Scene (SceneGenerator)", test_f27)
+run_check("F27", "Dynamic Fallback Scene (SceneGenerator)", test_f27)
 
-# ── RENDER (quick - just verify video was produced by smoke test) ──
+# в”Ђв”Ђ RENDER (quick - just verify video was produced by smoke test) в”Ђв”Ђ
 print("\n--- Render ---")
 
 def test_f29():
@@ -362,9 +372,9 @@ def test_f29():
     for v in videos[:3]:
         print(f"      {v.name} ({v.stat().st_size} bytes)")
     assert len(videos) > 0, "Should have at least one rendered video"
-test("F29", "Manim Video Rendering (verify smoke test output)", test_f29)
+run_check("F29", "Manim Video Rendering (verify smoke test output)", test_f29)
 
-# ── HISTORY (SQLite) ──
+# в”Ђв”Ђ HISTORY (SQLite) в”Ђв”Ђ
 print("\n--- History ---")
 
 def test_history_db():
@@ -380,9 +390,9 @@ def test_history_db():
         print(f"    History DB: {count} entries at {db_path}")
     else:
         print(f"    History DB: not yet created at {db_path}")
-test("F55", "Persistent History DB", test_history_db)
+run_check("F55", "Persistent History DB", test_history_db)
 
-# ── CANVAS STATE ──
+# в”Ђв”Ђ CANVAS STATE в”Ђв”Ђ
 print("\n--- Canvas ---")
 
 def test_f35():
@@ -406,9 +416,9 @@ def test_f35():
     cs4 = build_canvas_state("Phase", {"damping": 0.3, "stiffness": 2.0}, True)
     assert len(cs4.curves) >= 2, "Phase portrait should add extra curve"
     print(f"    Phase portrait: {len(cs4.curves)} curves")
-test("F35", "Domain Auto-Detection (Canvas)", test_f35)
+run_check("F35", "Domain Auto-Detection (Canvas)", test_f35)
 
-# ── SUMMARY ──
+# в”Ђв”Ђ SUMMARY в”Ђв”Ђ
 print("\n" + "=" * 70)
 print("RESULTS SUMMARY")
 print("=" * 70)
@@ -423,7 +433,7 @@ if failed:
             print(f"    {fid} ({name}): {err}")
 print()
 
-# ── POST-FIX VERIFICATION ──
+# в”Ђв”Ђ POST-FIX VERIFICATION в”Ђв”Ђ
 print("\n" + "=" * 70)
 print("POST-FIX VERIFICATION")
 print("=" * 70)
@@ -438,7 +448,7 @@ def test_div_by_zero():
     assert "1e-12" in src, "Division-by-zero guard should be present"
     assert "x_span" in src, "Should use x_span variable"
     print(f"    Div-by-zero guard present in _map_to_plot")
-test("FIX-C1", "Division-by-zero guard in _map_to_plot", test_div_by_zero)
+run_check("FIX-C1", "Division-by-zero guard in _map_to_plot", test_div_by_zero)
 
 # Verify tracer color uses setAlpha
 def test_tracer_color():
@@ -447,7 +457,7 @@ def test_tracer_color():
     src = inspect.getsource(LiveCanvas._draw_tracer)
     assert "setAlpha" in src, "Should use setAlpha instead of string concatenation"
     print(f"    Tracer color uses setAlpha")
-test("FIX-C2", "Tracer glow color fix", test_tracer_color)
+run_check("FIX-C2", "Tracer glow color fix", test_tracer_color)
 
 # Verify _nice_step handles zero
 def test_nice_step_zero():
@@ -457,7 +467,7 @@ def test_nice_step_zero():
     result2 = _nice_step(1e-15, 8)
     assert result2 == 1.0, f"Expected 1.0 for near-zero range, got {result2}"
     print(f"    _nice_step(0, 8) = {result}, _nice_step(1e-15, 8) = {result2}")
-test("FIX-C3", "_nice_step handles degenerate ranges", test_nice_step_zero)
+run_check("FIX-C3", "_nice_step handles degenerate ranges", test_nice_step_zero)
 
 # Verify phrase detection handles hyphens
 def test_phrase_hyphen():
@@ -465,7 +475,7 @@ def test_phrase_hyphen():
     kw = extract_keywords("Solve the Navier-Stokes equation")
     assert "navier stokes" in kw, f"Hyphenated form should be detected, got {kw}"
     print(f"    Hyphenated phrase detected: {kw}")
-test("FIX-C4", "Phrase detection handles hyphenated forms", test_phrase_hyphen)
+run_check("FIX-C4", "Phrase detection handles hyphenated forms", test_phrase_hyphen)
 
 # Verify settings dialog applies changes
 def test_settings_dialog():
@@ -474,7 +484,7 @@ def test_settings_dialog():
     src = inspect.getsource(MainWindow._open_settings)
     assert "replace" in src, "Should use dataclasses.replace to update settings"
     print(f"    Settings dialog uses dataclasses.replace")
-test("FIX-C5", "Settings dialog applies changes", test_settings_dialog)
+run_check("FIX-C5", "Settings dialog applies changes", test_settings_dialog)
 
 # Verify worker cleanup
 def test_worker_cleanup():
@@ -484,7 +494,7 @@ def test_worker_cleanup():
     assert "disconnect" in src, "Should disconnect old worker signals"
     assert "deleteLater" in src, "Should call deleteLater on old worker"
     print(f"    Worker cleanup present in start_pipeline")
-test("FIX-C6", "Worker signal cleanup", test_worker_cleanup)
+run_check("FIX-C6", "Worker signal cleanup", test_worker_cleanup)
 
 # Verify closeEvent
 def test_close_event():
@@ -494,7 +504,7 @@ def test_close_event():
     assert "cancel" in src, "Should cancel worker on close"
     assert "wait" in src, "Should wait for worker to finish"
     print(f"    closeEvent gracefully shuts down worker")
-test("FIX-C7", "Graceful worker shutdown on close", test_close_event)
+run_check("FIX-C7", "Graceful worker shutdown on close", test_close_event)
 
 # Verify PDF export creates temp dir
 def test_pdf_export_dir():
@@ -503,7 +513,7 @@ def test_pdf_export_dir():
     src = inspect.getsource(MainWindow._export_pdf)
     assert "mkdir" in src, "Should create temp directory"
     print(f"    PDF export creates temp directory")
-test("FIX-C8", "PDF export creates temp directory", test_pdf_export_dir)
+run_check("FIX-C8", "PDF export creates temp directory", test_pdf_export_dir)
 
 # Verify cancel hides loading overlay
 def test_cancel_overlay():
@@ -512,7 +522,7 @@ def test_cancel_overlay():
     src = inspect.getsource(MainWindow._cancel_pipeline)
     assert "hide_loading" in src, "Should hide loading overlay on cancel"
     print(f"    Cancel pipeline hides loading overlay")
-test("FIX-C9", "Cancel hides loading overlay", test_cancel_overlay)
+run_check("FIX-C9", "Cancel hides loading overlay", test_cancel_overlay)
 
 # Verify progress gap fixed
 def test_progress_gap():
@@ -521,7 +531,7 @@ def test_progress_gap():
     src = inspect.getsource(MainWindow._on_progress)
     assert "< 100" in src, "Should handle values 96-99"
     print(f"    Progress handler covers all values")
-test("FIX-C10", "Progress gap fixed (96-99)", test_progress_gap)
+run_check("FIX-C10", "Progress gap fixed (96-99)", test_progress_gap)
 
 # Verify parameter dock allows negatives
 def test_negative_params():
@@ -530,16 +540,20 @@ def test_negative_params():
     src = inspect.getsource(ParameterDock.set_variables)
     assert "-span" in src, "Spinbox range should include -span"
     print(f"    ParameterDock allows negative values")
-test("FIX-H1", "Parameter dock allows negative values", test_negative_params)
+run_check("FIX-H1", "Parameter dock allows negative values", test_negative_params)
 
 # Verify diagnostics formatting
 def test_diagnostics():
     import inspect
-    from aetherlab.ui.widgets import SimulationPanel
+    from aetherlab.ui.widgets import SimulationPanel, _DiagnosticsDrawer
     src = inspect.getsource(SimulationPanel.set_scene_bundle)
-    assert '"# {line}"' in src or "'# {line}'" in src or "f\"# {line}\"" in src, "Each diagnostic line should be prefixed with #"
-    print(f"    Diagnostics formatting prefixes each line")
-test("FIX-H2", "Diagnostics formatting fixed", test_diagnostics)
+    meta_src = inspect.getsource(SimulationPanel._apply_scene_meta)
+    drawer_src = inspect.getsource(_DiagnosticsDrawer.set_diagnostics)
+    assert "_apply_scene_meta" in src, "Scene bundle should apply v2 scene metadata"
+    assert "_diag_drawer.set_diagnostics" in meta_src, "Diagnostics should route to the drawer"
+    assert f"{chr(0x2022)} {{d}}" in drawer_src, "Drawer rows should be bullet-prefixed"
+    print(f"    Diagnostics route to drawer with prefixed rows")
+run_check("FIX-H2", "Diagnostics drawer formatting fixed", test_diagnostics)
 
 # Verify SQLite connection safety
 def test_sqlite_safety():
@@ -550,7 +564,7 @@ def test_sqlite_safety():
     src2 = inspect.getsource(HistoryPanel._clear)
     assert "finally" in src2, "Should use try/finally in _clear too"
     print(f"    SQLite connections use try/finally")
-test("FIX-H3", "SQLite connection safety", test_sqlite_safety)
+run_check("FIX-H3", "SQLite connection safety", test_sqlite_safety)
 
 # Print post-fix summary
 post_passed = sum(1 for _, _, s, _ in results if s == "PASS") - passed

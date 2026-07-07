@@ -21,7 +21,7 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=gpt-5.5 data_dir set timeout=60.0"
+    "note": "model=gpt-5.5 data_dir set timeout=60.0; manim-bot aliases load"
   },
   "F07": {
     "status": "PASS",
@@ -169,7 +169,7 @@
   },
   "F43": {
     "status": "PASS",
-    "note": "ingest upserted 4; re-run 0 (incremental)"
+    "note": "ingest upserted 12; re-run 0; stale chunks purged on change"
   },
   "F44": {
     "status": "PASS",
@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=212648 + skip-existing"
+    "note": "URL fallback + free_disk_mb=213037 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -201,7 +201,7 @@
   },
   "F51": {
     "status": "PASS",
-    "note": "static template compiles (1584 chars)"
+    "note": "static template compiles (1586 chars)"
   },
   "F52": {
     "status": "PASS",
@@ -217,7 +217,7 @@
   },
   "F55": {
     "status": "PASS",
-    "note": "tier=constrained fps=30"
+    "note": "tier=constrained fps=30; env override honored"
   },
   "F56": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_qm2qip8d/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_8qi2_chg/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -357,7 +357,7 @@
   },
   "F90": {
     "status": "PASS",
-    "note": "QSS present (12328 chars)"
+    "note": "QSS present (15853 chars)"
   },
   "F91": {
     "status": "PASS",
@@ -409,7 +409,7 @@
   },
   "F103": {
     "status": "PASS",
-    "note": "safety gate blocks imports/builtins/escapes; wired twice (F103)"
+    "note": "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)"
   },
   "F104": {
     "status": "PASS",
@@ -421,7 +421,7 @@
   },
   "F106": {
     "status": "PASS",
-    "note": "lint+LaTeX+duration checks work; wired into gen+repair (F106)"
+    "note": "lint+LaTeX+duration+hygiene checks work; wired into gen+repair (F106)"
   },
   "F107": {
     "status": "PASS",
@@ -429,7 +429,7 @@
   },
   "F108": {
     "status": "PASS",
-    "note": "critique loop wired + fail-soft; sampled 3 frames via PyAV (F108)"
+    "note": "critique loop wired + fail-soft + final-frame sampling; sampled 3 frames via PyAV (F108)"
   },
   "F109": {
     "status": "PASS",
@@ -461,7 +461,7 @@
   },
   "F116": {
     "status": "PASS",
-    "note": "2x PNG written (60346 bytes) + signal"
+    "note": "2x PNG written (73234 bytes) + signal"
   },
   "F117": {
     "status": "PASS",
@@ -557,7 +557,7 @@
   },
   "F140": {
     "status": "PASS",
-    "note": "narration settings env/config + silent_video_path + dialog toggle (F140)"
+    "note": "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)"
   },
   "F141": {
     "status": "PASS",
@@ -565,11 +565,11 @@
   },
   "F142": {
     "status": "PASS",
-    "note": "srt timeline (cumulative, blank-skip) + narrate_segment fail-soft (F142)"
+    "note": "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)"
   },
   "F143": {
     "status": "PASS",
-    "note": "lesson pipeline: 4 chapters \u2192 assembled mp4 (F143)"
+    "note": "lesson pipeline: 4 chapters \u2192 assembled mp4; partial-render narration aligned (F143)"
   },
   "F144": {
     "status": "PASS",
@@ -578,5 +578,61 @@
   "F145": {
     "status": "PASS",
     "note": "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+  },
+  "F146": {
+    "status": "PASS",
+    "note": "aspect setup/evolution/math/recap \u2192 distinct, gate-passing scenes per domain (F146)"
+  },
+  "F147": {
+    "status": "PASS",
+    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'recap'] (F147)"
+  },
+  "F148": {
+    "status": "PASS",
+    "note": "produced lesson: cards + crossfades \u2192 11.8s 1280x720; chapter offsets [4.7, 7.9] past intro (F148)"
+  },
+  "F149": {
+    "status": "PASS",
+    "note": "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)"
+  },
+  "F150": {
+    "status": "PASS",
+    "note": "Learn cancellable: cancel_check\u2192cancelled bundle; worker.cancel() + regenerate (F150)"
+  },
+  "F151": {
+    "status": "PASS",
+    "note": "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)"
+  },
+  "F152": {
+    "status": "PASS",
+    "note": "backend selection local/cloud/auto + stable cloud job ids (F152)"
+  },
+  "F153": {
+    "status": "PASS",
+    "note": "cloud render settings persist via app-config + manim-bot CLOUD_RENDER_* aliases (F153)"
+  },
+  "F154": {
+    "status": "PASS",
+    "note": "stubbed cloud success + cache reuse + strict run matching (F154)"
+  },
+  "F155": {
+    "status": "PASS",
+    "note": "cloud unavailable falls back to local without raising (F155)"
+  },
+  "F156": {
+    "status": "PASS",
+    "note": "cloud payload secret scan + token masking (F156)"
+  },
+  "F157": {
+    "status": "PASS",
+    "note": "settings cloud controls + scene backend chip (F157)"
+  },
+  "F158": {
+    "status": "PASS",
+    "note": "cloud render workflow + setup docs present (F158)"
+  },
+  "F159": {
+    "status": "PASS",
+    "note": "precision-instrument graphic redesign hooks + notes (F159)"
   }
 }
