@@ -2,7 +2,8 @@
 
 Date: 2026-07-07
 
-Scope: opt-in scene candidate tournament only. Phase 3 exemplars are not started.
+Scope at the time of this pass: opt-in scene candidate tournament only.
+Status update: the later exemplar-library work has since landed as F163.
 
 ## Built
 
@@ -55,6 +56,5 @@ The full-suite output is recorded in `feature_test_results.json` after running
 
 ## Deferred
 
-- Phase 3 exemplar library.
 - Real live model tournament run. F161 uses stubs by design so CI and local
   development stay offline-safe.

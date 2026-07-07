@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=209510 + skip-existing"
+    "note": "URL fallback + positive free_disk_mb + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_orr9ixep/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returns None or an existing PDF"
   },
   "F87": {
     "status": "PASS",

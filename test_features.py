@@ -693,7 +693,7 @@ def t_f48():
     got = []
     r = download_book(STARTER_BOOKS[0], "http://unused", dest, progress_cb=lambda d, t: got.append((d, t)))
     assert r == big and got, "existing >5MB file should be skipped"
-    return f"URL fallback + free_disk_mb={mb:.0f} + skip-existing"
+    return "URL fallback + positive free_disk_mb + skip-existing"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1323,7 +1323,8 @@ def t_f86():
     from aetherlab.services.pdf import compile_latex_to_pdf
     # pdflatex likely absent — must return None, not raise
     r = compile_latex_to_pdf(_TMP / "d.tex")
-    return f"compile_latex_to_pdf returned {r!r} (None ok if no pdflatex)"
+    assert r is None or r.exists()
+    return "compile_latex_to_pdf returns None or an existing PDF"
 
 
 def t_f87():

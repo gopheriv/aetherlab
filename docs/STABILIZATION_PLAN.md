@@ -51,10 +51,12 @@ These fonts are used by produced lesson title cards and bundled in
 
 ## Current Verification
 
-- `python test_features.py` passed: 159/159.
+- `python test_features.py` passed: 163/163.
 - `python -m pytest -q` passed: 37 passed, 1 external deprecation warning.
-- `python -m compileall aetherlab test_features.py` passed.
-- `python -m ruff check aetherlab test_features.py --select F` passed.
+- `python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools` passed.
+- `git diff --check` passed.
+- Live GitHub Actions cloud smoke passed after provisioning the render workflow
+  and downloading a valid MP4 artifact.
 
 ## Review Notes
 

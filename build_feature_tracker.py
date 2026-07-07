@@ -838,7 +838,8 @@ DEFECTS: dict[str, str] = {
     "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
     "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
-    "F154": "BUG-15: cloud polling could attach to the newest unrelated workflow run before this job_id appeared; unmatched polls now stay queued. BUG-17: the dispatchable workflow was never installed in the user's repo, so every dispatch 404'd and cloud reported 'unavailable'; the app now provisions .github/workflows/render.yml on the default + render branch (idempotent) before dispatch and from the Settings test button. BUG-18: the workflow's setup-python `cache: pip` errored in a render repo (no requirements/pyproject), failing every render; removed it and verified a live end-to-end render produced a valid MP4.",
+    "F153": "BUG-19: legacy manim-bot .env and existing gh auth sessions were ignored; settings now migrate CLOUD_RENDER_* aliases and GitHub CLI tokens without exposing secrets.",
+    "F154": "BUG-15: exact job_id polling prevents attaching to unrelated runs. BUG-17: bundled workflow is provisioned before dispatch/test. BUG-18: removed setup-python cache:pip failure. BUG-20: artifact 302 downloads drop the Bearer header on the signed URL.",
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
 }
 

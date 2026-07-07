@@ -25,18 +25,19 @@ candidate tournaments stay parked until Phase 1 is green.
 
 - F160, Phase 1: persist `quality_score`, `critique_verdict`, and issue summaries on `SceneBundle`; populate from the existing critic in `render_scene_with_repair()`; add opt-in `AppSettings.min_quality_score`; reject solve and lesson cached scenes below threshold. Default `0.0` preserves current behavior.
 - F161, Phase 2: candidate tournament at the scene path using `SceneGenerator.storyboard()`, `_generate_remote()`, existing static gates, `_render_once()` draft renders, and `scene_critic` scoring. Winner collapses back to one `SceneBundle`.
-- F162, Phase 3: exemplar library in `services/scene_exemplars.py`, selected by `detect_domain()` / solver keywords and injected into the codegen prompt within context budget.
-- F163, Phase 4: Solve regenerate affordance, persisted quality badge surfacing, selectable 4K, and opt-in default quality change.
-- F164, Phase 5: guarded live GitHub Actions smoke plus offline cloud backend tests around dispatch, polling, artifact validation, secret refusal, cache reuse, and local fallback.
-- F165, Phase 6: golden-frame assertions and bounded render tuple archive on top of `tools/visual_regression.py`.
+- F162, Phase 3: visual-regression quality gate on top of `tools/visual_regression.py`, including strict mode, regression flags, contact sheets, blank/static detection, and duration/fps reporting.
+- F163, Phase 4: exemplar library in `services/scene_exemplars.py`, selected by `detect_domain()` / solver keywords and injected into the codegen prompt within context budget.
+- Future Phase 5: Solve regenerate affordance, persisted quality badge surfacing, selectable 4K, and opt-in default quality change.
+- Future Phase 6: guarded live GitHub Actions smoke plus offline cloud backend tests around dispatch, polling, artifact validation, secret refusal, cache reuse, and local fallback.
+- Future Phase 7: golden-frame assertions and bounded render tuple archive.
 
 ## Decisions Needed Before Later Phases
 
 - Phase 2: default candidate count when enabled, max parallel draft renders, and whether tournament drafts may use cloud in `auto` mode or must stay local.
 - Phase 2: score tie-break weights: fewer critic issues versus duration-contract closeness.
-- Phase 3: whether exemplar code should be project-owned static snippets only, or whether verified user-generated exemplars may enter the library later.
-- Phase 4: whether “High” should become the visible default immediately or only after a saved setting migration.
-- Phase 5: which GitHub render repo should be the blessed live-smoke target, and whether public repos are acceptable for CI smoke artifacts.
+- Phase 4 follow-up: whether verified user-generated exemplars may enter the library later; the shipped library is project-owned static snippets only.
+- Phase 5: whether "High" should become the visible default immediately or only after a saved setting migration.
+- Phase 6: which GitHub render repo should be the blessed live-smoke target, and whether public repos are acceptable for CI smoke artifacts.
 
 ## Phase 1 Reproduction Target
 
