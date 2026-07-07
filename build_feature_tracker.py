@@ -67,7 +67,7 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "core/settings.py", "headless", "Documented", ""),
     ("F10", "Settings", "Settings dialog (Ctrl+,/gear)",
      "As a user, I open Settings to edit provider, rendering, and paths.",
-     "SettingsDialog: API key (password + reveal eye), Base URL, Model, Render engine (Manim only), Default quality, Library path + Browse, Data path + Browse. Save persists via save_app_config and applies via dataclasses.replace.",
+     "SettingsDialog: API key (password + reveal eye), Base URL, Model, Render engine (Manim only), Default quality, Library path + Browse, Data path + Browse. The long settings form is scrollable and screen-fitted so Save/Cancel remain reachable on small displays. Save persists via save_app_config and applies via dataclasses.replace.",
      "ui/main_window.py (SettingsDialog)", "gui", "Documented", ""),
     ("F11", "Settings", "Platform-aware default paths",
      "As a Windows user my data goes under %LOCALAPPDATA%\\AetherLab; else ~/.aetherlab.",

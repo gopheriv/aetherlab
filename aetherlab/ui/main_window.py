@@ -89,7 +89,7 @@ class SettingsDialog(QtWidgets.QDialog):
         _install_ui_fonts()
         self._settings = settings
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(480)
+        self.setMinimumSize(420, 420)
         self.setStyleSheet(AETHERLAB_QSS)
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -318,7 +318,17 @@ class SettingsDialog(QtWidgets.QDialog):
         note.setWordWrap(True)
         form.addWidget(note)
 
-        layout.addWidget(body)
+        self._settings_scroll = QtWidgets.QScrollArea()
+        self._settings_scroll.setWidgetResizable(True)
+        self._settings_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._settings_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._settings_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+        self._settings_scroll.setWidget(body)
+        layout.addWidget(self._settings_scroll, 1)
         layout.addWidget(self._hairline())
 
         # Footer: Cancel / Save
@@ -337,6 +347,21 @@ class SettingsDialog(QtWidgets.QDialog):
         save_btn.clicked.connect(self.accept)
         footer_layout.addWidget(save_btn)
         layout.addWidget(footer)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            width = min(920, max(520, int(geo.width() * 0.68)))
+            height = min(780, max(420, int(geo.height() * 0.86)))
+            min_width = min(520, max(420, int(geo.width() * 0.45)))
+            min_height = min(480, max(360, int(geo.height() * 0.55)))
+        else:
+            width, height = 860, 720
+            min_width, min_height = 420, 420
+        self.setMinimumSize(min_width, min_height)
+        self.resize(width, height)
 
     def _hairline(self) -> QtWidgets.QFrame:
         line = QtWidgets.QFrame()

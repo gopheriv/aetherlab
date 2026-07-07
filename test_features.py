@@ -226,6 +226,13 @@ def t_f10():
     d = SettingsDialog(_settings())
     vals = d.get_settings()
     assert set(["model", "api_key", "base_url", "library_path", "data_dir", "default_quality"]).issubset(vals)
+    assert isinstance(d._settings_scroll, QtWidgets.QScrollArea)
+    assert d._settings_scroll.widgetResizable()
+    screen = QtWidgets.QApplication.primaryScreen()
+    if screen:
+        geo = screen.availableGeometry()
+        assert d.height() <= int(geo.height() * 0.90)
+        assert d.width() <= min(920, max(520, int(geo.width() * 0.68))) + 8
     d.close()
     # BUG-4 regression: Data path must persist via app-config when no env override.
     # Redirect the default data dir into _TMP so nothing touches the real config.
@@ -242,7 +249,7 @@ def t_f10():
         (_TMP / "cfghome" / "settings.json").unlink(missing_ok=True)
         if saved_env is not None:
             os.environ["AETHERLAB_DATA_DIR"] = saved_env
-    return "dialog keys ok; Data path persists via config (BUG-4)"
+    return "settings dialog scrolls/fits screen; keys ok; Data path persists via config (BUG-4)"
 
 
 def t_f11():

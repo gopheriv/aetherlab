@@ -37,7 +37,7 @@
   },
   "F10": {
     "status": "PASS",
-    "note": "dialog keys ok; Data path persists via config (BUG-4)"
+    "note": "settings dialog scrolls/fits screen; keys ok; Data path persists via config (BUG-4)"
   },
   "F11": {
     "status": "PASS",
@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=209928 + skip-existing"
+    "note": "URL fallback + free_disk_mb=209923 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_yevvb5wg/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_ddic1pu_/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
