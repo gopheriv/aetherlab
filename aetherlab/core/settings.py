@@ -40,6 +40,20 @@ class AppSettings:
     narration_enabled: bool = False
     tts_voice: str = "en-US-AndrewMultilingualNeural"
     tts_rate: str = "+8%"
+    # Pluggable render backend. Local is today's behavior; cloud/auto are
+    # additive and fail soft to local when GitHub Actions is unavailable.
+    render_mode: str = "local"  # local | cloud | auto
+    cloud_provider: str = "github_actions"
+    github_repo: str = ""
+    github_token: str = ""
+    github_workflow: str = "render.yml"
+    github_branch: str = "renders"
+    github_oauth_client_id: str = ""
+    cloud_render_threshold: float = 3.0
+    cloud_poll_seconds: int = 8
+    cloud_render_timeout: int = 1800
+    visual_critic_max_passes: int = 2
+    visual_critic_keyframes: int = 6
     provider_source: str = "environment"
 
 
@@ -104,17 +118,15 @@ def load_settings() -> AppSettings:
 
     preset = (os.getenv("AETHERLAB_PROVIDER") or app_cfg.get("provider_preset") or "").lower()
 
-    env_model = os.getenv("AETHERLAB_LLM_MODEL")
+    env_model = _first_env("AETHERLAB_LLM_MODEL", "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL")
     llm_model = env_model or app_cfg.get("model") or qwen.get("model") or "gpt-5.5"
     api_key = (
-        os.getenv("AETHERLAB_OPENAI_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
+        _first_env("AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY")
         or app_cfg.get("api_key")
         or qwen.get("api_key")
     )
     base_url = (
-        os.getenv("AETHERLAB_OPENAI_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
+        _first_env("AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
         or app_cfg.get("base_url")
         or qwen.get("base_url")
     )
@@ -125,7 +137,7 @@ def load_settings() -> AppSettings:
         base_url = base_url or OLLAMA_OPENAI_BASE_URL
         api_key = api_key or "ollama"
 
-    if env_model or os.getenv("AETHERLAB_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"):
+    if env_model or _first_env("AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"):
         source = "environment"
     elif preset == "ollama":
         source = "ollama-local"
@@ -142,18 +154,62 @@ def load_settings() -> AppSettings:
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,
-        llm_timeout_seconds=float(os.getenv("AETHERLAB_LLM_TIMEOUT", "60")),
-        vision_model=os.getenv("AETHERLAB_VISION_MODEL") or app_cfg.get("vision_model") or None,
+        llm_timeout_seconds=float(_first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT") or "60"),
+        vision_model=_first_env("AETHERLAB_VISION_MODEL", "VISION_MODEL") or app_cfg.get("vision_model") or None,
         web_references=_as_bool(
             os.getenv("AETHERLAB_WEB_REFS"), app_cfg.get("web_references"), default=True
         ),
         narration_enabled=_as_bool(
-            os.getenv("AETHERLAB_NARRATION"), app_cfg.get("narration_enabled"), default=False
+            os.getenv("AETHERLAB_NARRATION"),
+            os.getenv("VOICEOVER_ENABLED"),
+            os.getenv("TTS_ENABLED"),
+            app_cfg.get("narration_enabled"),
+            default=False,
         ),
-        tts_voice=os.getenv("AETHERLAB_TTS_VOICE") or app_cfg.get("tts_voice") or "en-US-AndrewMultilingualNeural",
-        tts_rate=os.getenv("AETHERLAB_TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
+        tts_voice=_first_env("AETHERLAB_TTS_VOICE", "TTS_VOICE") or app_cfg.get("tts_voice") or "en-US-AndrewMultilingualNeural",
+        tts_rate=_first_env("AETHERLAB_TTS_RATE", "TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
+        render_mode=_render_mode(
+            os.getenv("AETHERLAB_RENDER_MODE")
+            or app_cfg.get("render_mode")
+            or ("auto" if _as_bool(os.getenv("CLOUD_RENDER_ENABLED"), default=False) else None)
+        ),
+        cloud_provider=os.getenv("AETHERLAB_CLOUD_PROVIDER") or app_cfg.get("cloud_provider") or "github_actions",
+        github_repo=_first_env("AETHERLAB_RENDER_REPO", "CLOUD_RENDER_REPO") or app_cfg.get("github_repo") or "",
+        github_token=_first_env("AETHERLAB_GITHUB_TOKEN", "GITHUB_TOKEN") or app_cfg.get("github_token") or "",
+        github_workflow=_first_env("AETHERLAB_GITHUB_WORKFLOW", "CLOUD_RENDER_WORKFLOW") or app_cfg.get("github_workflow") or "render.yml",
+        github_branch=_first_env("AETHERLAB_GITHUB_BRANCH", "CLOUD_RENDER_BRANCH") or app_cfg.get("github_branch") or "renders",
+        github_oauth_client_id=os.getenv("AETHERLAB_GITHUB_CLIENT_ID") or app_cfg.get("github_oauth_client_id") or "",
+        cloud_render_threshold=_as_float(
+            os.getenv("AETHERLAB_CLOUD_RENDER_THRESHOLD"), app_cfg.get("cloud_render_threshold"), default=3.0
+        ),
+        cloud_poll_seconds=_as_int(
+            os.getenv("AETHERLAB_CLOUD_POLL_SECONDS"), os.getenv("CLOUD_RENDER_POLL"), app_cfg.get("cloud_poll_seconds"), default=8
+        ),
+        cloud_render_timeout=_as_int(
+            os.getenv("AETHERLAB_CLOUD_RENDER_TIMEOUT"), os.getenv("CLOUD_RENDER_TIMEOUT"), app_cfg.get("cloud_render_timeout"), default=1800
+        ),
+        visual_critic_max_passes=_as_int(
+            os.getenv("AETHERLAB_VISUAL_CRITIC_MAX_PASSES"),
+            os.getenv("VISUAL_CRITIC_MAX_PASSES"),
+            app_cfg.get("visual_critic_max_passes"),
+            default=2,
+        ),
+        visual_critic_keyframes=_as_int(
+            os.getenv("AETHERLAB_VISUAL_CRITIC_KEYFRAMES"),
+            os.getenv("VISUAL_CRITIC_KEYFRAMES"),
+            app_cfg.get("visual_critic_keyframes"),
+            default=6,
+        ),
         provider_source=source,
     )
+
+
+def _first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
 
 
 def _as_bool(*values, default: bool) -> bool:
@@ -168,6 +224,33 @@ def _as_bool(*values, default: bool) -> bool:
             return False
         return True
     return default
+
+
+def _as_float(*values, default: float) -> float:
+    for v in values:
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _as_int(*values, default: int) -> int:
+    for v in values:
+        if v is None:
+            continue
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _render_mode(value: str | None) -> str:
+    mode = str(value or "local").strip().lower()
+    return mode if mode in {"local", "cloud", "auto"} else "local"
 
 
 def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
