@@ -51,7 +51,7 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
     # ── Settings / Config ───────────────────────────────────────────────────
     ("F06", "Settings", "Load settings from environment",
      "As a user, my AETHERLAB_*/OPENAI_* env vars configure the app, and I can reuse compatible manim-bot env names during migration.",
-     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, AETHERLAB_OPENAI_API_KEY|OPENAI_API_KEY, base URL, LLM_MODEL, LLM_TIMEOUT. It also accepts manim-bot aliases for compatible fields: MANIM_MODEL/GPT_MODEL/CHAT_MODEL, GPT_API_KEY/DASHSCOPE_API_KEY, GPT_BASE_URL/LLM_BASE_URL, LLM_TIMEOUT, and VISUAL_CRITIC_* knobs. Missing → defaults.",
+     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, AETHERLAB_OPENAI_API_KEY|OPENAI_API_KEY, base URL, LLM_MODEL, LLM_TIMEOUT. It also accepts manim-bot aliases for compatible fields: MANIM_MODEL/GPT_MODEL/CHAT_MODEL, GPT_API_KEY/DASHSCOPE_API_KEY, GPT_BASE_URL/LLM_BASE_URL, LLM_TIMEOUT, and VISUAL_CRITIC_* knobs; a legacy .env can fill still-unset compatible fields unless disabled. Missing → defaults.",
      "core/settings.py", "headless", "Documented", ""),
     ("F07", "Settings", "App-config persistence (settings.json)",
      "As a user, values I save in the Settings dialog survive restarts.",
@@ -679,11 +679,11 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "services/render_backend.py / services/manim_runtime.py", "headless", "Documented", ""),
     ("F153", "Render", "Cloud render settings",
      "As a user, I can configure Local/Cloud/Auto rendering and a GitHub render repo.",
-     "AppSettings adds render_mode, cloud_provider, github_repo/token/workflow/branch/client id, cloud threshold, poll seconds, and cloud timeout with env > app-config precedence. It accepts manim-bot CLOUD_RENDER_ENABLED/REPO/WORKFLOW/BRANCH/TIMEOUT/POLL aliases; CLOUD_RENDER_ENABLED=true maps to AetherLab auto mode unless AETHERLAB_RENDER_MODE is explicit. SettingsDialog persists the fields; default render_mode='local' preserves current behavior.",
+     "AppSettings adds render_mode, cloud_provider, github_repo/token/workflow/branch/client id, cloud threshold, poll seconds, and cloud timeout with env > app-config precedence. It accepts manim-bot CLOUD_RENDER_ENABLED/REPO/WORKFLOW/BRANCH/TIMEOUT/POLL aliases from env or a legacy .env fallback; CLOUD_RENDER_ENABLED=true maps to AetherLab auto mode unless AETHERLAB_RENDER_MODE is explicit. SettingsDialog persists the fields; default render_mode='local' preserves current behavior.",
      "core/settings.py / ui/main_window.py", "headless", "Documented", ""),
     ("F154", "Render", "GitHub Actions cloud backend",
      "As a user, heavy scenes can render on a Linux GitHub Actions runner and return as a normal SceneBundle.",
-     "CloudRenderBackend scans for secrets, computes a content job id from scene/code/quality/fps/manim pin, commits jobs/<job_id>.py, dispatches workflow_dispatch, polls the run, downloads/validates the MP4 artifact into the local isolated render dir, and records a manifest so identical scenes reuse artifacts instead of re-dispatching.",
+     "CloudRenderBackend scans for secrets, computes a content job id from scene/code/quality/fps/manim pin, provisions the render workflow, commits jobs/<job_id>.py, dispatches workflow_dispatch, polls the run, follows signed artifact/log redirects without leaking GitHub auth to storage, downloads/validates the MP4 artifact into the local isolated render dir, and records a manifest so identical scenes reuse artifacts instead of re-dispatching. GitHub auth can come from Settings/env or an existing `gh auth login` token.",
      "services/render_backend.py / .github/workflows/render.yml", "headless", "Documented", ""),
     ("F155", "Render", "Cloud fail-soft local fallback",
      "As a user, missing token/network/CI never crashes a solve; AetherLab just renders locally.",
@@ -713,6 +713,14 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a user with vision critique enabled, AetherLab can try several scene concepts and keep the strongest one instead of pinning the first valid render.",
      "AppSettings.scene_candidates defaults to 1, preserving the legacy single-shot path. When scene_candidates>1 and both an API key and vision_model are configured, ManimRuntime.generate_render_tournament generates seeded storyboards, implements each with the normal cold codegen pass, applies code-safety and scene-validation gates, draft-renders surviving candidates through the existing backend seam with bounded concurrency, scores each draft with scene_critic, drops failed/unscored candidates, chooses by score/fewer issues/duration-contract closeness, then re-renders only the winner through the existing repair/critique/final-quality path. Any error, N=1, or missing vision config falls back to today's single path.",
      "core/settings.py / services/scene_generator.py / services/manim_runtime.py / services/pipeline.py / services/lesson_pipeline.py / ui/workers.py", "headless", "Documented", ""),
+    ("F162", "Quality", "Visual-regression quality gate (strict mode + regression flags)",
+     "As a maintainer, my visual-regression run FAILS when a render comes out broken (empty, frozen, too short) or measurably worse than the baseline — not only when rendering crashes.",
+     "tools/visual_regression.py records per-render metrics (duration, fps, blank/static spans, subtitle cues) but previously only failed on render crashes: quality 'warn' cases and baseline deltas never affected the exit code. Adds pure, unit-tested gate logic: quality_failures(case) returns hard violations (duration<2s, fps<5, blank span>0.5s, dominant static span, a lesson with zero subtitle cues); compare_report flags regressions vs. a baseline run (duration collapse >25%, blank/static-ratio increases) with a regression_count; and decide_exit(report, strict) fails on render crashes always, and additionally on quality violations, soft warnings, and regressions under the new --strict flag. Default (non-strict) behavior is unchanged.",
+     "tools/visual_regression.py", "headless", "Documented", ""),
+    ("F163", "Quality", "Domain-matched scene exemplars (few-shot codegen)",
+     "As a user, generated scenes follow a proven, well-directed template for my problem's physics instead of the model improvising Manim API usage from prose alone.",
+     "services/scene_exemplars.py ships four curated, Text-only (LaTeX-free) exemplar scenes — oscillator, pendulum, orbit, wave — built from scene_templates' render-proven vocabulary and verified to compile, pass code_safety, pass scene_validation, and render to MP4. exemplar_for()/exemplar_block() select one by scene_templates.detect_domain(keywords, variables) and format a few-shot block; SceneGenerator._generate_remote appends the domain-matched exemplar to the codegen system prompt (both the storyboard and single-call paths), truncation-safe since only the user message is budget-trimmed. Fail-soft: any selection error yields no exemplar and the prompt is unchanged. Reduces hallucinated-API render crashes and flat 'axes + one curve' compositions by showing, not just describing, a correct 3-beat scene.",
+     "services/scene_exemplars.py / services/scene_generator.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -830,7 +838,7 @@ DEFECTS: dict[str, str] = {
     "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
     "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
-    "F154": "BUG-15: cloud polling could attach to the newest unrelated workflow run before this job_id appeared; unmatched polls now stay queued.",
+    "F154": "BUG-15: cloud polling could attach to the newest unrelated workflow run before this job_id appeared; unmatched polls now stay queued. BUG-17: the dispatchable workflow was never installed in the user's repo, so every dispatch 404'd and cloud reported 'unavailable'; the app now provisions .github/workflows/render.yml on the default + render branch (idempotent) before dispatch and from the Settings test button. BUG-18: the workflow's setup-python `cache: pip` errored in a render repo (no requirements/pyproject), failing every render; removed it and verified a live end-to-end render produced a valid MP4.",
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
 }
 

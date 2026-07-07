@@ -56,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0, help="Audit only the first N cases.")
     parser.add_argument("--regenerate", action="store_true", help="Bypass lesson/chapter caches where supported.")
     parser.add_argument("--compare", type=Path, default=None, help="Optional previous run directory with summary.json.")
+    parser.add_argument("--strict", action="store_true",
+                        help="Fail (exit 1) on quality violations, soft warnings, and comparison regressions, not just render failures.")
     args = parser.parse_args(argv)
 
     cases = load_cases(args.cases)
@@ -76,10 +78,17 @@ def main(argv: list[str] | None = None) -> int:
     report["compare"] = compare_report(args.compare, report) if args.compare else None
 
     write_outputs(args.out, report)
-    failures = [c for c in report["cases"] if c["status"] == "fail"]
+    render_fails = [c for c in report["cases"] if c.get("status") == "fail"]
+    quality_fails = [c for c in report["cases"] if c.get("quality_failures")]
+    warns = [c for c in report["cases"] if c.get("status") == "warn"]
+    regressions = (report.get("compare") or {}).get("regression_count", 0)
     print(f"Visual regression audit wrote {args.out}")
-    print(f"Cases: {len(report['cases'])}; failures: {len(failures)}")
-    return 1 if failures else 0
+    print(
+        f"Cases: {len(report['cases'])}; render-fails: {len(render_fails)}; "
+        f"quality-fails: {len(quality_fails)}; warnings: {len(warns)}; regressions: {regressions}"
+        + ("  [strict]" if args.strict else "")
+    )
+    return decide_exit(report, strict=args.strict)
 
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
@@ -151,14 +160,16 @@ async def run_cases(cases: list[dict[str, Any]], out_dir: Path, quality: str, re
             artifact = await render_case(case, pipeline, lesson_pipeline, quality, regenerate)
             metrics = audit_video(Path(artifact["video_path"]), out_dir, case["id"], artifact.get("srt_path"))
             public_artifact = public_artifact_paths(artifact)
-            results.append({
+            case_result = {
                 "id": case["id"],
                 "kind": case["kind"],
                 "status": "warn" if metrics["warnings"] else "pass",
                 "artifact": public_artifact,
                 "expect": case.get("expect", []),
                 "metrics": metrics,
-            })
+            }
+            case_result["quality_failures"] = quality_failures(case_result)
+            results.append(case_result)
         except Exception as exc:  # noqa: BLE001
             results.append({
                 "id": case.get("id", f"case_{index}"),
@@ -443,6 +454,46 @@ def parse_srt_time(value: str) -> float:
     return hours * 3600 + minutes * 60 + seconds + int(ms) / 1000
 
 
+# ── Quality gate (machine-checkable, render-agnostic) ───────────────────────
+# Soft `warnings` (audit_video) record notable-but-tolerable observations; these
+# thresholds are stricter and mark a render as *broken* (empty/frozen/too short),
+# so `--strict` can fail CI on them. Pure functions — unit-tested without any
+# rendering (see test_features.py F162).
+_MIN_DURATION_S = 2.0
+_MIN_FPS = 5.0
+_MAX_BLANK_SPAN_S = 0.5
+
+# compare_report regression tolerances vs. a baseline run.
+_DURATION_REGRESS = 0.25   # a render that lost >25% of its length
+_BLANK_RATIO_REGRESS = 0.02
+_STATIC_RATIO_REGRESS = 0.05
+
+
+def quality_failures(case: dict[str, Any]) -> list[str]:
+    """Hard quality violations for one audited case (empty on a healthy render)."""
+    metrics = case.get("metrics")
+    if not isinstance(metrics, dict):
+        return []
+    reasons: list[str] = []
+    duration = float(metrics.get("duration", 0.0) or 0.0)
+    fps = float(metrics.get("fps", 0.0) or 0.0)
+    if duration < _MIN_DURATION_S:
+        reasons.append(f"duration {duration:.2f}s below {_MIN_DURATION_S:.0f}s floor")
+    if fps < _MIN_FPS:
+        reasons.append(f"fps {fps:.1f} below {_MIN_FPS:.0f}")
+    longest_blank = max((float(r.get("duration", 0.0)) for r in metrics.get("blank_ranges") or []), default=0.0)
+    if longest_blank > _MAX_BLANK_SPAN_S:
+        reasons.append(f"blank span {longest_blank:.2f}s exceeds {_MAX_BLANK_SPAN_S:.1f}s")
+    longest_static = max((float(r.get("duration", 0.0)) for r in metrics.get("static_ranges") or []), default=0.0)
+    if duration > 0 and longest_static > max(3.0, duration * 0.6):
+        reasons.append(f"static span {longest_static:.2f}s dominates the {duration:.1f}s render")
+    if case.get("kind") == "lesson":
+        subtitle = metrics.get("subtitle")
+        if isinstance(subtitle, dict) and int(subtitle.get("cue_count", 0) or 0) == 0:
+            reasons.append("lesson has no subtitle cues")
+    return reasons
+
+
 def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] | None:
     baseline = compare_dir / "summary.json"
     if not baseline.exists():
@@ -456,14 +507,41 @@ def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] 
             continue
         new_metrics = case["metrics"]
         old_metrics = old["metrics"]
+        # A regression is a delta that makes the render measurably worse.
+        regressions: list[str] = []
+        old_dur = float(old_metrics.get("duration", 0.0) or 0.0)
+        new_dur = float(new_metrics.get("duration", 0.0) or 0.0)
+        if old_dur > 0 and new_dur < old_dur * (1 - _DURATION_REGRESS):
+            regressions.append(f"duration dropped {old_dur:.1f}s -> {new_dur:.1f}s")
+        if new_metrics["blank_ratio"] - old_metrics["blank_ratio"] > _BLANK_RATIO_REGRESS:
+            regressions.append("blank ratio increased")
+        if new_metrics["static_ratio"] - old_metrics["static_ratio"] > _STATIC_RATIO_REGRESS:
+            regressions.append("static ratio increased")
         deltas.append({
             "id": case["id"],
-            "duration_delta": round(new_metrics["duration"] - old_metrics["duration"], 3),
+            "duration_delta": round(new_dur - old_dur, 3),
             "frame_count_delta": int(new_metrics["frame_count"]) - int(old_metrics["frame_count"]),
             "blank_ratio_delta": round(new_metrics["blank_ratio"] - old_metrics["blank_ratio"], 4),
             "static_ratio_delta": round(new_metrics["static_ratio"] - old_metrics["static_ratio"], 4),
+            "regressions": regressions,
         })
-    return {"baseline": str(baseline), "deltas": deltas}
+    regression_count = sum(len(d["regressions"]) for d in deltas)
+    return {"baseline": str(baseline), "deltas": deltas, "regression_count": regression_count}
+
+
+def decide_exit(report: dict[str, Any], *, strict: bool) -> int:
+    """Exit code for a run. Render failures always fail; `--strict` also fails on
+    quality violations, soft warnings, and comparison regressions."""
+    if any(c.get("status") == "fail" for c in report.get("cases", [])):
+        return 1
+    if strict:
+        if any(c.get("quality_failures") for c in report.get("cases", [])):
+            return 1
+        if any(c.get("status") == "warn" for c in report.get("cases", [])):
+            return 1
+        if (report.get("compare") or {}).get("regression_count"):
+            return 1
+    return 0
 
 
 def write_outputs(out_dir: Path, report: dict[str, Any]) -> None:

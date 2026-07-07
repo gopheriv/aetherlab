@@ -189,7 +189,7 @@
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=209923 + skip-existing"
+    "note": "URL fallback + free_disk_mb=209510 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_ddic1pu_/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_orr9ixep/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -609,11 +609,11 @@
   },
   "F153": {
     "status": "PASS",
-    "note": "cloud render settings persist via app-config + manim-bot CLOUD_RENDER_* aliases (F153)"
+    "note": "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)"
   },
   "F154": {
     "status": "PASS",
-    "note": "stubbed cloud success + cache reuse + strict run matching (F154)"
+    "note": "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
   },
   "F155": {
     "status": "PASS",
@@ -629,7 +629,7 @@
   },
   "F158": {
     "status": "PASS",
-    "note": "cloud render workflow + setup docs present (F158)"
+    "note": "cloud render workflow + docs present; no cache:pip; bundle==file (F158)"
   },
   "F159": {
     "status": "PASS",
@@ -642,5 +642,13 @@
   "F161": {
     "status": "PASS",
     "note": "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
+  },
+  "F162": {
+    "status": "PASS",
+    "note": "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)"
+  },
+  "F163": {
+    "status": "PASS",
+    "note": "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
   }
 }

@@ -485,7 +485,11 @@ class SettingsDialog(QtWidgets.QDialog):
     def _test_cloud_render(self) -> None:
         from dataclasses import replace
 
-        from aetherlab.services.render_backend import CloudRenderBackend, GitHubActionsClient
+        from aetherlab.services.render_backend import (
+            CloudRenderBackend,
+            GitHubActionsClient,
+            provision_render_repo,
+        )
 
         probe = replace(
             self._settings,
@@ -496,16 +500,24 @@ class SettingsDialog(QtWidgets.QDialog):
             github_branch=self._github_branch_edit.text().strip() or "renders",
             cloud_render_threshold=float(self._cloud_threshold.value()),
         )
+        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setText("Setting up render repo…")
+        QtWidgets.QApplication.processEvents()
         backend = CloudRenderBackend(probe)
         ok, message = backend.available()
         if ok:
             try:
                 client = GitHubActionsClient.from_settings(probe)
                 client._request("GET", f"/repos/{client.owner}/{client.repo}")
-                message = "GitHub render repo reachable. Test render will run during the next cloud render."
+                # Actually provision: install the dispatchable workflow now so the
+                # first cloud render can't fail with a missing-workflow 404.
+                status = provision_render_repo(
+                    client, branch=probe.github_branch, workflow=probe.github_workflow
+                )
+                message = f"Cloud rendering is ready — {status}"
             except Exception as exc:  # noqa: BLE001
                 ok = False
-                message = f"GitHub API check failed: {str(exc)[:160]}"
+                message = f"Cloud setup failed: {str(exc)[:180]}"
         self._cloud_result.setStyleSheet(f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;")
         self._cloud_result.setText(message)
 

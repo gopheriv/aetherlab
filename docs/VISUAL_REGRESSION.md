@@ -14,6 +14,19 @@ To refresh the checked-in baseline:
 python tools\visual_regression.py --out visual_regression\baseline\current --regenerate
 ```
 
+To gate CI on render quality (not just render success), add `--strict` and a
+baseline to compare against:
+
+```powershell
+python tools\visual_regression.py --out visual_regression\runs\ci --compare visual_regression\baseline\current --strict
+```
+
+In `--strict` mode the run exits non-zero when a render is broken (empty/frozen/
+too short — see `quality_failures`), carries a soft warning, or regresses against
+the baseline (duration collapse, more blank/static frames — see the per-case
+`regressions` in `compare`). Without `--strict` the exit code still only reflects
+render crashes, so the default recording behavior is unchanged.
+
 The script intentionally clears provider, cloud-render, and narration environment variables and points AetherLab at `.analysis/visual-regression-data`, so reports do not depend on or expose private API keys/settings.
 
 ## What It Records

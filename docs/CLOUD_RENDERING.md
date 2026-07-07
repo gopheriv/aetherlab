@@ -9,16 +9,26 @@ Cloud rendering is optional and always fails soft to local rendering.
 1. Create a GitHub repository for render jobs.
    - Private is safest.
    - Public is supported, but generated scene code may be visible.
-2. Add `.github/workflows/render.yml` from this project to that repository.
-3. In AetherLab Settings, choose:
+2. In AetherLab Settings, choose:
    - Render mode: `Cloud` or `Auto`
    - GitHub render repo: `owner/name`
    - Workflow file: `render.yml`
    - Render branch: `renders`
-4. Authenticate.
+3. Authenticate.
    - Preferred: GitHub device login, when an AetherLab OAuth client id is
      configured via `AETHERLAB_GITHUB_CLIENT_ID`.
-   - Fallback: paste a fine-grained GitHub token.
+   - Fallback: paste a fine-grained GitHub token (needs the `workflow` scope,
+     see below).
+   - If you already use the GitHub CLI, `gh auth login` is also enough:
+     AetherLab can read `gh auth token` at runtime without saving the token in
+     app config.
+4. Click **Test cloud render**. AetherLab now **installs the render workflow for
+   you** — it commits `.github/workflows/render.yml` to the repository's default
+   branch and to the render branch (GitHub only dispatches a workflow that
+   exists on the default branch). This also happens automatically before the
+   first cloud render, so no manual copying is required.
+   - Manual alternative: copy `.github/workflows/render.yml` from this project
+     into the repository yourself.
 
 ## Token Permissions
 
@@ -26,10 +36,21 @@ For a fine-grained token, restrict it to the render repository and grant:
 
 - Actions: read/write
 - Contents: read/write
+- Workflows: read/write  (required to install `.github/workflows/render.yml`;
+  a classic token needs the `workflow` scope. The in-app device login already
+  requests `repo workflow`.)
 
 The app uses Contents write to commit `jobs/<job_id>.py` to the render branch,
 Actions write to dispatch the workflow, and Actions read to poll runs and
 download artifacts.
+
+## manim-bot Migration
+
+If you already configured `manim-bot/.env`, AetherLab can reuse compatible keys
+as a fallback, including `CLOUD_RENDER_ENABLED`, `CLOUD_RENDER_REPO`,
+`CLOUD_RENDER_WORKFLOW`, `CLOUD_RENDER_BRANCH`, `CLOUD_RENDER_TIMEOUT`, and
+`CLOUD_RENDER_POLL`. AetherLab-specific env vars and saved Settings still win.
+Set `AETHERLAB_DISABLE_LEGACY_ENV=1` to turn this migration fallback off.
 
 ## Privacy Rules
 

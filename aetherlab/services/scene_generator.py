@@ -465,6 +465,16 @@ class SceneGenerator:
             )
             temperature = 0.4
 
+        # Few-shot: show the model ONE domain-matched, render-proven exemplar so
+        # it imitates correct Manim-CE API usage and a real 3-beat arc instead of
+        # improvising from prose alone. Appended to `system` (never truncated by
+        # the budget trim below); fail-soft — no match yields no exemplar.
+        from aetherlab.services.scene_exemplars import exemplar_block
+
+        exemplar = exemplar_block(solver.keywords, solver.variables)
+        if exemplar:
+            system += "\n\n" + exemplar
+
         # Machines without a LaTeX toolchain can't render MathTex — force the
         # scene to unicode Text so it still renders everywhere. (Lazy import:
         # manim_runtime imports this module at top level.)

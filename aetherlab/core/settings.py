@@ -104,6 +104,7 @@ def load_settings() -> AppSettings:
     # data_dir override here is safe (no recursion) and lets the Settings
     # dialog's Data path field persist across restarts.
     app_cfg = load_app_config()
+    legacy_env = load_legacy_env()
     data_dir = _path_from_env(
         "AETHERLAB_DATA_DIR",
         Path(app_cfg["data_dir"]).expanduser() if app_cfg.get("data_dir") else _default_data_dir(),
@@ -122,15 +123,18 @@ def load_settings() -> AppSettings:
     preset = (os.getenv("AETHERLAB_PROVIDER") or app_cfg.get("provider_preset") or "").lower()
 
     env_model = _first_env("AETHERLAB_LLM_MODEL", "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL")
-    llm_model = env_model or app_cfg.get("model") or qwen.get("model") or "gpt-5.5"
+    legacy_model = _first_mapping(legacy_env, "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL")
+    llm_model = env_model or app_cfg.get("model") or legacy_model or qwen.get("model") or "gpt-5.5"
     api_key = (
         _first_env("AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY")
         or app_cfg.get("api_key")
+        or _first_mapping(legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY")
         or qwen.get("api_key")
     )
     base_url = (
         _first_env("AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
         or app_cfg.get("base_url")
+        or _first_mapping(legacy_env, "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
         or qwen.get("base_url")
     )
 
@@ -146,8 +150,16 @@ def load_settings() -> AppSettings:
         source = "ollama-local"
     elif app_cfg.get("api_key") or app_cfg.get("model") or app_cfg.get("base_url"):
         source = str(app_config_path())
+    elif legacy_env and (legacy_env.get("OPENAI_API_KEY") or legacy_env.get("GPT_API_KEY")):
+        source = str(_legacy_env_path() or "legacy manim-bot .env")
     else:
         source = qwen.get("source", "environment")
+
+    cloud_enabled = _as_bool(
+        os.getenv("CLOUD_RENDER_ENABLED"),
+        legacy_env.get("CLOUD_RENDER_ENABLED"),
+        default=False,
+    )
 
     return AppSettings(
         data_dir=data_dir,
@@ -174,22 +186,50 @@ def load_settings() -> AppSettings:
         render_mode=_render_mode(
             os.getenv("AETHERLAB_RENDER_MODE")
             or app_cfg.get("render_mode")
-            or ("auto" if _as_bool(os.getenv("CLOUD_RENDER_ENABLED"), default=False) else None)
+            or ("auto" if cloud_enabled else None)
         ),
         cloud_provider=os.getenv("AETHERLAB_CLOUD_PROVIDER") or app_cfg.get("cloud_provider") or "github_actions",
-        github_repo=_first_env("AETHERLAB_RENDER_REPO", "CLOUD_RENDER_REPO") or app_cfg.get("github_repo") or "",
-        github_token=_first_env("AETHERLAB_GITHUB_TOKEN", "GITHUB_TOKEN") or app_cfg.get("github_token") or "",
-        github_workflow=_first_env("AETHERLAB_GITHUB_WORKFLOW", "CLOUD_RENDER_WORKFLOW") or app_cfg.get("github_workflow") or "render.yml",
-        github_branch=_first_env("AETHERLAB_GITHUB_BRANCH", "CLOUD_RENDER_BRANCH") or app_cfg.get("github_branch") or "renders",
+        github_repo=(
+            _first_env("AETHERLAB_RENDER_REPO", "CLOUD_RENDER_REPO")
+            or app_cfg.get("github_repo")
+            or _first_mapping(legacy_env, "CLOUD_RENDER_REPO")
+            or ""
+        ),
+        github_token=(
+            _first_env("AETHERLAB_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+            or app_cfg.get("github_token")
+            or _first_mapping(legacy_env, "GITHUB_TOKEN", "GH_TOKEN")
+            or ""
+        ),
+        github_workflow=_workflow_name(
+            _first_env("AETHERLAB_GITHUB_WORKFLOW", "CLOUD_RENDER_WORKFLOW")
+            or app_cfg.get("github_workflow")
+            or _first_mapping(legacy_env, "CLOUD_RENDER_WORKFLOW")
+            or "render.yml"
+        ),
+        github_branch=(
+            _first_env("AETHERLAB_GITHUB_BRANCH", "CLOUD_RENDER_BRANCH")
+            or app_cfg.get("github_branch")
+            or _first_mapping(legacy_env, "CLOUD_RENDER_BRANCH")
+            or "renders"
+        ),
         github_oauth_client_id=os.getenv("AETHERLAB_GITHUB_CLIENT_ID") or app_cfg.get("github_oauth_client_id") or "",
         cloud_render_threshold=_as_float(
             os.getenv("AETHERLAB_CLOUD_RENDER_THRESHOLD"), app_cfg.get("cloud_render_threshold"), default=3.0
         ),
         cloud_poll_seconds=_as_int(
-            os.getenv("AETHERLAB_CLOUD_POLL_SECONDS"), os.getenv("CLOUD_RENDER_POLL"), app_cfg.get("cloud_poll_seconds"), default=8
+            os.getenv("AETHERLAB_CLOUD_POLL_SECONDS"),
+            os.getenv("CLOUD_RENDER_POLL"),
+            app_cfg.get("cloud_poll_seconds"),
+            legacy_env.get("CLOUD_RENDER_POLL"),
+            default=8,
         ),
         cloud_render_timeout=_as_int(
-            os.getenv("AETHERLAB_CLOUD_RENDER_TIMEOUT"), os.getenv("CLOUD_RENDER_TIMEOUT"), app_cfg.get("cloud_render_timeout"), default=1800
+            os.getenv("AETHERLAB_CLOUD_RENDER_TIMEOUT"),
+            os.getenv("CLOUD_RENDER_TIMEOUT"),
+            app_cfg.get("cloud_render_timeout"),
+            legacy_env.get("CLOUD_RENDER_TIMEOUT"),
+            default=1800,
         ),
         visual_critic_max_passes=_as_int(
             os.getenv("AETHERLAB_VISUAL_CRITIC_MAX_PASSES"),
@@ -227,6 +267,64 @@ def _first_env(*names: str) -> str | None:
         value = os.getenv(name)
         if value is not None and value.strip():
             return value.strip()
+    return None
+
+
+def _first_mapping(values: dict[str, str], *names: str) -> str | None:
+    for name in names:
+        value = values.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
+
+
+def _workflow_name(value: str | None) -> str:
+    name = Path(str(value or "render.yml").strip()).name
+    return name or "render.yml"
+
+
+def load_legacy_env(path: Path | None = None) -> dict[str, str]:
+    """Read a legacy manim-bot .env as a compatibility fallback.
+
+    The parsed values never mutate os.environ and are lower precedence than the
+    app config. This lets migrations reuse provider/cloud settings without
+    silently overriding an explicit AetherLab choice.
+    """
+    env_path = path or _legacy_env_path()
+    if not env_path or not env_path.exists():
+        return {}
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    result: dict[str, str] = {}
+    for line in lines:
+        item = line.strip()
+        if not item or item.startswith("#") or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value:
+            result[key] = value
+    return result
+
+
+def _legacy_env_path() -> Path | None:
+    if _as_bool(os.getenv("AETHERLAB_DISABLE_LEGACY_ENV"), default=False):
+        return None
+    explicit = os.getenv("AETHERLAB_LEGACY_ENV_PATH") or os.getenv("MANIM_BOT_ENV_PATH")
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    root = Path(__file__).resolve().parents[2]
+    candidates.extend([
+        root / ".env",
+        root.parent / "manim-bot" / ".env",
+    ])
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return None
 
 

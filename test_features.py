@@ -43,6 +43,7 @@ os.environ["QWEN_SETTINGS_PATH"] = str(_TMP / "no-qwen-settings.json")
 os.environ.pop("AETHERLAB_QWEN_AUTOLOAD", None)
 os.environ.pop("AETHERLAB_PROVIDER", None)
 os.environ.pop("AETHERLAB_VISION_MODEL", None)
+os.environ["AETHERLAB_DISABLE_LEGACY_ENV"] = "1"
 for _compat_key in (
     "GPT_API_KEY", "DASHSCOPE_API_KEY", "GPT_BASE_URL", "LLM_BASE_URL",
     "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL", "LLM_TIMEOUT",
@@ -50,6 +51,7 @@ for _compat_key in (
     "VOICEOVER_ENABLED", "TTS_ENABLED", "TTS_VOICE", "TTS_RATE",
     "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO", "CLOUD_RENDER_WORKFLOW",
     "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_POLL",
+    "AETHERLAB_LEGACY_ENV_PATH", "MANIM_BOT_ENV_PATH", "GH_TOKEN",
     "RENDER_TIER", "MANIM_FPS",
 ):
     os.environ.pop(_compat_key, None)
@@ -2669,7 +2671,8 @@ def t_f153():
         "AETHERLAB_GITHUB_BRANCH", "AETHERLAB_CLOUD_POLL_SECONDS",
         "AETHERLAB_CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO",
         "CLOUD_RENDER_WORKFLOW", "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT",
-        "CLOUD_RENDER_POLL",
+        "CLOUD_RENDER_POLL", "AETHERLAB_DISABLE_LEGACY_ENV", "AETHERLAB_LEGACY_ENV_PATH",
+        "MANIM_BOT_ENV_PATH",
     )
     saved = {k: os.environ.pop(k, None) for k in keys}
     try:
@@ -2683,12 +2686,38 @@ def t_f153():
         assert alias.render_mode == "auto" and alias.github_repo == "owner/worker"
         assert alias.github_workflow == "render.yml" and alias.github_branch == "main"
         assert alias.cloud_render_timeout == 456 and alias.cloud_poll_seconds == 9
+        for k in ("CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO", "CLOUD_RENDER_WORKFLOW",
+                  "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_POLL"):
+            os.environ.pop(k, None)
+        legacy = _TMP / "manim-bot.env"
+        legacy.write_text(
+            "\n".join([
+                "CLOUD_RENDER_ENABLED=true",
+                "CLOUD_RENDER_REPO=owner/legacy-worker",
+                "CLOUD_RENDER_WORKFLOW=.github/workflows/render.yml",
+                "CLOUD_RENDER_BRANCH=main",
+                "CLOUD_RENDER_TIMEOUT=789",
+                "CLOUD_RENDER_POLL=11",
+                "GPT_BASE_URL=https://legacy.example/v1",
+                "GPT_API_KEY=legacy-test-token",
+                "MANIM_MODEL=qwen-legacy",
+            ]),
+            encoding="utf-8",
+        )
+        os.environ["AETHERLAB_DISABLE_LEGACY_ENV"] = "0"
+        os.environ["AETHERLAB_LEGACY_ENV_PATH"] = str(legacy)
+        migrated = load_settings()
+        assert migrated.render_mode == "auto" and migrated.github_repo == "owner/legacy-worker"
+        assert migrated.github_workflow == "render.yml" and migrated.github_branch == "main"
+        assert migrated.cloud_render_timeout == 789 and migrated.cloud_poll_seconds == 11
+        assert migrated.openai_base_url == "https://legacy.example/v1"
+        assert migrated.llm_model == "qwen-legacy" and migrated.openai_api_key
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-    return "cloud render settings persist via app-config + manim-bot CLOUD_RENDER_* aliases (F153)"
+    return "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)"
 
 
 def t_f154():
@@ -2698,14 +2727,23 @@ def t_f154():
     from dataclasses import replace
     from aetherlab.core.models import SceneBundle
     from aetherlab.services.render_backend import CloudRenderBackend, GitHubActionsClient
+    import aetherlab.services.render_backend as rb
 
     class FakeClient:
         def __init__(self):
             self.dispatches = 0
+            self.provisioned = 0
             self.name = ""
+        # BUG-16: the workflow must be installed before dispatch or GitHub 404s.
+        def default_branch(self): return "main"
+        def ensure_workflow(self, *, workflow, branch):
+            self.provisioned += 1
+            return False
         def ensure_branch(self, branch): pass
         def put_file(self, path, content, *, branch, message): pass
         def dispatch(self, **kw):
+            # Provisioning must have happened before the first dispatch.
+            assert self.provisioned >= 1, "workflow not provisioned before dispatch"
             self.dispatches += 1
             return 10
         def get_run(self, run_id, *, job_id, branch):
@@ -2725,6 +2763,8 @@ def t_f154():
 
     s = replace(_settings(), render_mode="cloud", github_repo="owner/render",
                 github_token="ghp_" + "x" * 24)
+    path_workflow = replace(s, github_workflow=".github/workflows/render.yml")
+    assert GitHubActionsClient.from_settings(path_workflow).workflow == "render.yml"
     client = FakeClient()
     backend = CloudRenderBackend(s, client=client)
     scene = SceneBundle("AetherLabScene", "from manim import *\nclass AetherLabScene(Scene):\n pass\n",
@@ -2748,7 +2788,65 @@ def t_f154():
     assert wrong.get_run(None, job_id="wanted", branch="renders") == {"status": "queued"}
     right = RunLookupClient([{"id": 2, "status": "completed", "display_title": "AetherLab render wanted"}])
     assert right.get_run(None, job_id="wanted", branch="renders")["id"] == 2
-    return "stubbed cloud success + cache reuse + strict run matching (F154)"
+    redirect_src = inspect.getsource(GitHubActionsClient._download_redirecting_raw)
+    assert "_NoRedirect" in redirect_src and "urlopen(signed" in redirect_src
+
+    # BUG-16 regression: provision_render_repo installs the dispatchable workflow
+    # on BOTH the default branch and the render branch, is idempotent, and gives a
+    # clear message when the token lacks the 'workflow' scope (403).
+    import urllib.error
+    from aetherlab.services.render_backend import (
+        RENDER_WORKFLOW_YAML, provision_render_repo,
+    )
+
+    class ProvisionClient(GitHubActionsClient):
+        def __init__(self, existing=None, forbid=False):
+            super().__init__("owner", "render", "token")
+            self.files = dict(existing or {})   # branch -> {path: content}
+            self.branches = {"main"}
+            self.writes = []
+            self.forbid = forbid
+        def default_branch(self): return "main"
+        def file_content(self, path, *, branch):
+            return self.files.get(branch, {}).get(path)
+        def ensure_branch(self, branch): self.branches.add(branch)
+        def put_file(self, path, content, *, branch, message):
+            if self.forbid:
+                raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+            self.files.setdefault(branch, {})[path] = content
+            self.writes.append((branch, path))
+
+    wf_path = ".github/workflows/render.yml"
+    fresh = ProvisionClient()
+    provision_render_repo(fresh, branch="renders", workflow="render.yml")
+    assert (fresh.files.get("main", {}).get(wf_path) or "").strip() == RENDER_WORKFLOW_YAML.strip()
+    assert (fresh.files.get("renders", {}).get(wf_path) or "").strip() == RENDER_WORKFLOW_YAML.strip()
+    assert "renders" in fresh.branches
+    # Idempotent: a repo that already has the exact workflow writes nothing.
+    have = {b: {wf_path: RENDER_WORKFLOW_YAML} for b in ("main", "renders")}
+    warm = ProvisionClient(existing=have)
+    warm.branches.add("renders")
+    provision_render_repo(warm, branch="renders", workflow="render.yml")
+    assert warm.writes == [], warm.writes
+    # Missing 'workflow' scope surfaces an actionable message, not a raw 403.
+    denied = ProvisionClient(forbid=True)
+    try:
+        provision_render_repo(denied, branch="renders", workflow="render.yml")
+        raise AssertionError("expected a scope error")
+    except RuntimeError as exc:
+        assert "workflow" in str(exc).lower() and "scope" in str(exc).lower()
+
+    # manim-bot used GitHub CLI auth instead of a pasted token. AetherLab should
+    # accept that runtime token fallback when Settings has no saved token.
+    orig_cli_token = rb._github_cli_token
+    rb._github_cli_token = lambda: "ghp_" + "z" * 24
+    try:
+        cli_auth = replace(s, github_token="")
+        assert CloudRenderBackend(cli_auth).available()[0]
+        assert GitHubActionsClient.from_settings(cli_auth).token.startswith("ghp_")
+    finally:
+        rb._github_cli_token = orig_cli_token
+    return "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
 
 
 def t_f155():
@@ -2769,13 +2867,16 @@ def t_f155():
             return scene
 
     orig = rb.LocalRenderBackend
+    orig_cli_token = rb._github_cli_token
     rb.LocalRenderBackend = FakeLocal
+    rb._github_cli_token = lambda: ""
     try:
         s = replace(_settings(), render_mode="cloud", github_repo="owner/render", github_token="")
         scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
         out = asyncio.run(ManimRuntime(s)._render_once(scene, s, "l"))
     finally:
         rb.LocalRenderBackend = orig
+        rb._github_cli_token = orig_cli_token
     assert out.status == "rendered" and calls["local"] == 1
     assert any("GitHub token" in d for d in out.diagnostics)
     assert any("rendered locally" in d for d in out.diagnostics)
@@ -2816,11 +2917,20 @@ def t_f157():
 
 def t_f158():
     # Workflow and docs ship the concrete GitHub Actions render worker.
+    from aetherlab.services.render_backend import RENDER_WORKFLOW_YAML
     wf = Path(".github/workflows/render.yml").read_text(encoding="utf-8")
     doc = Path("docs/CLOUD_RENDERING.md").read_text(encoding="utf-8")
     assert "workflow_dispatch" in wf and "manim==0.20.1" in wf
     assert "jobs/<job_id>.py" in doc and "Cloud" in doc
-    return "cloud render workflow + setup docs present (F158)"
+    # BUG-18 regression: `cache: pip` in setup-python needs a requirements.txt/
+    # pyproject.toml, which a render repo has neither of — the step ERRORS and
+    # every cloud render fails. It must not reappear in the app-installed workflow.
+    assert "cache: pip" not in RENDER_WORKFLOW_YAML, "cache: pip breaks render-repo setup-python"
+    assert "cache: pip" not in wf
+    # The bundled constant (what the app installs) must match the shipped file so
+    # the two can't drift apart.
+    assert RENDER_WORKFLOW_YAML.strip() == wf.strip(), "bundled workflow != .github/workflows/render.yml"
+    return "cloud render workflow + docs present; no cache:pip; bundle==file (F158)"
 
 
 def t_f159():
@@ -3136,6 +3246,132 @@ def t_f161():
     fallback = asyncio.run(failed.generate_render_tournament(request, solver, rag, tournament_settings))
     assert fallback is rendered and fallback_calls == ["fallback-generate", "fallback-render:single-code"]
     return "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
+
+
+def t_f162():
+    # Visual-regression quality GATE: warnings alone never failed the run, and
+    # compare_report computed deltas but never flagged regressions. quality_failures,
+    # regression flagging, and --strict decide_exit are pure + unit-testable here.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "visual_regression_mod", str(Path("tools/visual_regression.py").resolve())
+    )
+    vr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vr)
+
+    healthy = {"kind": "scene", "metrics": {
+        "duration": 18.0, "fps": 30.0, "blank_ranges": [], "static_ranges": [],
+    }}
+    assert vr.quality_failures(healthy) == [], vr.quality_failures(healthy)
+
+    broken = {"kind": "scene", "metrics": {
+        "duration": 1.2, "fps": 3.0,
+        "blank_ranges": [{"duration": 1.5}],
+        "static_ranges": [{"duration": 16.0}],
+    }}
+    reasons = vr.quality_failures(broken)
+    assert any("duration" in r for r in reasons) and any("fps" in r for r in reasons)
+    assert any("blank" in r for r in reasons) and any("static" in r for r in reasons), reasons
+
+    lesson_no_subs = {"kind": "lesson", "metrics": {
+        "duration": 25.0, "fps": 30.0, "blank_ranges": [], "static_ranges": [],
+        "subtitle": {"cue_count": 0},
+    }}
+    assert any("subtitle" in r for r in vr.quality_failures(lesson_no_subs))
+
+    # compare_report flags a real regression (duration collapse, more blank frames).
+    base_dir = _TMP / "vr_baseline"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    (base_dir / "summary.json").write_text(json.dumps({"cases": [
+        {"id": "scene_x", "metrics": {"duration": 18.0, "frame_count": 540,
+                                       "blank_ratio": 0.0, "static_ratio": 0.10}},
+        {"id": "scene_y", "metrics": {"duration": 12.0, "frame_count": 360,
+                                       "blank_ratio": 0.0, "static_ratio": 0.10}},
+    ]}), encoding="utf-8")
+    now = {"cases": [
+        {"id": "scene_x", "metrics": {"duration": 6.0, "frame_count": 180,
+                                      "blank_ratio": 0.05, "static_ratio": 0.10}},  # regressed
+        {"id": "scene_y", "metrics": {"duration": 12.1, "frame_count": 362,
+                                      "blank_ratio": 0.0, "static_ratio": 0.11}},   # stable
+    ]}
+    cmp = vr.compare_report(base_dir, now)
+    assert cmp["regression_count"] >= 2, cmp
+    by_id = {d["id"]: d for d in cmp["deltas"]}
+    assert by_id["scene_x"]["regressions"] and not by_id["scene_y"]["regressions"], cmp
+
+    # decide_exit: render failures always fail; --strict also fails on quality/warn/regress.
+    render_fail = {"cases": [{"id": "a", "status": "fail"}]}
+    assert vr.decide_exit(render_fail, strict=False) == 1
+    warn_only = {"cases": [{"id": "a", "status": "warn", "quality_failures": []}]}
+    assert vr.decide_exit(warn_only, strict=False) == 0  # default unchanged
+    assert vr.decide_exit(warn_only, strict=True) == 1
+    qfail = {"cases": [{"id": "a", "status": "pass", "quality_failures": ["duration low"]}]}
+    assert vr.decide_exit(qfail, strict=False) == 0 and vr.decide_exit(qfail, strict=True) == 1
+    regressed = {"cases": [{"id": "a", "status": "pass", "quality_failures": []}],
+                 "compare": {"regression_count": 3}}
+    assert vr.decide_exit(regressed, strict=True) == 1
+    clean = {"cases": [{"id": "a", "status": "pass", "quality_failures": []}]}
+    assert vr.decide_exit(clean, strict=True) == 0
+    return "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)"
+
+
+def t_f163():
+    # Exemplar library: domain-matched few-shot scenes injected into codegen.
+    # Every exemplar must pass the SAME gates a generated scene must, and be
+    # selected + injected. (All four also render — verified out of band; kept out
+    # of the fast suite for speed.)
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_exemplars import EXEMPLARS, exemplar_block, exemplar_for
+    from aetherlab.services.scene_generator import SceneGenerator
+    from aetherlab.services.scene_validation import validate_scene
+
+    assert set(EXEMPLARS) == {"oscillator", "pendulum", "orbit", "wave"}
+    for dom, code in EXEMPLARS.items():
+        compile(code, "<ex>", "exec")
+        assert "MathTex" not in code and "Tex(" not in code, f"{dom} must be LaTeX-free"
+        ok, iss = validate_code_safety(code)
+        assert ok, (dom, iss)
+        lok, liss = validate_scene(code)
+        assert lok, (dom, liss)
+
+    # Selection reuses detect_domain and always yields a domain.
+    assert exemplar_for(["kepler", "orbit"], {})[0] == "orbit"
+    assert exemplar_for(["pendulum"], {})[0] == "pendulum"
+    assert exemplar_for(["fourier", "wave"], {})[0] == "wave"
+    assert exemplar_for(["thing"], {"damping": 0.1})[0] == "oscillator"
+    assert exemplar_block(["orbit"], {}).startswith("## Reference exemplar")
+    assert exemplar_block([], {}) != ""
+
+    # Injected into the codegen system prompt (captured via a stub client).
+    class _Msg:
+        def __init__(self, c): self.content = c
+    class _Choice:
+        def __init__(self, c): self.finish_reason = "stop"; self.message = _Msg(c)
+    class _Resp:
+        def __init__(self, c): self.choices = [_Choice(c)]
+    calls = []
+    class _Completions:
+        async def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                return _Resp('{"concept":"c","staging":"s","palette":{},'
+                             '"acts":[{"name":"ESTABLISH","duration_s":5,"beats":["b"]}],'
+                             '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
+            return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
+                         "    def construct(self):\n        self.wait(1)\n")
+    class _Chat: completions = _Completions()
+    class _Client: chat = _Chat()
+
+    sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
+    sg._client = _Client()
+    asyncio.run(sg._generate_remote(
+        ProblemRequest(prompt="damped oscillator"), _solver(), _rag(), "AetherLabScene"))
+    codegen_system = calls[1]["messages"][0]["content"]
+    assert "Reference exemplar" in codegen_system, "exemplar not injected into codegen prompt"
+    assert "oscillator" in codegen_system, "domain-matched exemplar expected"
+    return "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

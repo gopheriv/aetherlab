@@ -15,12 +15,15 @@ import hashlib
 import json
 import logging
 import re
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
 
@@ -32,10 +35,132 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MANIM_VERSION_PIN = "0.20.1"
-CLOUD_WORKFLOW_VERSION = "1"
+CLOUD_WORKFLOW_VERSION = "2"  # bumped: dropped `cache: pip` (no deps manifest → step error)
 CLOUD_UNAVAILABLE = "cloud-unavailable"
 DEFAULT_GITHUB_WORKFLOW = "render.yml"
 DEFAULT_GITHUB_BRANCH = "renders"
+
+# The Actions workflow the cloud backend dispatches. It MUST exist in the user's
+# render repo — GitHub only lets the REST API dispatch a workflow that is present
+# on the repository's default branch, and the dispatched ``ref`` runs that
+# branch's copy of the file — so the app installs this on BOTH the default branch
+# and the render branch (see ``provision_render_repo``). Bundled as a string so
+# it works identically from a source checkout and a frozen build. Keep in sync
+# with .github/workflows/render.yml (CLOUD_WORKFLOW_VERSION gates the job hash).
+RENDER_WORKFLOW_YAML = r"""name: AetherLab Cloud Render
+run-name: AetherLab render ${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Stable render job id
+        required: true
+        type: string
+      quality:
+        description: Manim quality flag
+        required: true
+        default: l
+        type: choice
+        options: [l, m, h, k]
+      fps:
+        description: Frames per second
+        required: true
+        default: "30"
+        type: string
+      scene_path:
+        description: Path to committed scene file
+        required: true
+        type: string
+      class_name:
+        description: Manim scene class
+        required: true
+        default: AetherLabScene
+        type: string
+      needs_latex:
+        description: Install a minimal TeX stack
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install system render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          if [ "${{ inputs.needs_latex }}" = "true" ]; then
+            sudo apt-get install -y --no-install-recommends \
+              texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+          fi
+
+      - name: Install pinned Manim
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "manim==0.20.1"
+          python - <<'PY'
+          import importlib.metadata as m
+          print("manim", m.version("manim"))
+          PY
+
+      - name: Render scene
+        id: render
+        shell: bash
+        run: |
+          set +e
+          mkdir -p out
+          python -m manim render \
+            -q${{ inputs.quality }} \
+            --fps "${{ inputs.fps }}" \
+            --disable_caching \
+            --media_dir out \
+            "${{ inputs.scene_path }}" \
+            "${{ inputs.class_name }}" 2>&1 | tee "${{ inputs.job_id }}.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          mp4="$(find out -type f -name '*.mp4' -print0 | xargs -0 ls -S | head -n 1)"
+          if [ -z "$mp4" ]; then
+            echo "No MP4 produced" | tee -a "${{ inputs.job_id }}.log"
+            exit 2
+          fi
+          cp "$mp4" "${{ inputs.job_id }}.mp4"
+
+      - name: Upload rendered MP4
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.job_id }}.mp4
+          path: ${{ inputs.job_id }}.mp4
+          retention-days: 14
+
+      - name: Upload render log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.job_id }}.log
+          path: ${{ inputs.job_id }}.log
+          if-no-files-found: ignore
+          retention-days: 14
+"""
 
 
 class RenderBackend(Protocol):
@@ -152,12 +277,19 @@ class CloudRenderBackend:
                 scene.diagnostics.append(f"Cloud render cache hit ({job_id}).")
                 return scene
 
+            say("Preparing render repo")
+            # Install the dispatchable workflow (on the default + render branch)
+            # BEFORE the first dispatch — otherwise dispatch 404s and cloud looks
+            # "unavailable" even on a correctly configured repo/token.
+            await asyncio.to_thread(
+                provision_render_repo,
+                client,
+                branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
+                workflow=getattr(settings, "github_workflow", DEFAULT_GITHUB_WORKFLOW) or DEFAULT_GITHUB_WORKFLOW,
+            )
+
             say("Uploading scene to GitHub")
             scene_path = f"jobs/{job_id}.py"
-            await asyncio.to_thread(
-                client.ensure_branch,
-                getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
-            )
             await asyncio.to_thread(
                 client.put_file,
                 scene_path,
@@ -294,6 +426,39 @@ def select_backend(settings: "AppSettings", code: str = "", quality: str = "l") 
     return LocalRenderBackend()
 
 
+def provision_render_repo(
+    client: "GitHubActionsClient",
+    *,
+    branch: str = DEFAULT_GITHUB_BRANCH,
+    workflow: str = DEFAULT_GITHUB_WORKFLOW,
+) -> str:
+    """Make a render repo dispatch-ready (idempotent).
+
+    GitHub only lets the REST API dispatch a workflow that exists on the repo's
+    DEFAULT branch, and the dispatched ``ref`` runs that branch's copy of the
+    file — so install the bundled workflow on BOTH the default branch and the
+    render branch. Without this, dispatch 404s ("workflow not found") on every
+    otherwise-correctly-configured repo — the real reason cloud render reported
+    "unavailable". Returns a short human status.
+    """
+    try:
+        workflow = _workflow_name(workflow)
+        default = client.default_branch()
+        wrote = client.ensure_workflow(workflow=workflow, branch=default)
+        client.ensure_branch(branch)
+        if branch != default:
+            wrote = client.ensure_workflow(workflow=workflow, branch=branch) or wrote
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            raise RuntimeError(
+                "GitHub token lacks the 'workflow' scope required to install the "
+                "render workflow. Use the in-app 'Get token' device login, or a "
+                "token with 'repo' + 'workflow' scope."
+            ) from exc
+        raise
+    return "Render workflow installed." if wrote else "Render workflow already present."
+
+
 def render_timeout_for(code: str, quality: str, settings: "AppSettings") -> int:
     from aetherlab.services.manim_runtime import _estimate_render_cost
 
@@ -359,7 +524,33 @@ def _needs_latex(code: str) -> bool:
 
 
 def _github_token(settings: "AppSettings") -> str:
-    return str(getattr(settings, "github_token", "") or "").strip()
+    token = str(getattr(settings, "github_token", "") or "").strip()
+    if token:
+        return token
+    return _github_cli_token()
+
+
+@lru_cache(maxsize=1)
+def _github_cli_token() -> str:
+    """Return the active GitHub CLI token, if the user already ran gh auth login."""
+    exe = shutil.which("gh")
+    if not exe:
+        return ""
+    try:
+        from aetherlab.core.proc import subprocess_kwargs
+
+        result = subprocess.run(
+            [exe, "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **subprocess_kwargs(),
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
 
 
 def _cloud_unavailable(scene: SceneBundle, reason: str) -> SceneBundle:
@@ -374,6 +565,11 @@ def _mask(text: str) -> str:
     text = re.sub(r"gh[pousr]_[A-Za-z0-9_]{8,}", "gh_***", text)
     text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-***", text)
     return text
+
+
+def _workflow_name(value: str | None) -> str:
+    name = Path(str(value or DEFAULT_GITHUB_WORKFLOW).strip()).name
+    return name or DEFAULT_GITHUB_WORKFLOW
 
 
 @dataclass
@@ -395,7 +591,7 @@ class GitHubActionsClient:
             owner=owner,
             repo=name,
             token=_github_token(settings),
-            workflow=str(getattr(settings, "github_workflow", DEFAULT_GITHUB_WORKFLOW) or DEFAULT_GITHUB_WORKFLOW),
+            workflow=_workflow_name(getattr(settings, "github_workflow", DEFAULT_GITHUB_WORKFLOW)),
             branch=str(getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH) or DEFAULT_GITHUB_BRANCH),
         )
 
@@ -454,6 +650,41 @@ class GitHubActionsClient:
             payload["sha"] = sha
         self._request("PUT", f"/repos/{self.owner}/{self.repo}/contents/{quoted}", payload)
 
+    def default_branch(self) -> str:
+        return str(self._request("GET", f"/repos/{self.owner}/{self.repo}").get("default_branch", "main"))
+
+    def file_content(self, path: str, *, branch: str) -> str | None:
+        """Return the decoded text of a repo file, or None if it does not exist."""
+        quoted = urllib.parse.quote(path)
+        try:
+            info = self._request(
+                "GET",
+                f"/repos/{self.owner}/{self.repo}/contents/{quoted}?ref={urllib.parse.quote(branch)}",
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        raw = info.get("content", "")
+        try:
+            return base64.b64decode(raw).decode("utf-8") if raw else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def ensure_workflow(self, *, workflow: str = DEFAULT_GITHUB_WORKFLOW, branch: str) -> bool:
+        """Install/update ``.github/workflows/<workflow>`` on ``branch`` if its
+        content differs from the bundled workflow. Returns True if it wrote."""
+        workflow = _workflow_name(workflow)
+        path = f".github/workflows/{workflow}"
+        current = self.file_content(path, branch=branch)
+        if current is not None and current.strip() == RENDER_WORKFLOW_YAML.strip():
+            return False
+        self.put_file(
+            path, RENDER_WORKFLOW_YAML, branch=branch,
+            message="AetherLab: install cloud render workflow",
+        )
+        return True
+
     def dispatch(
         self,
         *,
@@ -507,15 +738,15 @@ class GitHubActionsClient:
         return next((a for a in artifacts if a.get("name") == name), None)
 
     def download_artifact_zip(self, artifact_id: int) -> bytes:
-        return self._request(
-            "GET",
-            f"/repos/{self.owner}/{self.repo}/actions/artifacts/{artifact_id}/zip",
-            raw=True,
+        return self._download_redirecting_raw(
+            f"/repos/{self.owner}/{self.repo}/actions/artifacts/{artifact_id}/zip"
         )
 
     def download_run_logs(self, run_id: int) -> str:
         try:
-            data = self._request("GET", f"/repos/{self.owner}/{self.repo}/actions/runs/{run_id}/logs", raw=True)
+            data = self._download_redirecting_raw(
+                f"/repos/{self.owner}/{self.repo}/actions/runs/{run_id}/logs"
+            )
             try:
                 with zipfile.ZipFile(BytesReader(data)) as zf:
                     parts = []
@@ -527,6 +758,36 @@ class GitHubActionsClient:
                 return data.decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001
             return ""
+
+    def _download_redirecting_raw(self, path: str) -> bytes:
+        """Download endpoints that return a short-lived signed storage URL.
+
+        GitHub artifact/log APIs respond with 302. The redirected URL points at
+        object storage and must be fetched without the GitHub Bearer token.
+        """
+        url = self.api_base.rstrip("/") + path
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Authorization", f"Bearer {self.token}")
+        req.add_header("X-GitHub-Api-Version", "2026-03-10")
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(req, timeout=30) as resp:  # noqa: S310
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location")
+            if not location:
+                raise
+        signed = urllib.request.Request(location, method="GET")
+        with urllib.request.urlopen(signed, timeout=120) as resp:  # noqa: S310
+            return resp.read()
 
 
 class CloudRenderManifest:

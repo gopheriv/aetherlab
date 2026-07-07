@@ -1,7 +1,8 @@
 # Manim-Bot Settings Compatibility
 
 AetherLab can reuse the safe, portable environment setting names from
-`manim-bot` without copying `manim-bot/.env` or any secret-bearing files.
+`manim-bot`. During migration it can also read a legacy `.env` as a fallback,
+without mutating your process environment or printing secret values.
 
 Supported aliases:
 
@@ -28,13 +29,19 @@ Precedence remains conservative:
 2. Existing OpenAI-compatible env vars win next.
 3. manim-bot-compatible aliases fill only unset compatible fields.
 4. Saved AetherLab app config fills after env.
-5. Defaults keep the app usable without secrets.
+5. A legacy `.env` fills only still-unset compatible fields.
+6. Defaults keep the app usable without secrets.
 
 Notes:
 
 - `CLOUD_RENDER_ENABLED=true` maps to AetherLab `auto` render mode unless
   `AETHERLAB_RENDER_MODE` is explicitly set.
-- `manim-bot/.env` is intentionally not read by AetherLab. Keep credentials in
-  your shell environment, AetherLab Settings, or a deployment secret store.
+- AetherLab first checks `AETHERLAB_LEGACY_ENV_PATH` / `MANIM_BOT_ENV_PATH`.
+  If unset, it looks for `.env` in this project and then a sibling
+  `../manim-bot/.env`. Set `AETHERLAB_DISABLE_LEGACY_ENV=1` to disable this
+  fallback, which the test harness does by default.
+- GitHub cloud tokens can come from AetherLab Settings, `GITHUB_TOKEN` /
+  `GH_TOKEN`, or an existing `gh auth login` session (`gh auth token`). Tokens
+  are used at runtime only; they are not copied into render job files.
 - Telegram-only settings, Cloudflare D1 settings, and bot admin settings are not
   used by AetherLab.
