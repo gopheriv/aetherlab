@@ -483,6 +483,9 @@ class ManimRuntime:
             frame_count = int(getattr(s, "visual_critic_keyframes", 6) or 6)
             for round_no in range(1, revision_limit + 1):
                 crit = await critique_video(scene_bundle.video_path, board_brief, s, frame_count=frame_count)
+                scene_bundle.quality_score = float(crit.score or 0.0)
+                scene_bundle.critique_verdict = str(crit.verdict or "")
+                scene_bundle.critique_issues = list(crit.issues)
                 if crit.verdict == "skipped":
                     break
                 scene_bundle.diagnostics.append(

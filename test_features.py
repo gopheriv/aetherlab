@@ -2820,6 +2820,144 @@ def t_f159():
     return "precision-instrument graphic redesign hooks + notes (F159)"
 
 
+def t_f160():
+    # Phase 1: persist visual quality metadata and opt into cache rejection for
+    # stale/mediocre renders without changing default reuse behavior.
+    from dataclasses import replace
+    from aetherlab.core.cache import SessionCache
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.pipeline import AetherLabPipeline
+    from aetherlab.services.scene_critic import Critique
+    import aetherlab.services.scene_critic as critic_mod
+
+    scene = SceneBundle(
+        class_name="S",
+        code="from manim import *\nclass S(Scene):\n    def construct(self): pass\n",
+        engine="manim-community",
+        status="rendered",
+        video_path="v.mp4",
+        quality_score=8.25,
+        critique_verdict="ship",
+        critique_issues=["readable", "well paced"],
+    )
+    restored = SceneBundle.from_json(scene.to_json(), cached=True)
+    assert restored.cached and restored.quality_score == 8.25
+    assert restored.critique_verdict == "ship" and restored.critique_issues == ["readable", "well paced"]
+    legacy = SceneBundle.from_json({})
+    assert legacy.quality_score == 0.0 and legacy.critique_verdict == "" and legacy.critique_issues == []
+
+    cache = SessionCache(_TMP / "quality-cache.sqlite3")
+    req = ProblemRequest(prompt="quality cached scene")
+    key = cache.ensure_request(req)
+    cache.store_scene(key, scene)
+    assert cache.get(key).scene.quality_score == 8.25
+
+    video = _TMP / "cached.mp4"
+    video.write_bytes(b"fake mp4 marker")
+
+    class _LLM:
+        async def solve(self, _request):
+            return _solver(model_name="deterministic-fallback")
+
+    class _Rag:
+        async def search(self, _keywords):
+            return RagResult(keywords=["quality"], hits=[], backend="test")
+
+    class _Manim:
+        def __init__(self):
+            self.generated = 0
+
+        def detect_engine(self):
+            return "manim-community", ""
+
+        async def generate_scene_async(self, _request, _solver_result, _rag_result, _settings):
+            self.generated += 1
+            return SceneBundle(
+                class_name="Fresh",
+                code="fresh",
+                engine="manim-community",
+                status="rendered",
+                video_path=str(video),
+                quality_score=9.0,
+                critique_verdict="ship",
+            )
+
+        async def render_scene_with_repair(self, *_args, **_kwargs):
+            raise AssertionError("render should be skipped for rendered scene with existing video")
+
+    async def _no_ingest():
+        return None
+
+    low = SceneBundle(
+        class_name="Old",
+        code="old",
+        engine="manim-community",
+        status="rendered",
+        video_path=str(video),
+        quality_score=3.0,
+    )
+    strict_settings = replace(_settings(), cache_path=_TMP / "strict-cache.sqlite3", min_quality_score=7.0)
+    p = AetherLabPipeline(strict_settings)
+    p.cache = SessionCache(strict_settings.cache_path)
+    p.llm = _LLM()
+    p.rag = _Rag()
+    p.manim = _Manim()
+    p._ensure_ingested = _no_ingest
+    p.cache.ensure_request(req)
+    p.cache.store_solver(key, _solver(model_name="deterministic-fallback"))
+    p.cache.store_rag(key, RagResult(keywords=["quality"], hits=[], backend="test"))
+    p.cache.store_scene(key, low)
+    result = asyncio.run(p.run(req))
+    assert p.manim.generated == 1 and result.scene.class_name == "Fresh"
+
+    default_settings = replace(_settings(), cache_path=_TMP / "default-quality-cache.sqlite3", min_quality_score=0.0)
+    p2 = AetherLabPipeline(default_settings)
+    p2.cache = SessionCache(default_settings.cache_path)
+    p2.llm = _LLM()
+    p2.rag = _Rag()
+    p2.manim = _Manim()
+    p2._ensure_ingested = _no_ingest
+    key2 = p2.cache.ensure_request(req)
+    p2.cache.store_solver(key2, _solver(model_name="deterministic-fallback"))
+    p2.cache.store_rag(key2, RagResult(keywords=["quality"], hits=[], backend="test"))
+    p2.cache.store_scene(key2, low)
+    result2 = asyncio.run(p2.run(req))
+    assert p2.manim.generated == 0 and result2.scene.class_name == "Old"
+
+    rt_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        visual_critic_max_passes=1,
+    )
+    rt = ManimRuntime(rt_settings)
+    render_video = _TMP / "critic.mp4"
+    render_video.write_bytes(b"fake")
+
+    async def fake_render_once(bundle, _settings_arg, _quality, _progress=None):
+        bundle.status = "rendered"
+        bundle.video_path = str(render_video)
+        return bundle
+
+    async def fake_critique(*_args, **_kwargs):
+        return Critique(verdict="ship", score=8.4, issues=["text readable"], strengths=["clear focus"])
+
+    old_critique = critic_mod.critique_video
+    critic_mod.critique_video = fake_critique
+    rt._render_once = fake_render_once
+    try:
+        rendered = asyncio.run(rt.render_scene_with_repair(
+            SceneBundle(class_name="S", code="code", engine="manim-community", status="compiled"),
+            rt_settings,
+        ))
+    finally:
+        critic_mod.critique_video = old_critique
+    assert rendered.quality_score == 8.4
+    assert rendered.critique_verdict == "ship" and rendered.critique_issues == ["text readable"]
+    return "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 
@@ -2837,7 +2975,9 @@ def main() -> int:
     print(f"RESULT: {passed}/{len(results)} passed; {len(failed)} failed")
     if failed:
         print("FAILURES: " + ", ".join(sorted(failed, key=lambda x: int(x[1:]))))
-    Path("feature_test_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    Path("feature_test_results.json").write_text(
+        json.dumps(results, indent=2), encoding="utf-8", newline="\n"
+    )
     print("Wrote feature_test_results.json")
     return 0
 

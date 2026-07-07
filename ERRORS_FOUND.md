@@ -1,8 +1,8 @@
 # AetherLab — Phase 2 Error Log
 
-Testing method: `test_features.py` exercises all 159 catalogued features
+Testing method: `test_features.py` exercises all 160 catalogued features
 (headless logic, offscreen-Qt widget construction, and source assertions).
-**Automated result: 159/159 pass at the behavioural/happy-path level.**
+**Automated result: 160/160 pass at the behavioural/happy-path level.**
 
 Green happy-path tests do not prove the absence of defects, so this log records
 the logistical/UX errors found by close code review of paths the happy-path
@@ -52,6 +52,16 @@ covered by regression assertions in `test_features.py`.
 | BUG-13 | Security / sandbox escape | F103 Scene code safety gate | `services/code_safety.py` | The safety gate blocked direct `open`, `eval`, and direct dunder attributes, but accepted string-based escape helpers such as `getattr(__builtins__, 'open')`, `getattr(type, '__subclasses__')`, and `().__getattribute__('__class__')`. Generated Manim code runs in a real Python subprocess, so this was an arbitrary file/host access bypass if an LLM produced adversarial code. Fixed by banning dynamic runtime-introspection helpers, `__builtins__`, `type`, more dunder attributes, and string-literal references to banned runtime handles. |
 | BUG-14 | Retrieval correctness / stale data | F43 Library ingestion | `services/ingestion.py` | Incremental Chroma ingestion upserted changed files but never deleted old chunks for the same source path. If a file shrank or a PDF extraction changed, orphan chunks remained in the vector store and could keep appearing in RAG results forever, contradicting the current library contents. Fixed by deleting chunks with matching `path` metadata before re-upserting a changed file. |
 | BUG-15 | Cloud render race / wrong artifact | F154 Cloud render | `services/render_backend.py` | GitHub `workflow_dispatch` usually returns no run id, so AetherLab polls branch runs by `job_id`. If no matching run had appeared yet, `get_run` returned the newest run on the branch (`runs[0]`). Under concurrent or recent renders this could attach to another job, download the wrong artifact, or report the wrong failure. Fixed so unmatched polls return queued until a run whose name/title contains this exact `job_id` appears. |
+
+## Fifth review pass (quality-score cache foundation)
+
+Found while reproducing Phase 1 of the quality leap: a scored visual critique
+could influence the current repair/revision loop, but the score disappeared
+before cache reuse decisions. Fixed and covered by F160.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-16 | Quality / cache correctness | F160 Persisted scene quality score | `services/manim_runtime.py`, `core/models.py`, `services/pipeline.py`, `services/lesson_pipeline.py` | `scene_critic.critique_video()` returned a score/verdict/issues, but `SceneBundle` did not store them and the solve/lesson caches reused any rendered scene that matched engine/status. A mediocre or failed-quality render could be pinned forever once its MP4 existed. Fixed by adding persisted `quality_score`, `critique_verdict`, and `critique_issues`; copying the existing critic result into the rendered bundle; and adding opt-in `min_quality_score` cache rejection while default `0.0` preserves legacy reuse. |
 
 ## Notes on non-issues considered and dismissed
 - `SimulationPanel.show_loading` is defined but unused — the shell drives the

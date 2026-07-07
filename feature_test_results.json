@@ -634,5 +634,9 @@
   "F159": {
     "status": "PASS",
     "note": "precision-instrument graphic redesign hooks + notes (F159)"
+  },
+  "F160": {
+    "status": "PASS",
+    "note": "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
   }
 }

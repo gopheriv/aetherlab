@@ -136,6 +136,12 @@ class SceneBundle:
     # When narration is added, video_path points at the narrated mp4 and this
     # keeps the original silent render as a fallback. Old cache rows load as "".
     silent_video_path: str = ""
+    # Persisted perceptual-quality metadata from services/scene_critic.py.
+    # Old cache rows load as 0/"", preserving today's reuse behavior unless a
+    # nonzero min_quality_score setting opts into cache rejection.
+    quality_score: float = 0.0
+    critique_verdict: str = ""
+    critique_issues: list[str] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -155,6 +161,10 @@ class SceneBundle:
             cached=cached,
             video_path=str(payload.get("video_path", "")),
             storyboard=storyboard if isinstance(storyboard, dict) else None,
+            quality_score=float(payload.get("quality_score", 0.0) or 0.0),
+            critique_verdict=str(payload.get("critique_verdict", "")),
+            critique_issues=[str(i) for i in payload.get("critique_issues", [])]
+            if isinstance(payload.get("critique_issues"), list) else [],
         )
 
 

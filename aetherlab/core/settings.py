@@ -54,6 +54,7 @@ class AppSettings:
     cloud_render_timeout: int = 1800
     visual_critic_max_passes: int = 2
     visual_critic_keyframes: int = 6
+    min_quality_score: float = 0.0
     provider_source: str = "environment"
 
 
@@ -199,6 +200,11 @@ def load_settings() -> AppSettings:
             os.getenv("VISUAL_CRITIC_KEYFRAMES"),
             app_cfg.get("visual_critic_keyframes"),
             default=6,
+        ),
+        min_quality_score=_as_float(
+            os.getenv("AETHERLAB_MIN_QUALITY_SCORE"),
+            app_cfg.get("min_quality_score"),
+            default=0.0,
         ),
         provider_source=source,
     )

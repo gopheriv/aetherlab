@@ -200,7 +200,7 @@ class LessonPipeline:
         key = _chapter_key(ch, plan)
         if not regenerate:
             cached = cache.get(key)
-            if cached is not None:
+            if cached is not None and _scene_cache_usable(cached, self.settings):
                 return cached
 
         solver = _chapter_solver(ch, plan)
@@ -354,10 +354,18 @@ def _chapter_solver(ch: LessonChapter, plan: LessonPlan) -> SolverResult:
     )
 
 
+def _scene_cache_usable(scene: SceneBundle, settings: "AppSettings") -> bool:
+    min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
+    if min_score <= 0:
+        return True
+    return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
+
+
 _DOMAIN_VARS: dict[str, dict[str, float]] = {
     "oscillator": {"damping": 0.15, "stiffness": 1.0, "mass": 1.0},
     "pendulum": {"gravity": 9.81, "length": 1.0},
     "orbit": {"eccentricity": 0.5, "semi_major": 1.0},
+    "em_field": {"separation": 2.2},
     "wave": {"frequency": 2.0, "wave_speed": 1.0},
 }
 

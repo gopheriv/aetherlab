@@ -705,6 +705,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a student, AetherLab feels like a calm, legible physics instrument rather than a generic dark app.",
      "The active QSS tightens the shell around 8px radii, bright-cyan primary focus, true-black stage/code surfaces, styled tabs/radio/progress controls, setup/library dashed states, scene toolbar, and canvas export button. Theme defaults now align QPainter/Manim palette with #22D3EE. Key widgets expose stable object names (AnalysisCard, SceneToolbar, SetupStrip, RunningStatusStrip, LibraryEmptyState, CanvasExportButton), and docs/UI_GRAPHIC_REDESIGN.md maps the brief to Qt implementation hooks.",
      "ui/style.py / ui/theme.py / ui/widgets.py / ui/live_canvas.py / docs/UI_GRAPHIC_REDESIGN.md", "gui", "Documented", ""),
+    ("F160", "Quality", "Persisted scene quality score and cache threshold",
+     "As a user, once AetherLab has judged a render's visual quality, that score follows the scene through cache reuse and can opt into regenerating low-quality cached cuts.",
+     "SceneBundle stores quality_score, critique_verdict, and critique_issues. ManimRuntime.render_scene_with_repair copies the existing visual critic's score/verdict/issues onto the rendered SceneBundle. AppSettings.min_quality_score defaults to 0.0 (today's behavior); when set above zero, AetherLabPipeline and lesson chapter cache reuse reject cached scenes below the threshold and regenerate them instead.",
+     "core/models.py / core/settings.py / services/manim_runtime.py / services/pipeline.py / services/lesson_pipeline.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -720,7 +724,7 @@ CSV_PATH = ROOT / "AetherLab_Feature_Tracker.csv"
 
 def write_csv() -> None:
     with CSV_PATH.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
+        writer = csv.writer(fh, lineterminator="\n")
         writer.writerow(HEADERS)
         writer.writerows(FEATURES)
 
@@ -823,6 +827,7 @@ DEFECTS: dict[str, str] = {
     "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
     "F154": "BUG-15: cloud polling could attach to the newest unrelated workflow run before this job_id appeared; unmatched polls now stay queued.",
+    "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
 }
 
 

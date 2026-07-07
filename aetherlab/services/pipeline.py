@@ -42,7 +42,7 @@ class AetherLabPipeline:
 
         manim = self.manim
         current_engine, _ = manim.detect_engine()
-        scene = cached.scene if cached and cached.scene else None
+        scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
         if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
             scene = await manim.generate_scene_async(request, solver, rag, self.settings)
             self.cache.store_scene(key, scene)
@@ -94,6 +94,12 @@ class AetherLabPipeline:
         if solver.model_name not in {"deterministic-fallback", self.settings.llm_model}:
             return False
         return True
+
+    def _scene_cache_usable(self, scene) -> bool:
+        min_score = float(getattr(self.settings, "min_quality_score", 0.0) or 0.0)
+        if min_score <= 0:
+            return True
+        return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
 
 
 def _video_exists(video_path: str) -> bool:
