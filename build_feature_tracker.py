@@ -725,6 +725,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a maintainer, when the app gains a visible control, CLI flag, or user-configurable setting, the canonical tracker must name it and keep its expected behavior testable.",
      "tools/feature_surface_audit.py parses aetherlab/**/*.py for argparse --flags, AppSettings fields, QPushButton/QCheckBox labels, menu actions, and combo items, then checks each non-generic surface against AetherLab_Feature_Tracker.csv. `python tools/feature_surface_audit.py --check` exits non-zero on uncovered surfaces; --json emits the matched feature IDs. This turns 'every single feature is tracked' into a repeatable audit gate.",
      "tools/feature_surface_audit.py / AetherLab_Feature_Tracker.csv", "headless", "Documented", ""),
+    ("F165", "Quality", "Canonical tracker artifact integrity audit",
+     "As a maintainer, the generated spreadsheet, CSV, feature-test results, test functions, and defect ledger must agree before I trust the audit status.",
+     "tools/tracker_integrity_audit.py imports build_feature_tracker.py, applies feature_test_results.json, and verifies the CSV and XLSX match the generator exactly; feature IDs are unique/contiguous; every row has a user story and expected behavior; statuses/test methods are valid; feature_test_results.json and t_fXX definitions exactly match tracker IDs; DEFECTS entries point to known features marked FIXED; and all DEFECTS bug IDs are documented in ERRORS_FOUND.md. `python tools/tracker_integrity_audit.py --check` exits non-zero on drift.",
+     "tools/tracker_integrity_audit.py / build_feature_tracker.py / feature_test_results.json / ERRORS_FOUND.md", "headless", "Documented", ""),
 ]
 # fmt: on
 

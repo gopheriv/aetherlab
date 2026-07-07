@@ -3388,6 +3388,20 @@ def t_f164():
     )
 
 
+def t_f165():
+    from tools.tracker_integrity_audit import audit
+
+    report = audit(allow_pending_result="F165")
+    assert report["feature_count"] >= 165, report
+    assert report["result_count"] >= report["feature_count"] - 1, report
+    assert report["test_count"] == report["feature_count"], report
+    assert report["ok"], report["issues"]
+    return (
+        f"tracker integrity: {report['feature_count']} features/"
+        f"{report['result_count']} results/{report['test_count']} tests aligned (F165)"
+    )
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 
