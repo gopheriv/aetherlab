@@ -28,7 +28,6 @@ import logging
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -466,14 +465,11 @@ class LiveCanvas(QtWidgets.QWidget):
 
         # Hover-revealed PNG export button (ghost style per the design system)
         self._export_btn = QtWidgets.QToolButton(self)
+        self._export_btn.setObjectName("CanvasExportButton")
         self._export_btn.setIcon(icons.icon("camera", 15, CANVAS_PALETTE["text_mid"]))
         self._export_btn.setToolTip("Export canvas as PNG (2×)")
         self._export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._export_btn.setFixedSize(30, 30)
-        self._export_btn.setStyleSheet(
-            "QToolButton { background: transparent; border: none; border-radius: 6px; }"
-            "QToolButton:hover { background: rgba(148, 163, 184, 0.12); }"
-        )
         self._export_btn.clicked.connect(self.save_png)
         self._export_btn.hide()
 

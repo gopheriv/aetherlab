@@ -144,6 +144,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             rendered_scene = await manim.render_scene_with_repair(
                 scene, self.settings, quality=self.render_quality,
                 brief=self.request.prompt,
+                progress=lambda msg: self.status.emit(str(msg)),
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
@@ -200,19 +201,32 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
 
 
 class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
-    """Runs the topic-explainer LessonPipeline off the UI thread."""
+    """Runs the topic-explainer LessonPipeline off the UI thread.
+
+    Cancellable (like the Solve path): ``cancel()`` sets a threading Event the
+    pipeline polls between chapters, so a long lesson stops promptly and returns
+    whatever rendered so far. ``regenerate`` bypasses the plan + chapter caches.
+    """
 
     progress = QtCore.pyqtSignal(str, int, int)   # message, done, total
     lesson_ready = QtCore.pyqtSignal(object)       # LessonBundle
     failure = QtCore.pyqtSignal(object)            # PipelineError
 
     def __init__(self, topic: str, settings: AppSettings, *,
-                 audience: str = "undergrad", quality: str = "l") -> None:
+                 audience: str = "undergrad", quality: str = "l",
+                 regenerate: bool = False) -> None:
         super().__init__()
         self.topic = topic
         self.settings = settings
         self.audience = audience
         self.quality = quality
+        self.regenerate = regenerate
+        import threading
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cancellation; the pipeline stops after the current chapter."""
+        self._cancel.set()
 
     def run(self) -> None:
         try:
@@ -224,6 +238,8 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
                     self.topic,
                     audience=self.audience,
                     quality=self.quality,
+                    regenerate=self.regenerate,
+                    cancel_check=self._cancel.is_set,
                     progress=lambda m, d, t: self.progress.emit(m, d, t),
                 )
             )

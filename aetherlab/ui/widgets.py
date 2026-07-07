@@ -72,13 +72,13 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         # Concentric rings
         for i, radius in enumerate([40, 80, 120, 160, 200]):
             opacity = max(0.08, 0.25 - i * 0.04)
-            color = QtGui.QColor("#06B6D4")
+            color = QtGui.QColor("#22D3EE")
             color.setAlphaF(opacity)
             painter.setPen(QtGui.QPen(color, 1))
             painter.drawEllipse(QtCore.QPoint(cx, cy), radius, radius)
 
         # Primary rotating arc
-        arc_pen = QtGui.QPen(QtGui.QColor("#06B6D4"), 3)
+        arc_pen = QtGui.QPen(QtGui.QColor("#22D3EE"), 3)
         arc_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen)
         painter.drawArc(cx - 35, cy - 35, 70, 70, int(self._angle * 16), 100 * 16)
@@ -91,7 +91,7 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Orbiting dots
         for radius, speed, color_hex, dot_r in [
-            (80, 1.0, "#06B6D4", 4),
+            (80, 1.0, "#22D3EE", 4),
             (120, -0.7, "#10B981", 3),
             (160, 0.5, "#8B5CF6", 3),
         ]:
@@ -104,10 +104,10 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Center dot with glow
         glow = QtGui.QRadialGradient(float(cx), float(cy), 16)
-        glow.setColorAt(0, QtGui.QColor("#06B6D440"))
+        glow.setColorAt(0, QtGui.QColor("#22D3EE40"))
         glow.setColorAt(1, QtGui.QColor("#00000000"))
         painter.fillRect(cx - 16, cy - 16, 32, 32, glow)
-        painter.setBrush(QtGui.QColor("#06B6D4"))
+        painter.setBrush(QtGui.QColor("#22D3EE"))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(QtCore.QPoint(cx, cy), 5, 5)
 
@@ -250,7 +250,7 @@ class PipelineStepper(QtWidgets.QWidget):
 
     _COLORS = {
         "pending": "#64748B",
-        "active": "#06B6D4",
+        "active": "#22D3EE",
         "complete": "#10B981",
         "error": "#F43F5E",
     }
@@ -376,7 +376,7 @@ class PipelineStepper(QtWidgets.QWidget):
             painter.setBrush(
                 QtGui.QColor(self._COLORS["complete"])
                 if status == "complete"
-                else QtGui.QColor("#0D0D14")
+                else QtGui.QColor("#000000" if status == "active" else "#0D0D14")
             )
             painter.drawEllipse(center, r, r)
 
@@ -862,9 +862,9 @@ class ParameterDock(QtWidgets.QWidget):
             spinbox.setFixedWidth(90)
             spinbox.setStyleSheet(
                 "QDoubleSpinBox { background-color: #0F0F17; border: 1px solid #1E293B; "
-                "border-radius: 4px; color: #06B6D4; padding: 2px 4px; "
+                "border-radius: 4px; color: #22D3EE; padding: 2px 4px; "
                 "font-family: 'Cascadia Code', monospace; font-size: 11px; }"
-                "QDoubleSpinBox:focus { border-color: #06B6D4; }"
+                "QDoubleSpinBox:focus { border-color: #22D3EE; }"
             )
             spinbox.valueChanged.connect(
                 lambda val, key=name: self._on_spinbox_change(key, val)
@@ -1001,7 +1001,7 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         step_num = QtWidgets.QLabel(f"Step {index}")
         step_num.setStyleSheet(
-            "color: #06B6D4; font-size: 11px; font-weight: 700; "
+            "color: #22D3EE; font-size: 11px; font-weight: 700; "
             "font-family: 'Cascadia Code', monospace;"
         )
         header_layout.addWidget(step_num)
@@ -1042,7 +1042,7 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         self._body.setVisible(self._expanded)
         self._arrow.setText("\u25bc" if self._expanded else "\u25b6")
         self._arrow.setStyleSheet(
-            f"color: {'#06B6D4' if self._expanded else '#475569'}; font-size: 10px;"
+            f"color: {'#22D3EE' if self._expanded else '#475569'}; font-size: 10px;"
         )
 
 
@@ -1074,7 +1074,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         layout.setSpacing(12)
 
         card = QtWidgets.QFrame()
-        card.setObjectName("CardFrame")
+        card.setObjectName("AnalysisCard")
         card_layout = QtWidgets.QVBoxLayout(card)
         card_layout.setContentsMargins(20, 20, 20, 16)
         card_layout.setSpacing(14)
@@ -1271,7 +1271,7 @@ class _RagHitCard(QtWidgets.QFrame):
 
         # Web references get a globe + violet accent; library keeps the book/cyan.
         icon_name = "globe" if is_web else "book-open"
-        icon_color = "#8B5CF6" if is_web else "#06B6D4"
+        icon_color = "#8B5CF6" if is_web else "#22D3EE"
         h_layout.addWidget(icons.icon_label(icon_name, 14, icon_color))
 
         src_label = QtWidgets.QLabel(source)
@@ -1427,6 +1427,7 @@ class SimulationPanel(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._frame_step_ms = 33
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -1478,8 +1479,8 @@ class SimulationPanel(QtWidgets.QWidget):
 
         # Top bar with pill tabs for view switching + phase portrait toggle
         top_bar = QtWidgets.QWidget()
+        top_bar.setObjectName("SceneToolbar")
         top_bar.setFixedHeight(48)
-        top_bar.setStyleSheet("background-color: #0D0D14; border-bottom: 1px solid #1E293B;")
         top_layout = QtWidgets.QHBoxLayout(top_bar)
         top_layout.setContentsMargins(16, 6, 16, 6)
         top_layout.setSpacing(8)
@@ -1505,7 +1506,7 @@ class SimulationPanel(QtWidgets.QWidget):
             "QCheckBox { color: #94A3B8; font-size: 11px; font-weight: 600; spacing: 6px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px;"
             "  border: 1px solid #334155; background: #13131A; }"
-            "QCheckBox::indicator:checked { background: #06B6D4; border-color: #06B6D4; }"
+            "QCheckBox::indicator:checked { background: #22D3EE; border-color: #22D3EE; }"
         )
         self._phase_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._phase_check.setToolTip("Toggle phase portrait overlay")
@@ -1578,8 +1579,9 @@ class SimulationPanel(QtWidgets.QWidget):
         chips_layout.setSpacing(6)
         self._engine_chip = _Pill("engine", "#64748B")
         self._status_chip = _Pill("status", "#64748B")
+        self._backend_chip = _Pill("local", "#64748B")
         self._duration_chip = _Pill("duration", "#64748B")
-        for chip in (self._engine_chip, self._status_chip, self._duration_chip):
+        for chip in (self._engine_chip, self._status_chip, self._backend_chip, self._duration_chip):
             chip.hide()
             chips_layout.addWidget(chip)
         chips_layout.addStretch()
@@ -1625,7 +1627,8 @@ class SimulationPanel(QtWidgets.QWidget):
 
         # Screening room: true-black letterbox stage (design v2 §6)
         stage = QtWidgets.QWidget()
-        stage.setStyleSheet("background-color: #000000; border-radius: 8px;")
+        stage.setObjectName("VideoStage")
+        stage.setStyleSheet("QWidget#VideoStage { background-color: #000000; border-radius: 8px; }")
         stage_layout = QtWidgets.QGridLayout(stage)
         stage_layout.setContentsMargins(0, 0, 0, 0)
         self._video_widget = QVideoWidget()
@@ -1746,9 +1749,8 @@ class SimulationPanel(QtWidgets.QWidget):
         self._seek_slider.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
 
-        # Frame stepping: assume ~30fps, step by ~33ms (#14)
-        self._prev_frame_btn.clicked.connect(lambda: self._step_frame(-33))
-        self._next_frame_btn.clicked.connect(lambda: self._step_frame(33))
+        self._prev_frame_btn.clicked.connect(lambda: self._step_frame(-self._frame_step_ms))
+        self._next_frame_btn.clicked.connect(lambda: self._step_frame(self._frame_step_ms))
 
         self._play_btn.clicked.connect(self._player.play)
         self._pause_btn.clicked.connect(self._player.pause)
@@ -1785,7 +1787,7 @@ class SimulationPanel(QtWidgets.QWidget):
         self._seeking = False
 
     def _step_frame(self, delta_ms: int) -> None:
-        """Step forward/backward by ~1 frame (33ms at 30fps) (#14)."""
+        """Step forward/backward by one decoded frame."""
         self._player.pause()
         new_pos = max(0, self._player.position() + delta_ms)
         self._player.setPosition(new_pos)
@@ -1859,6 +1861,16 @@ class SimulationPanel(QtWidgets.QWidget):
         self._engine_chip.show()
         self._status_chip.setText(scene.status)
         self._status_chip.show()
+        if any("Rendered via GitHub Actions" in d or "Cloud render cache hit" in d for d in scene.diagnostics):
+            self._backend_chip.setText("Cloud")
+            self._backend_chip.setStyleSheet("background: rgba(14,165,233,0.18); color: #38BDF8; border-radius: 8px; padding: 2px 8px;")
+        elif any("Cloud render unavailable; rendered locally." in d for d in scene.diagnostics):
+            self._backend_chip.setText("Local fallback")
+            self._backend_chip.setStyleSheet("background: rgba(245,158,11,0.18); color: #F59E0B; border-radius: 8px; padding: 2px 8px;")
+        else:
+            self._backend_chip.setText("Local")
+            self._backend_chip.setStyleSheet("background: rgba(100,116,139,0.18); color: #94A3B8; border-radius: 8px; padding: 2px 8px;")
+        self._backend_chip.show()
         if meta["duration"]:
             self._duration_chip.setText(meta["duration"])
             self._duration_chip.show()
@@ -1899,10 +1911,10 @@ class SimulationPanel(QtWidgets.QWidget):
 
     def set_video(self, scene: SceneBundle) -> None:
         from PyQt6.QtCore import QUrl
-        from PyQt6.QtMultimedia import QMediaPlayer
 
         if scene.video_path and Path(scene.video_path).exists():
             self._stack.setCurrentIndex(2)
+            self._frame_step_ms = _frame_step_ms_for_video(Path(scene.video_path))
             self._player.setSource(QUrl.fromLocalFile(scene.video_path))
             # Play when media is loaded (async loading)
             try:
@@ -1910,7 +1922,7 @@ class SimulationPanel(QtWidgets.QWidget):
             except (TypeError, RuntimeError):
                 pass
             self._player.mediaStatusChanged.connect(self._auto_play)
-            self.status.setText(f"\U0001f3ac Loading: {Path(scene.video_path).name}")
+            self.status.setText(f"Loading: {Path(scene.video_path).name}")
             self.status.setObjectName("StatusReady")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
@@ -1946,7 +1958,7 @@ class SimulationPanel(QtWidgets.QWidget):
                 self._player.mediaStatusChanged.disconnect(self._auto_play)
             except (TypeError, RuntimeError):
                 pass
-            self.status.setText(f"\U0001f3ac Playing")
+            self.status.setText("Playing")
 
     def apply_parameter_update(self, name: str, value: float) -> None:
         self.status.setText(f"Parameter: {name} = {value:g}")
@@ -2004,7 +2016,7 @@ class TitleBar(QtWidgets.QWidget):
         layout.setContentsMargins(16, 0, 10, 0)
         layout.setSpacing(10)
 
-        layout.addWidget(icons.icon_label("atom", 16, "#06B6D4"))
+        layout.addWidget(icons.icon_label("atom", 16, "#22D3EE"))
 
         wordmark = QtWidgets.QLabel("AetherLab")
         wordmark.setObjectName("TitleWordmark")
@@ -2034,7 +2046,7 @@ class Toast(QtWidgets.QFrame):
         "error": ("#F43F5E", "rgba(244, 63, 94, 0.10)", "alert-triangle"),
         "warning": ("#F59E0B", "rgba(245, 158, 11, 0.10)", "alert-circle"),
         "success": ("#10B981", "rgba(16, 185, 129, 0.10)", "check-circle"),
-        "info": ("#06B6D4", "rgba(6, 182, 212, 0.10)", "info"),
+        "info": ("#22D3EE", "rgba(34, 211, 238, 0.10)", "info"),
     }
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -2157,9 +2169,10 @@ class EmptyStateView(QtWidgets.QWidget):
 
         # Setup status strip (dashed border, API key / library CTAs)
         self._setup_strip = QtWidgets.QFrame()
+        self._setup_strip.setObjectName("SetupStrip")
         self._setup_strip.setStyleSheet(
-            "QFrame { background-color: #0D0D14; border: 1px dashed #334155; "
-            "border-radius: 12px; }"
+            "QFrame#SetupStrip { background-color: #0D0D14; border: 1px dashed #334155; "
+            "border-radius: 8px; }"
             "QLabel, QPushButton { border: none; background: transparent; }"
         )
         strip_layout = QtWidgets.QHBoxLayout(self._setup_strip)
@@ -2172,7 +2185,7 @@ class EmptyStateView(QtWidgets.QWidget):
         self._key_label.setStyleSheet("color: #94A3B8; font-size: 12.5px;")
         strip_layout.addWidget(self._key_label)
         key_btn = QtWidgets.QPushButton("Open Settings")
-        key_btn.setStyleSheet("color: #06B6D4; font-size: 12.5px; font-weight: 600;")
+        key_btn.setStyleSheet("color: #22D3EE; font-size: 12.5px; font-weight: 600;")
         key_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         key_btn.clicked.connect(self.settings_requested.emit)
         strip_layout.addWidget(key_btn)
@@ -2197,7 +2210,7 @@ class EmptyStateView(QtWidgets.QWidget):
         self._lib_label.setStyleSheet("color: #94A3B8; font-size: 12.5px;")
         strip_layout.addWidget(self._lib_label)
         lib_btn = QtWidgets.QPushButton("Add textbooks")
-        lib_btn.setStyleSheet("color: #06B6D4; font-size: 12.5px; font-weight: 600;")
+        lib_btn.setStyleSheet("color: #22D3EE; font-size: 12.5px; font-weight: 600;")
         lib_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         lib_btn.clicked.connect(self.library_requested.emit)
         strip_layout.addWidget(lib_btn)
@@ -2267,7 +2280,7 @@ class RunningView(QtWidgets.QWidget):
         layout.addWidget(self._overlay, 1)
 
         strip = QtWidgets.QWidget()
-        strip.setStyleSheet("background-color: #0A0A0F;")
+        strip.setObjectName("RunningStatusStrip")
         strip_layout = QtWidgets.QVBoxLayout(strip)
         strip_layout.setContentsMargins(20, 8, 20, 24)
         strip_layout.setSpacing(4)
@@ -2517,7 +2530,7 @@ class LibraryPanel(QtWidgets.QWidget):
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setStyleSheet(
             "QProgressBar { background-color: #1E293B; border: none; border-radius: 3px; }"
-            "QProgressBar::chunk { background-color: #06B6D4; border-radius: 3px; }"
+            "QProgressBar::chunk { background-color: #22D3EE; border-radius: 3px; }"
         )
         strip_layout.addWidget(self._progress_bar, 2)
 
@@ -2547,8 +2560,9 @@ class LibraryPanel(QtWidgets.QWidget):
 
         # Empty state (design: ReferenceEmptyState — dashed border + actions)
         self._empty = QtWidgets.QFrame()
+        self._empty.setObjectName("LibraryEmptyState")
         self._empty.setStyleSheet(
-            "QFrame { border: 1px dashed #334155; border-radius: 12px; }"
+            "QFrame#LibraryEmptyState { background-color: #0D0D14; border: 1px dashed #334155; border-radius: 8px; }"
             "QLabel, QPushButton { border: none; }"
         )
         empty_layout = QtWidgets.QVBoxLayout(self._empty)
@@ -2898,6 +2912,21 @@ def parse_scene_meta(scene: "SceneBundle") -> dict:
             duration = f"~{m.group(1)}s"
     return {"repaired": repaired, "revised": revised,
             "critique": critique, "duration": duration}
+
+
+def _frame_step_ms_for_video(path: Path) -> int:
+    """Best-effort one-frame seek step from the video's encoded frame rate."""
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0] if container.streams.video else None
+            rate = float(stream.average_rate) if stream and stream.average_rate else 0.0
+            if rate > 0:
+                return max(1, int(round(1000.0 / rate)))
+    except Exception:  # noqa: BLE001
+        pass
+    return 33
 
 
 def _storyboard_acts(storyboard: dict | None) -> list[dict]:
@@ -3477,6 +3506,7 @@ class LessonView(QtWidgets.QWidget):
 
     chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
     export_requested = QtCore.pyqtSignal()
+    regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3494,6 +3524,13 @@ class LessonView(QtWidgets.QWidget):
         self._audience = QtWidgets.QLabel("")
         self._audience.setStyleSheet("color: #64748B; font-size: 11px;")
         header.addWidget(self._audience)
+        regen_btn = QtWidgets.QPushButton("Regenerate")
+        regen_btn.setObjectName("SecondaryButton")
+        regen_btn.setIcon(icons.icon("refresh-cw", 13, "#94A3B8"))
+        regen_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        regen_btn.setToolTip("Rebuild this lesson from scratch (ignore cached plan and clips)")
+        regen_btn.clicked.connect(self.regenerate_requested.emit)
+        header.addWidget(regen_btn)
         export_btn = QtWidgets.QPushButton("Export study guide")
         export_btn.setObjectName("SecondaryButton")
         export_btn.setIcon(icons.icon("download", 13, "#94A3B8"))
@@ -3614,19 +3651,53 @@ class LessonView(QtWidgets.QWidget):
         self._outline.clear()
         transcript_html: list[str] = []
         self._chapter_offsets = []
-        t = 0.0
+        # True per-chapter start times in the assembled video (account for the
+        # intro/chapter title cards + crossfades). These align with the RENDERED
+        # chapters, so walk plan.chapters with a separate rendered index; a
+        # non-rendered chapter (e.g. 'interactive') has no clip and stays at the
+        # running position. Empty offsets (old cache / plain concat) fall back to
+        # a running sum of clip durations.
+        offsets = list(getattr(bundle, "chapter_offsets", []) or [])
         durations = _bundle_chapter_durations(bundle)
+        rendered_indexes = list(getattr(bundle, "rendered_chapter_indexes", []) or [])
+        mapped_rendered = (
+            {idx: r for r, idx in enumerate(rendered_indexes)}
+            if len(rendered_indexes) == len(getattr(bundle, "chapter_scenes", []) or [])
+            else {}
+        )
+        try:
+            from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+        except Exception:  # noqa: BLE001
+            _RENDERED_KINDS = {"scene", "equation_card", "recap"}
+        t = 0.0
+        r = 0  # index into the rendered-chapter-aligned offsets/durations
         for i, ch in enumerate(plan.chapters):
-            item = QtWidgets.QListWidgetItem(f"{i + 1}. {ch.title}")
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, t)
+            is_rendered = ch.kind in _RENDERED_KINDS
+            missing_render = bool(mapped_rendered and is_rendered and i not in mapped_rendered)
+            if mapped_rendered:
+                mapped_r = mapped_rendered.get(i)
+                seek = float(offsets[mapped_r]) if mapped_r is not None and mapped_r < len(offsets) else t
+            else:
+                mapped_r = r if is_rendered else None
+                seek = float(offsets[r]) if is_rendered and r < len(offsets) else t
+            suffix = " (not rendered)" if missing_render else ""
+            item = QtWidgets.QListWidgetItem(f"{i + 1}. {ch.title}{suffix}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, seek)
+            if missing_render:
+                item.setToolTip("This chapter did not render; the lesson continues with available chapters.")
+                item.setForeground(QtGui.QColor("#64748B"))
             self._outline.addItem(item)
-            self._chapter_offsets.append(t)
+            self._chapter_offsets.append(seek)
             fc = f" <span style='color:#64748B'>({ch.fact_check})</span>" if ch.fact_check else ""
             transcript_html.append(
-                f"<p><b style='color:#06B6D4'>{i + 1}. {ch.title}</b>{fc}<br>"
+                f"<p><b style='color:#22D3EE'>{i + 1}. {ch.title}</b>{fc}<br>"
                 f"<span style='color:#E2E8F0'>{ch.narration or ch.goal}</span></p>"
             )
-            t += durations[i] if i < len(durations) else 0.0
+            if mapped_r is not None:
+                dur = durations[mapped_r] if mapped_r < len(durations) else 0.0
+                t = seek + dur
+            if is_rendered and not mapped_rendered:
+                r += 1
         self._transcript.setHtml("".join(transcript_html))
 
         while self._questions_layout.count() > 1:

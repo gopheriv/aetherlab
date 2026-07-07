@@ -9,6 +9,7 @@ bar at the bottom. Screens follow design/ui_kits/aetherlab-desktop/.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle, SolverResult
@@ -38,6 +39,33 @@ from aetherlab.ui.workers import LessonWorker, PipelineWorker
 require_qt()
 
 
+_FONTS_INSTALLED = False
+
+
+def _install_ui_fonts() -> None:
+    """Load bundled UI fonts so Qt renders text consistently offscreen/frozen."""
+    global _FONTS_INSTALLED
+    if _FONTS_INSTALLED:
+        return
+    candidates = []
+    for root in (
+        Path(__file__).resolve().parents[2],
+        Path(getattr(sys, "_MEIPASS", ".")),
+    ):
+        candidates.extend([
+            root / "assets" / "fonts" / "DejaVuSans.ttf",
+            root / "assets" / "fonts" / "DejaVuSans-Bold.ttf",
+        ])
+    loaded = False
+    for path in candidates:
+        if path.exists():
+            loaded = QtGui.QFontDatabase.addApplicationFont(str(path)) >= 0 or loaded
+    app = QtWidgets.QApplication.instance()
+    if app is not None and loaded:
+        app.setFont(QtGui.QFont("DejaVu Sans", 10))
+    _FONTS_INSTALLED = True
+
+
 # Workspace stack pages
 PAGE_EMPTY = 0
 PAGE_RUNNING = 1
@@ -58,6 +86,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def __init__(self, settings: AppSettings, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        _install_ui_fonts()
         self._settings = settings
         self.setWindowTitle("Settings")
         self.setMinimumWidth(480)
@@ -147,6 +176,57 @@ class SettingsDialog(QtWidgets.QDialog):
         saved_quality = load_app_config().get("default_quality", "l")
         self._quality_combo.setCurrentIndex({"l": 0, "m": 1, "h": 2}.get(saved_quality, 0))
         form.addLayout(self._labeled("Default quality", self._quality_combo))
+
+        self._render_mode_combo = QtWidgets.QComboBox()
+        self._render_mode_combo.addItems(["Local", "Cloud", "Auto"])
+        self._render_mode_combo.setCurrentIndex(
+            {"local": 0, "cloud": 1, "auto": 2}.get(getattr(settings, "render_mode", "local"), 0)
+        )
+        self._render_mode_combo.setToolTip(
+            "Local renders on this computer. Cloud uses GitHub Actions. Auto uses cloud only for heavy scenes."
+        )
+        form.addLayout(self._labeled("Render mode", self._render_mode_combo))
+
+        self._github_repo_edit = QtWidgets.QLineEdit(getattr(settings, "github_repo", "") or "")
+        self._github_repo_edit.setObjectName("MonoField")
+        self._github_repo_edit.setPlaceholderText("owner/render-repo")
+        form.addLayout(self._labeled("GitHub render repo", self._github_repo_edit))
+
+        self._github_token_edit = QtWidgets.QLineEdit(getattr(settings, "github_token", "") or "")
+        self._github_token_edit.setObjectName("MonoField")
+        self._github_token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._github_token_edit.setPlaceholderText("github_pat_…")
+        token_row = self._secret_row(self._github_token_edit)
+        get_token = QtWidgets.QPushButton("Get token")
+        get_token.setObjectName("SecondaryButton")
+        get_token.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        get_token.clicked.connect(self._get_github_token)
+        token_row.addWidget(get_token)
+        form.addLayout(self._labeled("GitHub token", token_row))
+
+        self._github_workflow_edit = QtWidgets.QLineEdit(getattr(settings, "github_workflow", "render.yml") or "render.yml")
+        self._github_workflow_edit.setObjectName("MonoField")
+        form.addLayout(self._labeled("Workflow file", self._github_workflow_edit))
+        self._github_branch_edit = QtWidgets.QLineEdit(getattr(settings, "github_branch", "renders") or "renders")
+        self._github_branch_edit.setObjectName("MonoField")
+        form.addLayout(self._labeled("Render branch", self._github_branch_edit))
+        self._cloud_threshold = QtWidgets.QDoubleSpinBox()
+        self._cloud_threshold.setRange(1.0, 5.0)
+        self._cloud_threshold.setSingleStep(0.25)
+        self._cloud_threshold.setValue(float(getattr(settings, "cloud_render_threshold", 3.0) or 3.0))
+        form.addLayout(self._labeled("Auto cloud threshold", self._cloud_threshold))
+        cloud_row = QtWidgets.QHBoxLayout()
+        cloud_row.setSpacing(8)
+        self._cloud_test_btn = QtWidgets.QPushButton("Test cloud render")
+        self._cloud_test_btn.setObjectName("SecondaryButton")
+        self._cloud_test_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._cloud_test_btn.clicked.connect(self._test_cloud_render)
+        cloud_row.addWidget(self._cloud_test_btn)
+        self._cloud_result = QtWidgets.QLabel("")
+        self._cloud_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._cloud_result.setWordWrap(True)
+        cloud_row.addWidget(self._cloud_result, 1)
+        form.addLayout(cloud_row)
 
         # ── Vision · Critique (design v2 §8, new) ──
         form.addSpacing(4)
@@ -377,9 +457,78 @@ class SettingsDialog(QtWidgets.QDialog):
         self._test_result.setText(message)
         self._test_btn.setEnabled(True)
 
+    def _test_cloud_render(self) -> None:
+        from dataclasses import replace
+
+        from aetherlab.services.render_backend import CloudRenderBackend, GitHubActionsClient
+
+        probe = replace(
+            self._settings,
+            render_mode={0: "local", 1: "cloud", 2: "auto"}.get(self._render_mode_combo.currentIndex(), "local"),
+            github_repo=self._github_repo_edit.text().strip(),
+            github_token=self._github_token_edit.text().strip(),
+            github_workflow=self._github_workflow_edit.text().strip() or "render.yml",
+            github_branch=self._github_branch_edit.text().strip() or "renders",
+            cloud_render_threshold=float(self._cloud_threshold.value()),
+        )
+        backend = CloudRenderBackend(probe)
+        ok, message = backend.available()
+        if ok:
+            try:
+                client = GitHubActionsClient.from_settings(probe)
+                client._request("GET", f"/repos/{client.owner}/{client.repo}")
+                message = "GitHub render repo reachable. Test render will run during the next cloud render."
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                message = f"GitHub API check failed: {str(exc)[:160]}"
+        self._cloud_result.setStyleSheet(f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;")
+        self._cloud_result.setText(message)
+
+    def _get_github_token(self) -> None:
+        import webbrowser
+
+        from aetherlab.services.render_backend import poll_github_device_token, request_github_device_code
+
+        client_id = getattr(self._settings, "github_oauth_client_id", "") or ""
+        if not client_id:
+            self._cloud_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+            self._cloud_result.setText(
+                "Device login needs an AetherLab GitHub OAuth client id. Set AETHERLAB_GITHUB_CLIENT_ID or paste a fine-grained token."
+            )
+            return
+        try:
+            device = request_github_device_code(client_id)
+            url = device.get("verification_uri", "https://github.com/login/device")
+            code = device.get("user_code", "")
+            self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+            self._cloud_result.setText(f"Enter code {code} at {url}. Waiting for authorization…")
+            webbrowser.open(url)
+            interval = int(device.get("interval", 5))
+            expires = int(device.get("expires_in", 900))
+            import time
+
+            deadline = time.monotonic() + min(expires, 180)
+            while time.monotonic() < deadline:
+                QtWidgets.QApplication.processEvents()
+                time.sleep(interval)
+                token = poll_github_device_token(client_id, device.get("device_code", ""))
+                if token.get("access_token"):
+                    self._github_token_edit.setText(token["access_token"])
+                    self._cloud_result.setStyleSheet("color: #10B981; font-size: 11px;")
+                    self._cloud_result.setText("GitHub token received.")
+                    return
+                if token.get("error") not in {"authorization_pending", "slow_down"}:
+                    raise RuntimeError(str(token.get("error_description") or token.get("error")))
+            self._cloud_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+            self._cloud_result.setText("GitHub device login timed out.")
+        except Exception as exc:  # noqa: BLE001
+            self._cloud_result.setStyleSheet("color: #F43F5E; font-size: 11px;")
+            self._cloud_result.setText(f"GitHub device login failed: {str(exc)[:160]}")
+
     def get_settings(self) -> dict:
         quality_map = {0: "l", 1: "m", 2: "h"}
         preset_map = {0: "custom", 1: "ollama", 2: "none"}
+        mode_map = {0: "local", 1: "cloud", 2: "auto"}
         return {
             "provider_preset": preset_map.get(self._preset_combo.currentIndex(), "custom"),
             "model": self._model_edit.text().strip(),
@@ -388,6 +537,12 @@ class SettingsDialog(QtWidgets.QDialog):
             "library_path": self._library_edit.text().strip(),
             "data_dir": self._data_edit.text().strip(),
             "default_quality": quality_map.get(self._quality_combo.currentIndex(), "l"),
+            "render_mode": mode_map.get(self._render_mode_combo.currentIndex(), "local"),
+            "github_repo": self._github_repo_edit.text().strip(),
+            "github_token": self._github_token_edit.text().strip() or None,
+            "github_workflow": self._github_workflow_edit.text().strip() or "render.yml",
+            "github_branch": self._github_branch_edit.text().strip() or "renders",
+            "cloud_render_threshold": str(float(self._cloud_threshold.value())),
             "vision_model": self._vision_edit.text().strip() or None,
             "web_references": self._web_refs_check.isChecked(),
             "narration_enabled": self._narration_check.isChecked(),
@@ -416,6 +571,7 @@ class _OllamaProbe(QtCore.QThread):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, settings: AppSettings) -> None:
         super().__init__()
+        _install_ui_fonts()
         self.settings = settings
         self.worker: PipelineWorker | None = None
         self._last_result: PipelineResult | None = None
@@ -591,6 +747,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.learn_requested.connect(self.start_lesson)
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
+        self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
         self.history_panel.prompt_selected.connect(self.start_pipeline)
@@ -843,6 +1000,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     "library_path": vals["library_path"],
                     "data_dir": vals["data_dir"],
                     "default_quality": vals["default_quality"],
+                    "render_mode": vals["render_mode"],
+                    "cloud_provider": "github_actions",
+                    "github_repo": vals["github_repo"],
+                    "github_token": vals["github_token"],
+                    "github_workflow": vals["github_workflow"],
+                    "github_branch": vals["github_branch"],
+                    "cloud_render_threshold": vals["cloud_render_threshold"],
                     "vision_model": vals["vision_model"],
                     "web_references": "1" if vals["web_references"] else "0",
                     "narration_enabled": "1" if vals["narration_enabled"] else "0",
@@ -858,6 +1022,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 openai_base_url=vals["base_url"],
                 library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
                 data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
+                render_mode=vals["render_mode"],
+                cloud_provider="github_actions",
+                github_repo=vals["github_repo"],
+                github_token=vals["github_token"] or "",
+                github_workflow=vals["github_workflow"],
+                github_branch=vals["github_branch"],
+                cloud_render_threshold=float(vals["cloud_render_threshold"]),
                 vision_model=vals["vision_model"],
                 web_references=vals["web_references"],
                 narration_enabled=vals["narration_enabled"],
@@ -889,16 +1060,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Cancelling pipeline…")
             self.command_bar.set_busy(False)
             self.stepper.set_cancellable(False)
+            self.simulation_panel.hide_loading()
             self.toast.show_message("warning", "Run cancelled by user.")
             self._workspace.setCurrentIndex(
                 PAGE_SOLVE if self._has_result else PAGE_EMPTY
             )
+        elif self.lesson_worker and self.lesson_worker.isRunning():
+            # Learn is cancellable too — the pipeline stops after the current
+            # chapter and returns whatever rendered (on_lesson_ready handles it).
+            self.lesson_worker.cancel()
+            self.statusBar().showMessage("Cancelling lesson… (stops after this chapter)")
+            self.toast.show_message("warning", "Lesson cancelled by user.")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
         if self.lesson_worker and self.lesson_worker.isRunning():
+            self.lesson_worker.cancel()
             self.lesson_worker.wait(5000)
         super().closeEvent(event)
 
@@ -906,7 +1085,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── topic explainer (Learn) ──
 
-    def start_lesson(self, topic: str) -> None:
+    def start_lesson(self, topic: str, regenerate: bool = False) -> None:
         if self.lesson_worker and self.lesson_worker.isRunning():
             self.statusBar().showMessage("A lesson is already being built.")
             return
@@ -914,8 +1093,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Finish or cancel the current run first.")
             return
 
+        self._last_lesson_topic = topic
         self.lesson_worker = LessonWorker(
-            topic, self.settings, quality=self.command_bar.get_render_quality()
+            topic, self.settings, quality=self.command_bar.get_render_quality(),
+            regenerate=regenerate,
         )
         self.lesson_worker.progress.connect(self._on_lesson_progress)
         self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
@@ -924,10 +1105,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.command_bar.set_busy(True)
         self.toast.hide()
-        self.running_view.set_stage_text("Building lesson…", topic[:80])
+        verb = "Rebuilding" if regenerate else "Building"
+        self.running_view.set_stage_text(f"{verb} lesson…", topic[:80])
+        # Learn is cancellable (Esc / the running view's Cancel button).
+        self.stepper.set_cancellable(True)
         self._workspace.setCurrentIndex(PAGE_RUNNING)
-        self.statusBar().showMessage(f"Building lesson: {topic}")
+        self.statusBar().showMessage(f"{verb} lesson: {topic}")
         self.lesson_worker.start()
+
+    def regenerate_lesson(self) -> None:
+        """Rebuild the current lesson from scratch (ignore plan + clip caches)."""
+        topic = getattr(self, "_last_lesson_topic", "")
+        if not topic:
+            self.statusBar().showMessage("No lesson to regenerate yet.")
+            return
+        self.start_lesson(topic, regenerate=True)
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
@@ -935,6 +1127,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_lesson_ready(self, bundle) -> None:
         self.command_bar.set_busy(False)
+        self.stepper.set_cancellable(False)
+
+        # A cancelled lesson may have partial/no video — never dump the student
+        # on a blank page with no explanation.
+        if bundle.status == "cancelled":
+            self._last_lesson = bundle
+            if bundle.video_path:
+                self.lesson_view.set_lesson(bundle)
+                self.lesson_view.set_video(bundle.video_path)
+                self._workspace.setCurrentIndex(PAGE_LESSON)
+                self.toast.show_message(
+                    "warning",
+                    "Lesson cancelled — showing the chapters that finished. "
+                    "Press Learn again to build the rest.",
+                )
+            else:
+                self._workspace.setCurrentIndex(PAGE_LESSON if self._last_lesson else PAGE_EMPTY)
+                self.toast.show_message(
+                    "warning", "Lesson cancelled before any chapter finished.",
+                )
+            self.statusBar().showMessage("Lesson cancelled.")
+            return
+
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
         if bundle.video_path:
@@ -1063,6 +1278,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_render_ready(self, scene: SceneBundle) -> None:
         self.simulation_panel.set_video(scene)
         self.stepper.set_stage(3, "complete")
+        if any("Cloud render unavailable; rendered locally." in d for d in scene.diagnostics):
+            self.statusBar().showMessage("Cloud render unavailable — rendered locally.")
+            self.toast.show_message("warning", "Cloud render unavailable — rendered locally.")
 
     def on_failure(self, error: PipelineError) -> None:
         self.simulation_panel.hide_loading()
