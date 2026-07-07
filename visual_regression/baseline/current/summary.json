@@ -30,8 +30,8 @@
         "blank_frame_count": 0,
         "blank_ratio": 0.0,
         "blank_ranges": [],
-        "static_frame_count": 10,
-        "static_ratio": 0.0513,
+        "static_frame_count": 11,
+        "static_ratio": 0.0564,
         "static_ranges": [],
         "transitions": [
           {
@@ -70,7 +70,7 @@
         "final_frame": {
           "time": 6.467,
           "mean": 13.212,
-          "std": 14.132
+          "std": 14.131
         },
         "subtitle": null,
         "warnings": []
@@ -220,7 +220,7 @@
         "final_frame": {
           "time": 5.967,
           "mean": 12.897,
-          "std": 13.769
+          "std": 13.768
         },
         "subtitle": null,
         "warnings": []
@@ -289,7 +289,7 @@
           },
           {
             "time": 5.5,
-            "rms": 2.601
+            "rms": 2.602
           }
         ],
         "final_frame": {
@@ -324,53 +324,53 @@
         "contact_sheet": "visual_regression\\baseline\\current\\scene_em_field_contact.jpg",
         "width": 854,
         "height": 480,
-        "duration": 5.0,
+        "duration": 6.1,
         "fps": 30.0,
-        "frame_count": 150,
+        "frame_count": 183,
         "blank_frame_count": 0,
         "blank_ratio": 0.0,
         "blank_ranges": [],
-        "static_frame_count": 28,
-        "static_ratio": 0.1867,
+        "static_frame_count": 25,
+        "static_ratio": 0.1366,
         "static_ranges": [],
         "transitions": [
           {
-            "time": 0.633,
-            "rms": 0.731
+            "time": 0.4,
+            "rms": 0.66
           },
           {
-            "time": 0.7,
-            "rms": 0.726
+            "time": 0.433,
+            "rms": 0.73
           },
           {
-            "time": 0.733,
-            "rms": 0.801
+            "time": 0.467,
+            "rms": 0.748
           },
           {
-            "time": 0.8,
-            "rms": 0.767
+            "time": 0.5,
+            "rms": 0.672
           },
           {
-            "time": 2.067,
-            "rms": 0.787
+            "time": 2.333,
+            "rms": 0.557
           },
           {
-            "time": 2.1,
-            "rms": 0.767
+            "time": 2.433,
+            "rms": 0.585
           },
           {
-            "time": 3.433,
-            "rms": 0.737
+            "time": 2.5,
+            "rms": 0.557
           },
           {
-            "time": 3.467,
-            "rms": 0.798
+            "time": 2.533,
+            "rms": 0.555
           }
         ],
         "final_frame": {
-          "time": 4.967,
-          "mean": 12.836,
-          "std": 13.624
+          "time": 6.067,
+          "mean": 13.364,
+          "std": 14.047
         },
         "subtitle": null,
         "warnings": []
@@ -496,8 +496,8 @@
         "blank_frame_count": 0,
         "blank_ratio": 0.0,
         "blank_ranges": [],
-        "static_frame_count": 244,
-        "static_ratio": 0.2333,
+        "static_frame_count": 236,
+        "static_ratio": 0.2256,
         "static_ranges": [
           {
             "start": 0.167,
@@ -510,14 +510,14 @@
             "duration": 1.2
           },
           {
-            "start": 10.1,
-            "end": 11.233,
-            "duration": 1.133
+            "start": 10.067,
+            "end": 11.167,
+            "duration": 1.1
           },
           {
-            "start": 25.767,
+            "start": 25.8,
             "end": 26.933,
-            "duration": 1.167
+            "duration": 1.133
           },
           {
             "start": 33.4,
@@ -536,7 +536,7 @@
           },
           {
             "time": 5.8,
-            "rms": 6.478
+            "rms": 6.484
           },
           {
             "time": 19.867,
@@ -544,19 +544,19 @@
           },
           {
             "time": 21.0,
-            "rms": 6.478
+            "rms": 6.482
           },
           {
             "time": 27.4,
-            "rms": 3.81
+            "rms": 3.805
           },
           {
             "time": 27.933,
-            "rms": 6.473
+            "rms": 6.47
           },
           {
             "time": 32.4,
-            "rms": 3.865
+            "rms": 3.866
           }
         ],
         "final_frame": {
@@ -607,8 +607,8 @@
       }
     }
   ],
-  "started_at": "2026-07-07T12:02:19+00:00",
-  "finished_at": "2026-07-07T12:03:22+00:00",
+  "started_at": "2026-07-07T13:18:10+00:00",
+  "finished_at": "2026-07-07T13:18:44+00:00",
   "case_file": "C:\\Users\\sunak\\Projects\\aetherlab\\visual_regression\\cases.json",
   "quality": "l",
   "compare": null

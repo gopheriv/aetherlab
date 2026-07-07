@@ -198,6 +198,9 @@ async def render_case(
         }
 
     request = ProblemRequest(prompt=str(case["prompt"]), session_id=f"visual-regression-{case['id']}")
+    if regenerate:
+        key = pipeline.cache.ensure_request(request)
+        pipeline.cache.clear_artifacts(key)
     result = await pipeline.run(request)
     if not result.scene.video_path:
         raise RuntimeError(f"scene did not produce a video; status={result.scene.status}")
@@ -464,9 +467,9 @@ def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] 
 
 
 def write_outputs(out_dir: Path, report: dict[str, Any]) -> None:
-    (out_dir / "summary.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (out_dir / "summary.json").write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
     write_metrics_csv(out_dir / "metrics.csv", report)
-    (out_dir / "summary.md").write_text(render_summary_md(report), encoding="utf-8")
+    (out_dir / "summary.md").write_text(render_summary_md(report), encoding="utf-8", newline="\n")
 
 
 def write_metrics_csv(path: Path, report: dict[str, Any]) -> None:
@@ -483,7 +486,7 @@ def write_metrics_csv(path: Path, report: dict[str, Any]) -> None:
         "contact_sheet",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer = csv.DictWriter(fh, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for case in report["cases"]:
             metrics = case.get("metrics", {})

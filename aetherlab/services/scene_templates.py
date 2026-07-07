@@ -5,8 +5,8 @@ key, LLM failure, exhausted self-heal). Previously that fallback was one
 generic damped-wave plot regardless of the problem. This module picks a
 visualization that matches the *domain* of the request — a swinging pendulum
 for pendulum problems, an elliptical orbit for Kepler problems, a travelling
-wave for wave/Fourier/heat problems — so the keyless experience is still
-about the user's physics.
+wave for wave/Fourier/heat problems, or a dipole field map for electrostatics
+— so the keyless experience is still about the user's physics.
 
 Constraints every template MUST satisfy (enforced by tests):
 - imports only from the code-safety allowlist (manim/manimlib/math/numpy),
@@ -71,6 +71,8 @@ _DOMAIN_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pendulum", ("pendulum",)),
     ("orbit", ("orbit", "kepler", "two-body", "two body", "central force",
                "planet", "satellite", "gravitation")),
+    ("em_field", ("electric", "electrostatic", "charge", "dipole",
+                  "field line", "field lines", "coulomb", "maxwell")),
     ("wave", ("wave", "fourier", "heat equation", "diffusion", "string",
               "standing", "interference")),
 )
@@ -79,7 +81,7 @@ _DOMAIN_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def detect_domain(keywords: list[str], variables: dict[str, float]) -> str:
     """Map solver keywords/variables to a template domain.
 
-    Returns one of ``"pendulum" | "orbit" | "wave" | "oscillator"`` —
+    Returns one of ``"pendulum" | "orbit" | "em_field" | "wave" | "oscillator"`` —
     ``oscillator`` (the classic damped wave) is the safe default.
     """
     text = " ".join(keywords).lower()
@@ -413,10 +415,87 @@ class {header["class_name"]}(Scene):
 '''
 
 
+# ── electrostatic field / dipole ─────────────────────────────────────────────
+
+
+def _em_field_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    separation = min(max(float(variables.get("separation", 2.2)), 1.2), 3.6)
+    return _IMPORT_BLOCK.format(domain="em_field", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        sep = {separation!r}
+        plus_pos = np.array([-sep / 2, -1.1, 0.0])
+        minus_pos = np.array([sep / 2, -1.1, 0.0])
+
+        def field_at(point):
+            r_plus = point - plus_pos
+            r_minus = point - minus_pos
+            d_plus = max(np.linalg.norm(r_plus), 0.22)
+            d_minus = max(np.linalg.norm(r_minus), 0.22)
+            return r_plus / (d_plus ** 3) - r_minus / (d_minus ** 3)
+
+        def make_line(angle):
+            point = plus_pos + 0.34 * np.array([math.cos(angle), math.sin(angle), 0.0])
+            pts = [point.copy()]
+            for _ in range(90):
+                vec = field_at(point)
+                norm = np.linalg.norm(vec)
+                if norm < 1e-6:
+                    break
+                point = point + 0.075 * vec / norm
+                pts.append(point.copy())
+                if np.linalg.norm(point - minus_pos) < 0.36:
+                    break
+                if abs(point[0]) > 3.7 or abs(point[1]) > 2.7:
+                    break
+            line = VMobject(color={pal["curve"]!r}, stroke_width=2.2)
+            line.set_points_smoothly(pts)
+            return line
+
+        field_lines = VGroup()
+        arrows = VGroup()
+        for angle in np.linspace(-2.65, 2.65, 11):
+            line = make_line(float(angle))
+            field_lines.add(line)
+            anchor = line.point_from_proportion(0.55)
+            vec = field_at(anchor)
+            norm = np.linalg.norm(vec)
+            if norm > 1e-6:
+                direction = vec / norm
+                arrows.add(Arrow(anchor - 0.08 * direction, anchor + 0.22 * direction,
+                                 buff=0, color={pal["muted"]!r}, stroke_width=2,
+                                 max_tip_length_to_length_ratio=0.5))
+
+        pulse = ValueTracker(0.0)
+        plus_halo = always_redraw(lambda: Circle(radius=0.38 + 0.04 * math.sin(pulse.get_value()),
+                                                 color={pal["accent"]!r}, stroke_width=2).move_to(plus_pos))
+        minus_halo = always_redraw(lambda: Circle(radius=0.38 + 0.04 * math.cos(pulse.get_value()),
+                                                  color={pal["secondary"]!r}, stroke_width=2).move_to(minus_pos))
+        plus = Dot(plus_pos, color={pal["accent"]!r}, radius=0.18)
+        minus = Dot(minus_pos, color={pal["secondary"]!r}, radius=0.18)
+        plus_label = Text("+", color={pal["background"]!r}).scale(0.55).move_to(plus_pos)
+        minus_label = Text("-", color={pal["background"]!r}).scale(0.65).move_to(minus_pos)
+        caption = Text("electric field lines: + source to - sink", color=TXT).scale(0.28)
+        caption.to_edge(DOWN)
+
+        self.add(plus_halo, minus_halo)
+        self.play(GrowFromCenter(plus), GrowFromCenter(minus),
+                  FadeIn(plus_label), FadeIn(minus_label), run_time={0.8 * header["run"]:.2f})
+        self.play(LaggedStart(*[Create(line) for line in field_lines], lag_ratio=0.08),
+                  run_time={2.5 * header["run"]:.2f})
+        self.play(FadeIn(arrows), FadeIn(caption), run_time={0.8 * header["run"]:.2f})
+        self.play(pulse.animate.set_value(2 * math.pi), run_time={1.5 * header["run"]:.2f},
+                  rate_func=linear)
+        self.wait(0.5)
+'''
+
+
 _BUILDERS = {
     "oscillator": _oscillator_scene,
     "pendulum": _pendulum_scene,
     "orbit": _orbit_scene,
+    "em_field": _em_field_scene,
     "wave": _wave_scene,
 }
 

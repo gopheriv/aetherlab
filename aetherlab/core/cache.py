@@ -121,6 +121,28 @@ class SessionCache:
     def store_scene(self, key: str, scene: SceneBundle) -> None:
         self._store_json(key, "scene_json", scene.to_json())
 
+    def clear_artifacts(self, key: str, artifacts: tuple[str, ...] = ("solver", "rag", "scene")) -> None:
+        """Clear cached pipeline artifacts for one request key.
+
+        This keeps the request row/history while forcing selected stages to be
+        recomputed on the next pipeline run. Used by visual regression refreshes
+        after deterministic template changes.
+        """
+        columns = {
+            "solver": "solver_json",
+            "rag": "rag_json",
+            "scene": "scene_json",
+        }
+        selected = [columns[name] for name in artifacts if name in columns]
+        if not selected:
+            return
+        assignments = ", ".join(f"{column} = NULL" for column in selected)
+        with self._connect() as connection:
+            connection.execute(
+                f"UPDATE sessions SET {assignments}, updated_at = ? WHERE key = ?",
+                (utc_now_iso(), key),
+            )
+
     def _store_json(self, key: str, column: str, payload: dict[str, Any]) -> None:
         if column not in {"solver_json", "rag_json", "scene_json"}:
             raise ValueError(f"Unsupported cache column: {column}")

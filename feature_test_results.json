@@ -121,7 +121,7 @@
   },
   "F31": {
     "status": "PASS",
-    "note": "independent stage storage + column whitelist"
+    "note": "independent stage storage + targeted clears + column whitelist"
   },
   "F32": {
     "status": "PASS",
@@ -417,7 +417,7 @@
   },
   "F105": {
     "status": "PASS",
-    "note": "4 domains compile LaTeX-free; both fallback paths routed (F105)"
+    "note": "5 domains compile LaTeX-free; both fallback paths routed (F105)"
   },
   "F106": {
     "status": "PASS",
@@ -517,7 +517,7 @@
   },
   "F130": {
     "status": "PASS",
-    "note": "key_equations end-to-end: model\u2192fallback\u2192banner\u2192export (F130)"
+    "note": "key_equations end-to-end: model\u2192fallback domains\u2192banner\u2192export (F130)"
   },
   "F131": {
     "status": "PASS",

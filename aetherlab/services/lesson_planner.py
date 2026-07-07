@@ -157,7 +157,8 @@ async def _plan_remote(
 def _template_lesson(topic: str, audience: str = "undergrad") -> LessonPlan:
     """Deterministic keyless lesson keyed to the problem domain.
 
-    Picks a canned 4-chapter outline per domain (oscillator/pendulum/orbit/wave)
+    Picks a canned 4-chapter outline per domain
+    (oscillator/pendulum/orbit/em_field/wave)
     so the offline experience is still a coherent, domain-correct lesson.
     """
     from aetherlab.services.llm import FALLBACK_EQUATIONS, extract_keywords
@@ -237,6 +238,20 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
         "questions": [
             {"q": "Kepler's second law says a planet sweeps out...", "choices": ["equal areas in equal times", "equal angles in equal times", "equal distances in equal times", "a perfect circle"], "answer": "equal areas in equal times", "why": "Angular momentum is conserved."},
             {"q": "Why doesn't an orbiting planet fall into its star?", "answer": "Its sideways velocity keeps carrying it past the star as gravity bends its path.", "why": ""},
+        ],
+    },
+    "em_field": {
+        "hook": "If you place a tiny positive test charge nearby, which way will it start to move?",
+        "intuition": "A positive charge pushes field arrows outward, a negative charge pulls them inward, and a dipole bends those arrows from source to sink.",
+        "math": "Coulomb's law gives E = kq/r^2 for one charge; fields add vector by vector, so a dipole is the sum of a positive and a negative source.",
+        "interactive": "Move the charges closer or farther apart and watch the field lines tighten between them.",
+        "recap": "Electric field lines show direction and relative strength: out of positive charge, into negative charge, denser where the force is stronger.",
+        "prereqs": ["vectors", "Coulomb's law"],
+        "objectives": ["Predict field direction from charge sign", "Explain field-line density", "Add fields from two charges"],
+        "misconception": "Field lines are not physical wires; they are a map of the force a positive test charge would feel.",
+        "questions": [
+            {"q": "Electric field lines point...", "choices": ["from positive to negative", "from negative to positive", "only in circles", "only upward"], "answer": "from positive to negative", "why": "They show the direction of force on a positive test charge."},
+            {"q": "What does a denser cluster of field lines mean?", "answer": "The electric field is stronger there.", "why": ""},
         ],
     },
     "wave": {

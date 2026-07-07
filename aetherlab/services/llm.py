@@ -60,6 +60,10 @@ FALLBACK_EQUATIONS: dict[str, list[str]] = {
         r"F = -\frac{G M m}{r^2}\hat{r}",
         r"r(\varphi) = \frac{p}{1 + e\cos\varphi}",
     ],
+    "em_field": [
+        r"E = k q / r^2",
+        r"\Phi_E = q / \varepsilon_0",
+    ],
     "wave": [
         r"\frac{\partial^2 y}{\partial t^2} = c^2 \frac{\partial^2 y}{\partial x^2}",
         r"y(x,t) = A\sin(kx - \omega t)",

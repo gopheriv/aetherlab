@@ -472,7 +472,7 @@ def t_f30():
 
 def t_f31():
     from aetherlab.core.cache import SessionCache
-    from aetherlab.core.models import ProblemRequest, RagResult
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle
     c = SessionCache(_settings().cache_path)
     req = ProblemRequest(prompt="incremental-test-xyz")
     key = c.ensure_request(req)
@@ -481,13 +481,20 @@ def t_f31():
     assert got.solver and got.solver.cached and got.rag is None
     c.store_rag(key, RagResult(keywords=["k"], hits=[], backend="t"))
     assert c.get(key).rag is not None
+    c.store_scene(key, SceneBundle(class_name="S", code="c", engine="e", status="rendered"))
+    c.clear_artifacts(key, ("scene",))
+    got = c.get(key)
+    assert got and got.solver and got.rag and got.scene is None
+    c.clear_artifacts(key)
+    got = c.get(key)
+    assert got and got.solver is None and got.rag is None and got.scene is None
     # SQL-injection guard
     try:
         c._store_json(key, "evil; DROP TABLE sessions;", {})
         raise AssertionError("column not whitelisted")
     except ValueError:
         pass
-    return "independent stage storage + column whitelist"
+    return "independent stage storage + targeted clears + column whitelist"
 
 
 def t_f32():
@@ -839,17 +846,20 @@ def t_f105():
     assert detect_domain(["kepler", "orbit"], {}) == "orbit"
     assert detect_domain(["pendulum"], {}) == "pendulum"
     assert detect_domain(["fourier", "wave"], {}) == "wave"
+    assert detect_domain(["electric", "dipole", "field"], {}) == "em_field"
     assert detect_domain(["something"], {"damping": 0.1}) == "oscillator"
-    for dom in ("pendulum", "orbit", "wave", "oscillator"):
+    for dom in ("pendulum", "orbit", "em_field", "wave", "oscillator"):
         code = build_scene("AetherLabScene", dom, "T", "S", ["s1"], {"gravity": 9.8})
         compile(code, "<t>", "exec")
         assert "MathTex" not in code, "templates must be LaTeX-free"
+        if dom == "em_field":
+            assert "field lines" in code and "plus_pos" in code and "minus_pos" in code
     # both fallback paths route through the domain builder now
     sg_src = inspect.getsource(SceneGenerator._fallback_scene)
     assert "detect_domain" in sg_src and "build_scene" in sg_src
     mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime._build_scene_code)
     assert "detect_domain" in mr_src and "build_scene" in mr_src
-    return "4 domains compile LaTeX-free; both fallback paths routed (F105)"
+    return "5 domains compile LaTeX-free; both fallback paths routed (F105)"
 
 
 def t_f106():
@@ -1959,6 +1969,8 @@ def t_f130():
     keyless = replace(_settings(), openai_api_key=None)
     r = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="Solve the simple pendulum")))
     assert r.key_equations == FALLBACK_EQUATIONS["pendulum"]
+    em = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="electric dipole field lines")))
+    assert em.key_equations == FALLBACK_EQUATIONS["em_field"]
     from aetherlab.services.mathtext import render_math
     pm = render_math(r.key_equations[0], px_size=30)
     assert pm is not None and not pm.isNull()
@@ -1971,7 +1983,7 @@ def t_f130():
     out = _TMP / "keq.tex"
     export_derivation_to_latex("s", ["x"], {}, out, key_equations=[r"E = mc^2"])
     assert r"\[ E = mc^2 \]" in out.read_text(encoding="utf-8")
-    return "key_equations end-to-end: model→fallback→banner→export (F130)"
+    return "key_equations end-to-end: model→fallback domains→banner→export (F130)"
 
 
 def t_f131():
@@ -2202,6 +2214,7 @@ def t_f141():
     from dataclasses import replace
     from aetherlab.core.models import LessonPlan, LessonBundle, SceneBundle
     from aetherlab.services.lesson_planner import plan_lesson, _template_lesson
+    from aetherlab.services.scene_templates import detect_domain
     # model round-trip incl. nested chapters/questions; old caches load with defaults
     p = _template_lesson("Solve the simple pendulum", "ap")
     p2 = LessonPlan.from_json(p.to_json())
@@ -2215,12 +2228,15 @@ def t_f141():
     # keyless fail-soft → coherent domain templates (per domain)
     keyless = replace(_settings(), openai_api_key=None)
     for topic, need in (("Kepler orbit", "orbit"), ("damped oscillator", "oscillator"),
-                        ("simple pendulum", "pendulum"), ("Fourier wave", "wave")):
+                        ("simple pendulum", "pendulum"), ("Fourier wave", "wave"),
+                        ("electric dipole field", "em_field")):
         lp = asyncio.run(plan_lesson(topic, keyless))
         assert lp.model_name == "deterministic-template" and 4 <= len(lp.chapters) <= 7
         kinds = {c.kind for c in lp.chapters}
         assert "interactive" in kinds and "recap" in kinds and lp.misconception
         assert any(c.key_equations for c in lp.chapters)
+        got = detect_domain([lp.topic] + [c.title for c in lp.chapters], {})
+        assert got == need, (topic, got)
     return "lesson plan model round-trips; keyless domain templates coherent (F141)"
 
 
