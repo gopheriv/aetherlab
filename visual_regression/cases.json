@@ -1,0 +1,45 @@
+[
+  {
+    "id": "scene_pendulum",
+    "kind": "scene",
+    "prompt": "Visualize a simple pendulum with small-angle motion, phase arc, restoring force, and period comparison.",
+    "expect": ["moving bob", "angle guide", "restoring force", "period cue"]
+  },
+  {
+    "id": "scene_kepler_orbit",
+    "kind": "scene",
+    "prompt": "Show Kepler orbit motion with equal areas swept in equal times and a focus marker at the sun.",
+    "expect": ["elliptical orbit", "focus marker", "swept areas", "moving planet"]
+  },
+  {
+    "id": "scene_standing_wave",
+    "kind": "scene",
+    "prompt": "Animate a standing wave on a string with nodes, antinodes, wavelength, and superposition labels.",
+    "expect": ["wave motion", "nodes", "antinodes", "wavelength label"]
+  },
+  {
+    "id": "scene_fourier_series",
+    "kind": "scene",
+    "prompt": "Build a Fourier series approximation of a square wave, adding harmonics and showing convergence.",
+    "expect": ["harmonics", "target square wave", "partial sums", "convergence"]
+  },
+  {
+    "id": "scene_em_field",
+    "kind": "scene",
+    "prompt": "Visualize electric field lines around an electric dipole with charge labels and directional arrows.",
+    "expect": ["positive charge", "negative charge", "field lines", "arrows"]
+  },
+  {
+    "id": "scene_derivation",
+    "kind": "scene",
+    "prompt": "Derive the damped oscillator solution step by step from Newton's second law to the decaying cosine.",
+    "expect": ["equation steps", "damping envelope", "solution", "variables"]
+  },
+  {
+    "id": "lesson_kepler_mode",
+    "kind": "lesson",
+    "topic": "Kepler orbit and equal areas law",
+    "audience": "undergrad",
+    "expect": ["assembled lesson", "chapter offsets", "subtitle cues", "title cards"]
+  }
+]

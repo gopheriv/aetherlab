@@ -1,0 +1,615 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "scene_pendulum",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "17bc2ec865b4127a67bfd357c6048f0feb440644578334dca7ec7fe13556f2b9",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "moving bob",
+        "angle guide",
+        "restoring force",
+        "period cue"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_pendulum_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.5,
+        "fps": 30.0,
+        "frame_count": 195,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 10,
+        "static_ratio": 0.0513,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.267,
+            "rms": 4.202
+          },
+          {
+            "time": 0.3,
+            "rms": 4.304
+          },
+          {
+            "time": 0.333,
+            "rms": 4.337
+          },
+          {
+            "time": 0.367,
+            "rms": 4.369
+          },
+          {
+            "time": 0.4,
+            "rms": 4.33
+          },
+          {
+            "time": 0.433,
+            "rms": 4.29
+          },
+          {
+            "time": 0.467,
+            "rms": 4.231
+          },
+          {
+            "time": 1.1,
+            "rms": 4.062
+          }
+        ],
+        "final_frame": {
+          "time": 6.467,
+          "mean": 13.212,
+          "std": 14.132
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "scene_kepler_orbit",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "adac5038b4d1252b85fc3d9534f023e066f528472a580df77cfd181da030ae7e",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "elliptical orbit",
+        "focus marker",
+        "swept areas",
+        "moving planet"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_kepler_orbit_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.5,
+        "fps": 30.0,
+        "frame_count": 165,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0727,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.9,
+            "rms": 1.583
+          },
+          {
+            "time": 2.067,
+            "rms": 1.595
+          },
+          {
+            "time": 2.1,
+            "rms": 1.604
+          },
+          {
+            "time": 2.533,
+            "rms": 1.79
+          },
+          {
+            "time": 2.567,
+            "rms": 1.612
+          },
+          {
+            "time": 2.7,
+            "rms": 1.578
+          },
+          {
+            "time": 3.0,
+            "rms": 1.575
+          },
+          {
+            "time": 3.033,
+            "rms": 1.579
+          }
+        ],
+        "final_frame": {
+          "time": 5.467,
+          "mean": 12.878,
+          "std": 13.648
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "scene_standing_wave",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "864ec14678e424bcf79338af72781b054369196c567c262e090c70ea8b3acbcd",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "wave motion",
+        "nodes",
+        "antinodes",
+        "wavelength label"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_standing_wave_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.0,
+        "fps": 30.0,
+        "frame_count": 180,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0667,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.533,
+            "rms": 2.623
+          },
+          {
+            "time": 1.733,
+            "rms": 2.506
+          },
+          {
+            "time": 1.767,
+            "rms": 2.515
+          },
+          {
+            "time": 1.8,
+            "rms": 2.5
+          },
+          {
+            "time": 3.5,
+            "rms": 2.681
+          },
+          {
+            "time": 3.533,
+            "rms": 2.701
+          },
+          {
+            "time": 3.767,
+            "rms": 2.511
+          },
+          {
+            "time": 5.5,
+            "rms": 2.602
+          }
+        ],
+        "final_frame": {
+          "time": 5.967,
+          "mean": 12.897,
+          "std": 13.769
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "scene_fourier_series",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "36fb74878cad8aedf2d90c41c929c0e3b4302c565caf37f6ec6a4986adf1ebba",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "harmonics",
+        "target square wave",
+        "partial sums",
+        "convergence"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_fourier_series_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.0,
+        "fps": 30.0,
+        "frame_count": 180,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 10,
+        "static_ratio": 0.0556,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.533,
+            "rms": 2.62
+          },
+          {
+            "time": 1.733,
+            "rms": 2.506
+          },
+          {
+            "time": 1.767,
+            "rms": 2.515
+          },
+          {
+            "time": 1.8,
+            "rms": 2.501
+          },
+          {
+            "time": 3.5,
+            "rms": 2.681
+          },
+          {
+            "time": 3.533,
+            "rms": 2.701
+          },
+          {
+            "time": 3.767,
+            "rms": 2.511
+          },
+          {
+            "time": 5.5,
+            "rms": 2.601
+          }
+        ],
+        "final_frame": {
+          "time": 5.967,
+          "mean": 12.901,
+          "std": 13.814
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "scene_em_field",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "8a8b7b7b7da824ead743595694fb4d3cd29a998047fa5654f81b064a5201808e",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "positive charge",
+        "negative charge",
+        "field lines",
+        "arrows"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_em_field_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 28,
+        "static_ratio": 0.1867,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.731
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.787
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.836,
+          "std": 13.624
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "scene_derivation",
+      "kind": "scene",
+      "status": "pass",
+      "artifact": {
+        "status": "rendered",
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "cache_key": "aa47fd854c157fe4efc98e0d537a82df4988893e1288a377962b2a7fa7bb36af",
+        "engine": "manim-community",
+        "class_name": "AetherLabScene",
+        "diagnostics": []
+      },
+      "expect": [
+        "equation steps",
+        "damping envelope",
+        "solution",
+        "variables"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\scene_derivation_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 30,
+        "static_ratio": 0.2,
+        "static_ranges": [
+          {
+            "start": 4.167,
+            "end": 5.0,
+            "duration": 0.833
+          }
+        ],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.731
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.788
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.907,
+          "std": 13.784
+        },
+        "subtitle": null,
+        "warnings": []
+      }
+    },
+    {
+      "id": "lesson_kepler_mode",
+      "kind": "lesson",
+      "status": "pass",
+      "artifact": {
+        "status": "assembled",
+        "video_path": "<render-cache>/lesson.mp4",
+        "srt_path": "<render-cache>/lesson.srt",
+        "chapter_count": 4,
+        "chapter_offsets": [
+          4.7,
+          11.733332999999998,
+          19.9,
+          27.433332999999998
+        ],
+        "rendered_chapter_indexes": [
+          0,
+          1,
+          2,
+          4
+        ]
+      },
+      "expect": [
+        "assembled lesson",
+        "chapter offsets",
+        "subtitle cues",
+        "title cards"
+      ],
+      "metrics": {
+        "video_path": "<render-cache>/lesson.mp4",
+        "contact_sheet": "visual_regression\\baseline\\current\\lesson_kepler_mode_contact.jpg",
+        "width": 1280,
+        "height": 720,
+        "duration": 34.867,
+        "fps": 30.0,
+        "frame_count": 1046,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 244,
+        "static_ratio": 0.2333,
+        "static_ranges": [
+          {
+            "start": 0.167,
+            "end": 2.533,
+            "duration": 2.367
+          },
+          {
+            "start": 3.033,
+            "end": 4.233,
+            "duration": 1.2
+          },
+          {
+            "start": 10.1,
+            "end": 11.233,
+            "duration": 1.133
+          },
+          {
+            "start": 25.767,
+            "end": 26.933,
+            "duration": 1.167
+          },
+          {
+            "start": 33.4,
+            "end": 34.867,
+            "duration": 1.467
+          }
+        ],
+        "transitions": [
+          {
+            "time": 2.967,
+            "rms": 6.379
+          },
+          {
+            "time": 4.667,
+            "rms": 4.156
+          },
+          {
+            "time": 5.8,
+            "rms": 6.478
+          },
+          {
+            "time": 19.867,
+            "rms": 3.973
+          },
+          {
+            "time": 21.0,
+            "rms": 6.478
+          },
+          {
+            "time": 27.4,
+            "rms": 3.81
+          },
+          {
+            "time": 27.933,
+            "rms": 6.473
+          },
+          {
+            "time": 32.4,
+            "rms": 3.865
+          }
+        ],
+        "final_frame": {
+          "time": 34.833,
+          "mean": 24.967,
+          "std": 44.877
+        },
+        "subtitle": {
+          "path": "<render-cache>/lesson.srt",
+          "cue_count": 4,
+          "cues": [
+            {
+              "index": 1,
+              "start": 4.7,
+              "end": 10.567,
+              "duration": 5.867,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "What keeps a planet from either flying away or falling into the star?"
+            },
+            {
+              "index": 2,
+              "start": 11.733,
+              "end": 18.733,
+              "duration": 7.0,
+              "nearest_transition_delta": 5.933,
+              "text_sample": "Gravity constantly bends the planet's straight-line motion into a closed curve \u2014 a perpetu"
+            },
+            {
+              "index": 3,
+              "start": 19.9,
+              "end": 26.267,
+              "duration": 6.367,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "An inverse-square force F = -GMm/r\u00b2 gives an ellipse r(\u03c6) = p/(1 + e cos \u03c6), with equal ar"
+            },
+            {
+              "index": 4,
+              "start": 27.433,
+              "end": 32.933,
+              "duration": 5.5,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "Gravity plus sideways motion makes a stable ellipse; Kepler's laws describe its shape and "
+            }
+          ],
+          "warnings": []
+        },
+        "warnings": []
+      }
+    }
+  ],
+  "started_at": "2026-07-07T12:02:19+00:00",
+  "finished_at": "2026-07-07T12:03:22+00:00",
+  "case_file": "C:\\Users\\sunak\\Projects\\aetherlab\\visual_regression\\cases.json",
+  "quality": "l",
+  "compare": null
+}

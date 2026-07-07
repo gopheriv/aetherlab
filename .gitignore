@@ -48,3 +48,4 @@ media/
 *.mp4
 derivation.pdf
 .analysis/
+visual_regression/runs/
