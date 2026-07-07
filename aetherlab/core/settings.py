@@ -55,6 +55,8 @@ class AppSettings:
     visual_critic_max_passes: int = 2
     visual_critic_keyframes: int = 6
     min_quality_score: float = 0.0
+    scene_candidates: int = 1
+    scene_candidate_concurrency: int = 2
     provider_source: str = "environment"
 
 
@@ -205,6 +207,16 @@ def load_settings() -> AppSettings:
             os.getenv("AETHERLAB_MIN_QUALITY_SCORE"),
             app_cfg.get("min_quality_score"),
             default=0.0,
+        ),
+        scene_candidates=_as_int(
+            os.getenv("AETHERLAB_SCENE_CANDIDATES"),
+            app_cfg.get("scene_candidates"),
+            default=1,
+        ),
+        scene_candidate_concurrency=_as_int(
+            os.getenv("AETHERLAB_SCENE_CANDIDATE_CONCURRENCY"),
+            app_cfg.get("scene_candidate_concurrency"),
+            default=2,
         ),
         provider_source=source,
     )

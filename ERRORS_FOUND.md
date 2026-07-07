@@ -1,8 +1,8 @@
 # AetherLab — Phase 2 Error Log
 
-Testing method: `test_features.py` exercises all 160 catalogued features
+Testing method: `test_features.py` exercises all 161 catalogued features
 (headless logic, offscreen-Qt widget construction, and source assertions).
-**Automated result: 160/160 pass at the behavioural/happy-path level.**
+**Automated result: 161/161 pass at the behavioural/happy-path level.**
 
 Green happy-path tests do not prove the absence of defects, so this log records
 the logistical/UX errors found by close code review of paths the happy-path

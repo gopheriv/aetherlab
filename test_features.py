@@ -154,6 +154,7 @@ def t_f06():
         "GPT_API_KEY", "GPT_BASE_URL", "LLM_TIMEOUT",
         "AETHERLAB_VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_MAX_PASSES",
         "AETHERLAB_VISUAL_CRITIC_KEYFRAMES", "VISUAL_CRITIC_KEYFRAMES",
+        "AETHERLAB_SCENE_CANDIDATES", "AETHERLAB_SCENE_CANDIDATE_CONCURRENCY",
     )
     saved = {k: os.environ.pop(k, None) for k in keys}
     try:
@@ -163,12 +164,15 @@ def t_f06():
         os.environ["LLM_TIMEOUT"] = "77"
         os.environ["VISUAL_CRITIC_MAX_PASSES"] = "3"
         os.environ["VISUAL_CRITIC_KEYFRAMES"] = "4"
+        os.environ["AETHERLAB_SCENE_CANDIDATES"] = "3"
+        os.environ["AETHERLAB_SCENE_CANDIDATE_CONCURRENCY"] = "2"
         compat = S.load_settings()
         assert compat.llm_model == "manim-bot-code-model"
         assert compat.openai_api_key == "sk-gpt"
         assert compat.openai_base_url == "https://example.test/v1"
         assert compat.llm_timeout_seconds == 77.0
         assert compat.visual_critic_max_passes == 3 and compat.visual_critic_keyframes == 4
+        assert compat.scene_candidates == 3 and compat.scene_candidate_concurrency == 2
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
@@ -2956,6 +2960,143 @@ def t_f160():
     assert rendered.quality_score == 8.4
     assert rendered.critique_verdict == "ship" and rendered.critique_issues == ["text readable"]
     return "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+
+
+def t_f161():
+    # Phase 2: opt-in candidate tournament. Network/vision work is stubbed; the
+    # test proves selection, failed-candidate dropping, and N=1 delegation.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest, SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+
+    request = ProblemRequest(prompt="candidate tournament")
+    solver = _solver()
+    rag = _rag()
+
+    single_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        scene_candidates=1,
+    )
+    single = ManimRuntime(single_settings)
+    calls: list[str] = []
+    compiled = SceneBundle(class_name="S", code="single-code", engine="e", status="compiled")
+    rendered = SceneBundle(class_name="S", code="single-code", engine="e", status="rendered")
+
+    async def fake_generate(*_args, **_kwargs):
+        calls.append("generate")
+        return compiled
+
+    async def fake_render(scene, *_args, **_kwargs):
+        calls.append(f"render:{scene.code}")
+        return rendered
+
+    single.generate_scene_async = fake_generate
+    single.render_scene_with_repair = fake_render
+    got = asyncio.run(single.generate_render_tournament(request, solver, rag, single_settings))
+    assert got is rendered and calls == ["generate", "render:single-code"]
+
+    tournament_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        scene_candidates=3,
+        scene_candidate_concurrency=2,
+    )
+    rt = ManimRuntime(tournament_settings)
+    candidates = [
+        SceneCandidate(0, SceneBundle("S", "low", "e", "compiled"), {"id": "low"}),
+        SceneCandidate(1, SceneBundle("S", "broken", "e", "compiled"), {"id": "broken"}),
+        SceneCandidate(2, SceneBundle("S", "winner", "e", "compiled"), {"id": "winner"}),
+    ]
+
+    score_rt = ManimRuntime(tournament_settings)
+    score_candidates = [
+        SceneCandidate(0, SceneBundle("S", "low", "e", "compiled"), {"id": "low"}),
+        SceneCandidate(1, SceneBundle("S", "broken", "e", "compiled"), {"id": "broken"}),
+        SceneCandidate(2, SceneBundle("S", "winner", "e", "compiled"), {"id": "winner"}),
+    ]
+    from aetherlab.services.scene_critic import Critique
+    import aetherlab.services.scene_critic as critic_mod
+
+    async def fake_draft_render(scene, *_args, **_kwargs):
+        if scene.code == "broken":
+            scene.status = "render-error"
+            return scene
+        scene.status = "rendered"
+        scene.video_path = str(_TMP / f"{scene.code}.mp4")
+        return scene
+
+    async def fake_critique(video_path, *_args, **_kwargs):
+        score = 8.8 if "winner" in str(video_path) else 5.0
+        verdict = "ship" if score > 7 else "revise"
+        return Critique(verdict=verdict, score=score, issues=[] if verdict == "ship" else ["weak"])
+
+    old_critique = critic_mod.critique_video
+    critic_mod.critique_video = fake_critique
+    score_rt._render_once = fake_draft_render
+    try:
+        scored = asyncio.run(score_rt._render_and_score_candidates(
+            score_candidates, tournament_settings, None
+        ))
+    finally:
+        critic_mod.critique_video = old_critique
+    assert [c.scene.code for c in scored] == ["low", "winner"]
+    assert max(scored, key=lambda c: c.score).scene.code == "winner"
+
+    async def fake_build(*_args, **_kwargs):
+        return candidates
+
+    async def fake_score(cands, *_args, **_kwargs):
+        # Candidate 1 simulates a render/static failure and is dropped.
+        cands[0].score = 5.0
+        cands[0].verdict = "revise"
+        cands[0].issues = ["weak composition", "too static"]
+        cands[2].score = 8.8
+        cands[2].verdict = "ship"
+        cands[2].issues = ["minor label crowding"]
+        return [cands[0], cands[2]]
+
+    selected: list[str] = []
+
+    async def fake_final(scene, *_args, **_kwargs):
+        selected.append(scene.code)
+        assert scene.quality_score == 8.8
+        assert scene.critique_verdict == "ship"
+        assert scene.critique_issues == ["minor label crowding"]
+        assert any("Tournament selected candidate 3/3" in d for d in scene.diagnostics)
+        scene.status = "rendered"
+        return scene
+
+    rt._build_scene_candidates = fake_build
+    rt._render_and_score_candidates = fake_score
+    rt.render_scene_with_repair = fake_final
+    winner = asyncio.run(rt.generate_render_tournament(
+        request, solver, rag, tournament_settings, quality="h", brief="brief"
+    ))
+    assert selected == ["winner"] and winner.code == "winner"
+
+    failed = ManimRuntime(tournament_settings)
+    fallback_calls: list[str] = []
+
+    async def fake_empty(*_args, **_kwargs):
+        return []
+
+    async def fake_fallback_generate(*_args, **_kwargs):
+        fallback_calls.append("fallback-generate")
+        return compiled
+
+    async def fake_fallback_render(scene, *_args, **_kwargs):
+        fallback_calls.append(f"fallback-render:{scene.code}")
+        return rendered
+
+    failed._build_scene_candidates = fake_empty
+    failed.generate_scene_async = fake_fallback_generate
+    failed.render_scene_with_repair = fake_fallback_render
+    fallback = asyncio.run(failed.generate_render_tournament(request, solver, rag, tournament_settings))
+    assert fallback is rendered and fallback_calls == ["fallback-generate", "fallback-render:single-code"]
+    return "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

@@ -44,7 +44,13 @@ class AetherLabPipeline:
         current_engine, _ = manim.detect_engine()
         scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
         if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
-            scene = await manim.generate_scene_async(request, solver, rag, self.settings)
+            tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
+            if tournament_enabled(self.settings):
+                scene = await manim.generate_render_tournament(
+                    request, solver, rag, self.settings, brief=request.prompt
+                )
+            else:
+                scene = await manim.generate_scene_async(request, solver, rag, self.settings)
             self.cache.store_scene(key, scene)
 
         # Render to MP4 (skip if a valid cached video already exists);

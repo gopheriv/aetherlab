@@ -638,5 +638,9 @@
   "F160": {
     "status": "PASS",
     "note": "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+  },
+  "F161": {
+    "status": "PASS",
+    "note": "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
   }
 }

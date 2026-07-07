@@ -346,6 +346,9 @@ class SceneGenerator:
         request: ProblemRequest,
         solver: SolverResult,
         rag: RagResult,
+        *,
+        temperature: float = 0.9,
+        variation_seed: str = "",
     ) -> dict | None:
         """Directing pass: a high-temperature creative treatment as strict JSON.
 
@@ -364,6 +367,13 @@ class SceneGenerator:
             f"## Variables (become live on-screen numbers)\n{vars_text}\n\n"
             "Design the storyboard JSON now."
         )
+        if variation_seed:
+            user += (
+                "\n\n## Variation seed\n"
+                f"{variation_seed}\n"
+                "Use this seed only to choose a distinct composition/pacing approach; "
+                "do not change the physics."
+            )
         try:
             client = self._ensure_client()
             response = await client.chat.completions.create(
@@ -374,7 +384,7 @@ class SceneGenerator:
                 ],
                 # Ideation runs hot; the codegen pass runs cold. This split is
                 # the whole point of storyboarding separately.
-                temperature=0.9,
+                temperature=temperature,
                 max_tokens=4096,
             )
             content = response.choices[0].message.content or ""
@@ -395,6 +405,7 @@ class SceneGenerator:
         solver: SolverResult,
         rag: RagResult,
         class_name: str,
+        locked_storyboard: dict | None = None,
     ) -> str:
         self._ensure_client()
 
@@ -419,8 +430,9 @@ class SceneGenerator:
         # Storyboard failure degrades to the proven single-call cinematic path.
         import json as _json
 
-        board = await self.storyboard(request, solver, rag)
+        board = locked_storyboard if locked_storyboard is not None else await self.storyboard(request, solver, rag)
         if board is not None:
+            self._last_storyboard = board
             system = (
                 SCENE_CODEGEN_SYSTEM_PROMPT.replace("{class_name}", class_name)
                 + "\n\n"
@@ -491,6 +503,19 @@ class SceneGenerator:
             raise ValueError("LLM reply was truncated at the max_tokens limit.")
         content = choice.message.content or ""
         return self._extract_code(content, class_name)
+
+    async def generate_from_storyboard(
+        self,
+        request: ProblemRequest,
+        solver: SolverResult,
+        rag: RagResult,
+        class_name: str,
+        storyboard: dict,
+    ) -> str:
+        """Implement a pre-selected storyboard with the normal cold codegen pass."""
+        return await self._generate_remote(
+            request, solver, rag, class_name, locked_storyboard=storyboard
+        )
 
     async def repair(self, code: str, error: str, class_name: str) -> str:
         """Ask the LLM to fix a scene that failed at render time."""

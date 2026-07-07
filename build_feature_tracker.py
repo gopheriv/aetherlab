@@ -709,6 +709,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a user, once AetherLab has judged a render's visual quality, that score follows the scene through cache reuse and can opt into regenerating low-quality cached cuts.",
      "SceneBundle stores quality_score, critique_verdict, and critique_issues. ManimRuntime.render_scene_with_repair copies the existing visual critic's score/verdict/issues onto the rendered SceneBundle. AppSettings.min_quality_score defaults to 0.0 (today's behavior); when set above zero, AetherLabPipeline and lesson chapter cache reuse reject cached scenes below the threshold and regenerate them instead.",
      "core/models.py / core/settings.py / services/manim_runtime.py / services/pipeline.py / services/lesson_pipeline.py", "headless", "Documented", ""),
+    ("F161", "Quality", "Opt-in scene candidate tournament",
+     "As a user with vision critique enabled, AetherLab can try several scene concepts and keep the strongest one instead of pinning the first valid render.",
+     "AppSettings.scene_candidates defaults to 1, preserving the legacy single-shot path. When scene_candidates>1 and both an API key and vision_model are configured, ManimRuntime.generate_render_tournament generates seeded storyboards, implements each with the normal cold codegen pass, applies code-safety and scene-validation gates, draft-renders surviving candidates through the existing backend seam with bounded concurrency, scores each draft with scene_critic, drops failed/unscored candidates, chooses by score/fewer issues/duration-contract closeness, then re-renders only the winner through the existing repair/critique/final-quality path. Any error, N=1, or missing vision config falls back to today's single path.",
+     "core/settings.py / services/scene_generator.py / services/manim_runtime.py / services/pipeline.py / services/lesson_pipeline.py / ui/workers.py", "headless", "Documented", ""),
 ]
 # fmt: on
 

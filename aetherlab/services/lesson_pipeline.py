@@ -210,12 +210,18 @@ class LessonPipeline:
         brief = json.dumps({"chapter": ch.title, "goal": ch.goal, "beats": ch.beats,
                             "narration": ch.narration})
         try:
-            scene = await self.manim.generate_scene_async(
-                request, solver, rag, self.settings, aspect=aspect
-            )
-            scene = await self.manim.render_scene_with_repair(
-                scene, self.settings, quality=quality, brief=brief
-            )
+            if self.manim.scene_tournament_enabled(self.settings):
+                scene = await self.manim.generate_render_tournament(
+                    request, solver, rag, self.settings, quality=quality, brief=brief,
+                    aspect=aspect,
+                )
+            else:
+                scene = await self.manim.generate_scene_async(
+                    request, solver, rag, self.settings, aspect=aspect
+                )
+                scene = await self.manim.render_scene_with_repair(
+                    scene, self.settings, quality=quality, brief=brief
+                )
         except Exception as exc:  # noqa: BLE001 — one bad chapter must not kill the lesson
             log.warning("Chapter '%s' failed to render: %s", ch.title, exc)
             return None

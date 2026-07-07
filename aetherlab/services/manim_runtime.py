@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import logging
 import os
 import re
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from importlib.util import find_spec
 from pathlib import Path
@@ -36,6 +38,18 @@ _MAX_KEPT_RUNS = 24
 
 # Manim Community render quality: 480p for speed
 _RENDER_QUALITY = "l"  # low = 480p15
+
+
+@dataclass
+class SceneCandidate:
+    index: int
+    scene: SceneBundle
+    storyboard: dict | None = None
+    draft_video_path: str = ""
+    score: float = 0.0
+    verdict: str = ""
+    issues: list[str] = field(default_factory=list)
+    duration_delta: float = 9999.0
 
 
 def detect_latex() -> bool:
@@ -197,6 +211,188 @@ class ManimRuntime:
             status=status,
             diagnostics=diagnostics,
         )
+
+    def scene_tournament_enabled(self, settings: "AppSettings | None" = None) -> bool:
+        s = settings or self._settings
+        return bool(
+            s is not None
+            and int(getattr(s, "scene_candidates", 1) or 1) > 1
+            and getattr(s, "openai_api_key", None)
+            and getattr(s, "vision_model", None)
+        )
+
+    async def generate_render_tournament(
+        self,
+        request: ProblemRequest,
+        solver: SolverResult,
+        rag: RagResult,
+        settings: "AppSettings | None" = None,
+        quality: str = "l",
+        brief: str = "",
+        aspect: str = "full",
+        progress: Callable[[str], None] | None = None,
+    ) -> SceneBundle:
+        """Opt-in candidate tournament, failing soft to the normal single path."""
+        s = settings or self._settings
+        if not self.scene_tournament_enabled(s):
+            scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
+            return await self.render_scene_with_repair(
+                scene, s, quality=quality, brief=brief, progress=progress
+            )
+
+        try:
+            candidates = await self._build_scene_candidates(request, solver, rag, s, aspect, progress)
+            if not candidates:
+                raise RuntimeError("no candidate passed static gates")
+            scored = await self._render_and_score_candidates(candidates, s, progress)
+            if not scored:
+                raise RuntimeError("no candidate rendered and scored")
+            winner = sorted(
+                scored,
+                key=lambda c: (-c.score, len(c.issues), c.duration_delta, c.index),
+            )[0]
+            selected = SceneBundle(
+                class_name=winner.scene.class_name,
+                code=winner.scene.code,
+                engine=winner.scene.engine,
+                status="compiled",
+                diagnostics=list(winner.scene.diagnostics) + [
+                    (
+                        f"Tournament selected candidate {winner.index + 1}/"
+                        f"{len(candidates)} with score {winner.score:.1f}."
+                    )
+                ],
+                storyboard=winner.storyboard,
+                quality_score=winner.score,
+                critique_verdict=winner.verdict,
+                critique_issues=list(winner.issues),
+            )
+            return await self.render_scene_with_repair(
+                selected, s, quality=quality, brief=brief or request.prompt, progress=progress
+            )
+        except Exception as exc:  # noqa: BLE001 - tournament must never break solve
+            log.info("Scene tournament failed (%s); falling back to single scene path.", exc)
+            scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
+            return await self.render_scene_with_repair(
+                scene, s, quality=quality, brief=brief, progress=progress
+            )
+
+    async def _build_scene_candidates(
+        self,
+        request: ProblemRequest,
+        solver: SolverResult,
+        rag: RagResult,
+        settings: "AppSettings",
+        aspect: str,
+        progress: Callable[[str], None] | None,
+    ) -> list[SceneCandidate]:
+        from aetherlab.services.code_safety import validate_code_safety
+        from aetherlab.services.scene_validation import (
+            estimate_duration, scene_hygiene_warnings, validate_scene,
+        )
+
+        n = max(1, min(int(getattr(settings, "scene_candidates", 1) or 1), 8))
+        engine, base_diagnostics = self.detect_engine()
+        generator = SceneGenerator(settings)
+        candidates: list[SceneCandidate] = []
+        class_name = "AetherLabScene"
+        for i in range(n):
+            try:
+                if progress:
+                    progress(f"Generating scene candidate {i + 1}/{n}")
+                seed = f"candidate {i + 1}: distinct camera/composition/pacing, same physics"
+                board = await generator.storyboard(
+                    request,
+                    solver,
+                    rag,
+                    temperature=min(1.1, 0.85 + 0.06 * i),
+                    variation_seed=seed,
+                )
+                if board is None:
+                    continue
+                code = await generator.generate_from_storyboard(
+                    request, solver, rag, class_name, board
+                )
+                compile(code, "<aetherlab-candidate-scene>", "exec")
+                safe, safety_issues = validate_code_safety(code)
+                if not safe:
+                    log.info("Candidate %d rejected by safety gate: %s", i + 1, safety_issues[:3])
+                    continue
+                lint_ok, lint_issues = validate_scene(code)
+                if not lint_ok:
+                    log.info("Candidate %d rejected by scene lint: %s", i + 1, lint_issues[:3])
+                    continue
+                est = estimate_duration(code)
+                diagnostics = list(base_diagnostics)
+                diagnostics.append(
+                    f"Tournament candidate {i + 1}: estimated duration ~{est.total_seconds:.0f}s."
+                )
+                hygiene = scene_hygiene_warnings(code)
+                if hygiene:
+                    diagnostics.append("Scene hygiene warnings: " + "; ".join(hygiene[:4]))
+                scene = SceneBundle(
+                    class_name=class_name,
+                    code=code,
+                    engine=engine,
+                    status="compiled",
+                    diagnostics=diagnostics,
+                    storyboard=board,
+                )
+                candidates.append(
+                    SceneCandidate(
+                        index=i,
+                        scene=scene,
+                        storyboard=board,
+                        duration_delta=_duration_contract_delta(est.total_seconds),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.info("Candidate %d generation failed: %s", i + 1, exc)
+                continue
+        if not candidates and aspect:
+            log.info("Tournament produced no candidates for aspect %s.", aspect)
+        return candidates
+
+    async def _render_and_score_candidates(
+        self,
+        candidates: list[SceneCandidate],
+        settings: "AppSettings",
+        progress: Callable[[str], None] | None,
+    ) -> list[SceneCandidate]:
+        import json as _json
+
+        from aetherlab.services.scene_critic import critique_video
+
+        limit = max(1, min(
+            int(getattr(settings, "scene_candidate_concurrency", 2) or 2),
+            len(candidates),
+        ))
+        sem = asyncio.Semaphore(limit)
+        frame_count = int(getattr(settings, "visual_critic_keyframes", 6) or 6)
+
+        async def run_one(candidate: SceneCandidate) -> SceneCandidate | None:
+            async with sem:
+                if progress:
+                    progress(f"Draft rendering candidate {candidate.index + 1}")
+                draft = await self._render_once(candidate.scene, settings, "l", progress)
+                if draft.status != "rendered" or not draft.video_path:
+                    return None
+                brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
+                crit = await critique_video(draft.video_path, brief, settings, frame_count=frame_count)
+                if crit.verdict == "skipped":
+                    return None
+                draft.quality_score = float(crit.score or 0.0)
+                draft.critique_verdict = str(crit.verdict or "")
+                draft.critique_issues = list(crit.issues)
+                candidate.scene = draft
+                candidate.draft_video_path = draft.video_path
+                candidate.score = draft.quality_score
+                candidate.verdict = draft.critique_verdict
+                candidate.issues = list(draft.critique_issues)
+                return candidate
+
+        results = await asyncio.gather(*(run_one(c) for c in candidates))
+        return [r for r in results if r is not None]
 
     def generate_scene(
         self,
@@ -808,6 +1004,17 @@ def _estimate_render_cost(code: str) -> float:
     )
     cost = max(1.0, duration / 15.0) + 0.15 * updaters + 0.04 * plays + 0.5 * heavy
     return min(cost, 5.0)
+
+
+def _duration_contract_delta(seconds: float) -> float:
+    """0 inside the 15-22s target, else distance to the nearest boundary."""
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return 9999.0
+    if 15.0 <= value <= 22.0:
+        return 0.0
+    return min(abs(value - 15.0), abs(value - 22.0))
 
 
 _FAILURE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (

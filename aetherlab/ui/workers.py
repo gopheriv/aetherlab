@@ -113,13 +113,26 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             if (
                 cached
                 and cached.scene
+                and _scene_cache_usable(cached.scene, self.settings)
                 and cached.scene.engine == current_engine
                 and cached.scene.status in {"compiled", "rendered"}
             ):
                 self.status.emit("Loaded generated Manim scene from SQLite cache.")
                 return cached.scene
             self.status.emit("Worker C: generating dynamic Manim scene via LLM.")
-            scene = await manim.generate_scene_async(self.request, solver, rag, self.settings)
+            if manim.scene_tournament_enabled(self.settings):
+                self.status.emit("Worker C: running scene candidate tournament.")
+                scene = await manim.generate_render_tournament(
+                    self.request,
+                    solver,
+                    rag,
+                    self.settings,
+                    quality=self.render_quality,
+                    brief=self.request.prompt,
+                    progress=lambda msg: self.status.emit(str(msg)),
+                )
+            else:
+                scene = await manim.generate_scene_async(self.request, solver, rag, self.settings)
             cache.store_scene(key, scene)
             return scene
 
@@ -248,3 +261,10 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
             self.failure.emit(
                 PipelineError(stage="lesson", message=str(exc), traceback=traceback.format_exc())
             )
+
+
+def _scene_cache_usable(scene: SceneBundle, settings: AppSettings) -> bool:
+    min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
+    if min_score <= 0:
+        return True
+    return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
