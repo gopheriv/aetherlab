@@ -1632,7 +1632,11 @@ class SimulationPanel(QtWidgets.QWidget):
         stage_layout = QtWidgets.QGridLayout(stage)
         stage_layout.setContentsMargins(0, 0, 0, 0)
         self._video_widget = QVideoWidget()
-        self._video_widget.setMinimumSize(400, 225)
+        self._video_widget.setMinimumSize(280, 158)
+        self._video_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         self._video_widget.setStyleSheet("background-color: #000000;")
         stage_layout.addWidget(self._video_widget, 0, 0)
         self._manim_badge = ManimBadge(small=True)
@@ -3542,6 +3546,7 @@ class LessonView(QtWidgets.QWidget):
         self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self._outline = QtWidgets.QListWidget()
         self._outline.setObjectName("HistoryList")
+        self._outline.setMinimumWidth(160)
         self._outline.setMaximumWidth(280)
         self._outline.itemClicked.connect(self._on_outline_click)
         self._split.addWidget(self._outline)
@@ -3581,6 +3586,8 @@ class LessonView(QtWidgets.QWidget):
 
         self._split.addWidget(self._tabs)
         self._split.setSizes([260, 640])
+        self._split.setStretchFactor(0, 0)
+        self._split.setStretchFactor(1, 1)
         layout.addWidget(self._split, 1)
 
         self._empty = QtWidgets.QLabel("Enter a topic and press Learn to generate a lesson.")
@@ -3602,7 +3609,11 @@ class LessonView(QtWidgets.QWidget):
             from PyQt6.QtMultimediaWidgets import QVideoWidget
 
             self._video_widget = QVideoWidget()
-            self._video_widget.setMinimumSize(360, 200)
+            self._video_widget.setMinimumSize(280, 158)
+            self._video_widget.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
             self._video_widget.setStyleSheet("background-color: #000; border-radius: 8px;")
             v.addWidget(self._video_widget, 1)
             self._player = QMediaPlayer()

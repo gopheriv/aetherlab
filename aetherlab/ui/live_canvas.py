@@ -410,7 +410,7 @@ class LiveCanvas(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(400, 300)
+        self.setMinimumSize(260, 180)
         self.setMouseTracking(True)
         self._state: CanvasState | None = None
         self._tracer_t = 0.0

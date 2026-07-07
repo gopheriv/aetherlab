@@ -1348,9 +1348,41 @@ def t_f90():
 
 
 def t_f91():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.__init__)
-    assert "0.92" in src and "min(1500" in src
-    return "responsive sizing formula"
+    from aetherlab.ui.live_canvas import LiveCanvas
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import LessonView, SimulationPanel
+
+    w = MainWindow(_settings())
+    try:
+        assert w.minimumWidth() <= 960 and w.minimumHeight() <= 640
+        w.resize(760, 520)
+        w._apply_responsive_layout()
+        assert 220 <= w._param_side.width() <= 320
+        assert w._param_side.width() == 220
+
+        sim = SimulationPanel()
+        sim_video = getattr(sim, "_video_widget", None)
+        if sim_video is not None:
+            assert sim_video.minimumWidth() <= 280
+            assert sim_video.minimumHeight() <= 158
+
+        canvas = LiveCanvas()
+        assert canvas.minimumWidth() <= 260
+        assert canvas.minimumHeight() <= 180
+
+        lesson = LessonView()
+        assert lesson._outline.minimumWidth() <= 160
+        assert lesson._outline.maximumWidth() <= 280
+        lesson_video = getattr(lesson, "_video_widget", None)
+        if lesson_video is not None:
+            assert lesson_video.minimumWidth() <= 280
+            assert lesson_video.minimumHeight() <= 158
+    finally:
+        w.close()
+        probe = getattr(w, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    return "responsive shell + media/canvas minimums fit small screens"
 
 
 def t_f92():

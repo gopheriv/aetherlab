@@ -588,9 +588,13 @@ class MainWindow(QtWidgets.QMainWindow):
             geo = screen.availableGeometry()
             w = min(1500, int(geo.width() * 0.92))
             h = min(950, int(geo.height() * 0.92))
+            min_w = min(960, max(640, int(geo.width() * 0.72)))
+            min_h = min(640, max(460, int(geo.height() * 0.72)))
         else:
             w, h = 1500, 950
+            min_w, min_h = 720, 520
         self.resize(w, h)
+        self.setMinimumSize(min_w, min_h)
         self.setStyleSheet(AETHERLAB_QSS)
 
         # ── Components ──
@@ -625,7 +629,12 @@ class MainWindow(QtWidgets.QMainWindow):
         scene_layout.setSpacing(0)
         scene_layout.addWidget(self.simulation_panel, 1)
         self._param_side = QtWidgets.QFrame()
-        self._param_side.setFixedWidth(300)
+        self._param_side.setMinimumWidth(220)
+        self._param_side.setMaximumWidth(320)
+        self._param_side.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         self._param_side.setStyleSheet(
             "QFrame { background-color: #0D0D14; border-left: 1px solid #1E293B; }"
         )
@@ -716,6 +725,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._ollama_probe = _OllamaProbe(self)
             self._ollama_probe.found.connect(self._on_ollama_found)
             self._ollama_probe.start()
+        self._apply_responsive_layout()
 
     # ── wiring ──
 
@@ -783,6 +793,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.simulation_panel.toggle_phase
         )
 
+    def _apply_responsive_layout(self) -> None:
+        """Keep the scene drawer usable without letting it crowd the stage."""
+        if not hasattr(self, "_param_side"):
+            return
+        width = max(self.width(), self.minimumWidth())
+        side_width = max(220, min(320, int(width * 0.24)))
+        if width < 900:
+            side_width = 220
+        self._param_side.setFixedWidth(side_width)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        self._apply_responsive_layout()
+        super().resizeEvent(event)
+
     def _prefill_prompt(self, prompt: str) -> None:
         self.command_bar.input.setText(prompt)
         self.command_bar.input.setFocus()
@@ -849,6 +873,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif index == 3:
             # Params: reveal the parameter side panel on the Scene page
             self._param_side.setVisible(not self._param_side.isVisible())
+            self._apply_responsive_layout()
             self._workspace.setCurrentIndex(PAGE_SCENE)
         elif index == 4:
             self._workspace.setCurrentIndex(PAGE_HISTORY)
@@ -1073,6 +1098,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.toast.show_message("warning", "Lesson cancelled by user.")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        probe = getattr(self, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
