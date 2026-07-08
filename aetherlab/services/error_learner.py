@@ -116,8 +116,16 @@ def known_pitfall_hints(stderr: str) -> list[str]:
     return hints
 
 
-def preventive_pitfalls_block() -> str:
-    """A compact 'avoid these' appendix for the generation system prompt."""
+def preventive_pitfalls_block(aesthetic_store: "AestheticPitfallStore | None" = None) -> str:
+    """A compact 'avoid these' appendix for the generation system prompt.
+
+    The static half lists the perennial Manim-CE API mistakes. When an
+    ``aesthetic_store`` is supplied, the *learned* half appends the aesthetic
+    problems the visual critic has repeatedly named on past renders — this is
+    how the quality flywheel's losing candidates teach the next generation to
+    avoid the same visual mistakes (Phase 3). Fail-soft: a missing/empty/corrupt
+    store simply contributes nothing.
+    """
     lines = [
         "## Common Manim CE pitfalls to AVOID",
         "- Use `axes.plot(fn)`, never `axes.get_graph(fn)`.",
@@ -128,6 +136,91 @@ def preventive_pitfalls_block() -> str:
         "kwargs to constructors.",
         "- Only put valid LaTeX inside `MathTex`; otherwise use `Text`.",
     ]
+    learned = learned_aesthetic_block(aesthetic_store) if aesthetic_store is not None else ""
+    return "\n".join(lines) + ("\n\n" + learned if learned else "")
+
+
+# ── Aesthetic pitfall learning (the flywheel's "losers teach" channel) ───────
+# The visual critic (services/scene_critic) names *aesthetic* problems on a
+# render ("text overlaps the axis", "object leaves the frame"). Recording the
+# recurring ones and feeding the top offenders back into the generation prompt
+# turns crash-only learning into "don't be ugly" learning.
+
+_AESTHETIC_MAX_LEN = 90
+
+
+def normalize_aesthetic(issue: str) -> str:
+    """Collapse a critic issue string to a stable, comparable pitfall phrase."""
+    text = _PATH_RE.sub("", str(issue or ""))
+    text = _HEX_RE.sub("", text)
+    text = _NUM_RE.sub("", text)
+    # Drop a leading axis tag like "legibility: " the critic may prepend.
+    text = re.sub(r"^\s*[A-Za-z]+\s*:\s*", "", text)
+    text = _WS_RE.sub(" ", text).strip().lower().rstrip(".")
+    return text[:_AESTHETIC_MAX_LEN]
+
+
+class AestheticPitfallStore:
+    """JSON-backed tally of aesthetic problems the critic has named, with TTL.
+
+    Standard-library only and fail-soft, exactly like :class:`ErrorLearner`: no
+    method raises into the render pipeline.
+    """
+
+    def __init__(self, store_path: Path | None = None) -> None:
+        self.store_path = Path(store_path) if store_path else None
+        self._store: dict[str, dict] = self._load()
+
+    def _load(self) -> dict[str, dict]:
+        if not self.store_path or not self.store_path.exists():
+            return {}
+        try:
+            data = json.loads(self.store_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return ErrorLearner._prune(data)
+        except Exception as exc:  # noqa: BLE001 — corruption must not break render
+            log.debug("aesthetic store unreadable, starting fresh: %s", exc)
+        return {}
+
+    def _save(self) -> None:
+        if not self.store_path:
+            return
+        try:
+            self.store_path.parent.mkdir(parents=True, exist_ok=True)
+            self.store_path.write_text(json.dumps(self._store, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+            log.debug("could not persist aesthetic store: %s", exc)
+
+    def record(self, issues: list[str]) -> None:
+        """Tally each non-empty, normalized aesthetic issue once."""
+        changed = False
+        for issue in issues or []:
+            phrase = normalize_aesthetic(issue)
+            if not phrase:
+                continue
+            entry = self._store.setdefault(phrase, {"count": 0, "last_seen": ""})
+            entry["count"] = int(entry.get("count", 0)) + 1
+            entry["last_seen"] = datetime.now(UTC).isoformat(timespec="seconds")
+            changed = True
+        if changed:
+            self._save()
+
+    def top(self, n: int = 6) -> list[tuple[str, int]]:
+        """Most-recorded pitfalls first (ties broken by phrase for determinism)."""
+        items = [(p, int(e.get("count", 0))) for p, e in self._store.items() if e.get("count", 0) > 0]
+        items.sort(key=lambda pc: (-pc[1], pc[0]))
+        return items[: max(0, n)]
+
+
+def learned_aesthetic_block(store: "AestheticPitfallStore | None", n: int = 6) -> str:
+    """A prompt appendix listing the top learned aesthetic pitfalls ('' if none)."""
+    if store is None:
+        return ""
+    top = store.top(n)
+    if not top:
+        return ""
+    lines = ["## Aesthetic problems seen on past renders — actively AVOID these:"]
+    lines.extend(f"- {phrase} (seen {count}x)" for phrase, count in top)
     return "\n".join(lines)
 
 

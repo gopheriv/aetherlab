@@ -252,6 +252,16 @@ class ManimRuntime:
                 scored,
                 key=lambda c: (-c.score, len(c.issues), c.duration_delta, c.index),
             )[0]
+            # Losers teach: record the aesthetic problems the critic named on the
+            # candidates that did NOT win, so the next generation prompt steers
+            # away from them (the flywheel's cross-run learning). Fail-soft.
+            self._record_aesthetic_pitfalls(
+                [issue for c in scored if c is not winner for issue in c.issues], s
+            )
+            # Winners teach: stash a high-scoring, critic-approved winner as an
+            # exemplar CANDIDATE for later human review + promotion. Never edits
+            # the curated exemplar source automatically (supply-chain safety).
+            self._record_exemplar_candidate(winner, solver, s)
             selected = SceneBundle(
                 class_name=winner.scene.class_name,
                 code=winner.scene.code,
@@ -278,6 +288,35 @@ class ManimRuntime:
             return await self.render_scene_with_repair(
                 scene, s, quality=quality, brief=brief, progress=progress
             )
+
+    def _record_aesthetic_pitfalls(self, issues: list[str], settings: "AppSettings") -> None:
+        """Persist losing candidates' critic issues so future prompts avoid them."""
+        if not issues:
+            return
+        try:
+            from aetherlab.services.error_learner import AestheticPitfallStore
+
+            AestheticPitfallStore(settings.data_dir / "aesthetic_pitfalls.json").record(issues)
+        except Exception as exc:  # noqa: BLE001 — learning is a bonus, never fatal
+            log.info("Could not record aesthetic pitfalls (%s).", exc)
+
+    def _record_exemplar_candidate(
+        self, winner: "SceneCandidate", solver: SolverResult, settings: "AppSettings"
+    ) -> None:
+        """Stash a critic-approved, high-scoring winner as an exemplar candidate."""
+        try:
+            from aetherlab.services.scene_exemplars import ExemplarCandidateStore
+            from aetherlab.services.scene_templates import detect_domain
+
+            domain = detect_domain(list(solver.keywords or []), dict(solver.variables or {}))
+            ExemplarCandidateStore(settings.data_dir / "exemplar_candidates.json").record(
+                domain=domain,
+                code=winner.scene.code,
+                score=float(winner.score),
+                verdict=str(winner.verdict),
+            )
+        except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
+            log.info("Could not record exemplar candidate (%s).", exc)
 
     async def _build_scene_candidates(
         self,

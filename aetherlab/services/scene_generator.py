@@ -424,7 +424,20 @@ class SceneGenerator:
 
         # .replace (not .format): the prompt bodies contain literal braces
         # (color-palette sets like {BLUE_D, TEAL, ...}) that would break .format.
-        from aetherlab.services.error_learner import preventive_pitfalls_block
+        from aetherlab.services.error_learner import (
+            AestheticPitfallStore,
+            preventive_pitfalls_block,
+        )
+
+        # The flywheel's "losers teach" channel: past low-scoring renders'
+        # aesthetic problems are appended to the pitfalls block so this
+        # generation actively avoids them. Fail-soft - no store, no effect.
+        try:
+            _aesthetic = AestheticPitfallStore(
+                self.settings.data_dir / "aesthetic_pitfalls.json"
+            )
+        except Exception:  # noqa: BLE001 - learning is a bonus, never fatal
+            _aesthetic = None
 
         # Two-call generation: hot directing pass → cold implementation pass.
         # Storyboard failure degrades to the proven single-call cinematic path.
@@ -436,7 +449,7 @@ class SceneGenerator:
             system = (
                 SCENE_CODEGEN_SYSTEM_PROMPT.replace("{class_name}", class_name)
                 + "\n\n"
-                + preventive_pitfalls_block()
+                + preventive_pitfalls_block(_aesthetic)
             )
             user = (
                 f"## Locked storyboard (implement exactly)\n"
@@ -453,7 +466,7 @@ class SceneGenerator:
             system = (
                 SCENE_GENERATION_SYSTEM_PROMPT.replace("{class_name}", class_name)
                 + "\n\n"
-                + preventive_pitfalls_block()
+                + preventive_pitfalls_block(_aesthetic)
             )
             user = SCENE_GENERATION_USER_TEMPLATE.format(
                 prompt=request.prompt,

@@ -757,6 +757,14 @@ FEATURES: list[tuple[str, ...]] = [
      "As a power user with cloud rendering, when the tournament renders N candidates, I expect them to render concurrently on the farm without stealing each other's artifacts.",
      "manim_runtime._render_and_score_candidates already renders candidates concurrently (asyncio.gather bounded by scene_candidate_concurrency) and routes each through _render_once -> select_backend, so cloud-configured users fan out to GitHub Actions. Phase 2 closes the concurrency race: cloud_job_id (also the cloud cache key) now takes a `variant` salt so byte-identical candidates dispatched at once can no longer collide on the same jobs/<id>.py scene file or <id>.mp4 artifact (the BUG-15 race), while an empty variant stays byte-identical to the legacy id so the single-scene path keeps its content cache. _render_once threads the variant; the tournament passes cand<index>. Keyless candidates are ranked by the Phase-1 static proxy instead of being dropped. tools/cloud_tournament_smoke.py is a manual live end-to-end check; t_f171 proves isolation with a stubbed concurrent render. Phase 2 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "services/render_backend.py / services/manim_runtime.py / tools/cloud_tournament_smoke.py", "headless", "Documented", ""),
+    ("F172", "Quality", "Aesthetic pitfall learning (losers teach)",
+     "As a maintainer, when the critic keeps naming the same visual problems, I expect the next generation to actively avoid them.",
+     "error_learner.AestheticPitfallStore is a JSON-backed, TTL-pruned, fail-soft tally of normalized critic issue phrases (numbers/paths/axis-tags stripped so variants cluster). learned_aesthetic_block() renders the top offenders and preventive_pitfalls_block(store) appends them to the generation system prompt; preventive_pitfalls_block() with no store stays the static block (backward compatible). scene_generator._generate_remote builds the store from data_dir and injects it at both codegen sites; manim_runtime.generate_render_tournament records the LOSING candidates' critic issues via _record_aesthetic_pitfalls after selecting the winner. Phase 3 of docs/QUALITY_FLYWHEEL_MISSION.md — the flywheel's cross-run learning.",
+     "services/error_learner.py / services/scene_generator.py / services/manim_runtime.py", "headless", "Documented", ""),
+    ("F173", "Quality", "Exemplar promotion (winners teach)",
+     "As a maintainer, when a tournament produces a critic-approved, high-scoring winner, I expect it stashed as an exemplar candidate I can review and promote — never auto-injected.",
+     "scene_exemplars.ExemplarCandidateStore (data-dir JSON, fail-soft) records a tournament winner only when the VISION critic returned verdict 'ship' at score >= PROMOTE_MIN_SCORE (8.5); static-proxy/skipped, 'revise', low-score, and empty-code winners are rejected, and identical code deduplicates. manim_runtime.generate_render_tournament records the winner via _record_exemplar_candidate (domain from detect_domain). tools/promote_exemplar.py lists candidates and emits a paste-ready snippet but NEVER writes scene_exemplars.py — promotion into the curated EXEMPLARS is a deliberate human-reviewed code change (feeding LLM code back into every prompt is a supply-chain risk). Phase 3 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "services/scene_exemplars.py / services/manim_runtime.py / tools/promote_exemplar.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2109,6 +2117,20 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "A candidate's cloud failure scores it out without aborting the tournament; whole-cloud-unavailable falls back to local; identical-code candidates never share an artifact.",
         "live-cloud",
     ),
+    "F172": _story_tuple(
+        "US-F172: As P3 Educator/maintainer, when the visual critic repeatedly names the same aesthetic problem, I expect the next scene generation to avoid it. Preconditions: a tournament ran and named issues on losing candidates. Steps: 1. Record losing candidates' issues. 2. Confirm the top pitfalls appear in the generation prompt. 3. Confirm an empty store adds nothing.",
+        "P3",
+        "`AestheticPitfallStore` tallies normalized critic issue phrases (fail-soft, TTL); `preventive_pitfalls_block(store)` appends the top learned pitfalls to the codegen system prompt while the no-arg form stays the static block; `generate_render_tournament` records losing candidates' issues after winner selection. Implementation reference: aetherlab/services/error_learner.py:119 / aetherlab/services/scene_generator.py:427 / aetherlab/services/manim_runtime.py:250.",
+        "A missing/empty/corrupt store contributes nothing and never breaks generation; only losing candidates' issues are learned; the static pitfalls always remain.",
+        "harness",
+    ),
+    "F173": _story_tuple(
+        "US-F173: As P3 Educator/maintainer, when a tournament yields a critic-approved high-scoring winner, I expect it captured for review and one-command promotion — but never auto-added to the prompt. Preconditions: a vision critic scored a winner 'ship' >= 8.5. Steps: 1. Record the winner. 2. Confirm skipped/low/revise winners are rejected. 3. List candidates and emit a paste-ready snippet.",
+        "P3",
+        "`ExemplarCandidateStore.record()` accepts only verdict 'ship' at score >= PROMOTE_MIN_SCORE (rejecting static/skipped, revise, low, empty; dedup by code); `generate_render_tournament` records the winner; `tools/promote_exemplar.py` lists/shows/emits candidates and never writes scene_exemplars.py. Implementation reference: aetherlab/services/scene_exemplars.py:226 / aetherlab/services/manim_runtime.py:250 / tools/promote_exemplar.py:1.",
+        "A missing/corrupt store yields no candidates and never breaks a render; only genuine vision winners are stored; the curated exemplar source is only ever changed by a reviewed human edit.",
+        "harness",
+    ),
 }
 
 
@@ -2339,6 +2361,9 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # cloud_tournament_smoke.py), so this stays PARTIAL like the other
     # live-cloud stories.
     "F171": ("PARTIAL", "None", "PARTIAL"),
+    # ── Quality Flywheel Phase 3 (F172 losers teach, F173 winners teach) ────
+    "F172": ("PASS", "None", "PASS"),
+    "F173": ("PASS", "None", "PASS"),
 }
 
 

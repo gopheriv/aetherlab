@@ -3920,6 +3920,84 @@ def t_f171():
     return "cloud fan-out: per-candidate job-id isolation prevents concurrent artifact collision (F171)"
 
 
+def t_f172():
+    # Quality Flywheel Phase 3a: losers teach — aesthetic pitfall learning.
+    import inspect
+
+    from aetherlab.services.error_learner import (
+        AestheticPitfallStore, learned_aesthetic_block, normalize_aesthetic, preventive_pitfalls_block,
+    )
+
+    # Variants that differ only in numbers/paths/axis-tag collapse to one phrase.
+    a = normalize_aesthetic("Legibility: Text overlaps the axis at (3, 4).")
+    b = normalize_aesthetic("text overlaps the axis at (1, 2)")
+    assert a == b and "text overlaps the axis" in a, (a, b)
+
+    store = AestheticPitfallStore(_TMP / "aesthetic_pitfalls.json")
+    store.record(["Text overlaps the axis at (3,4)", "Object leaves the frame", "text overlaps the axis at (9,9)"])
+    top = store.top()
+    assert top[0][1] == 2 and "overlaps" in top[0][0], top  # the repeated one ranks first
+    # Persists across instances.
+    assert AestheticPitfallStore(_TMP / "aesthetic_pitfalls.json").top(1) == top[:1]
+
+    # The learned block is empty for an empty store and appears for a full one.
+    assert learned_aesthetic_block(AestheticPitfallStore(_TMP / "empty_aes.json")) == ""
+    # preventive_pitfalls_block(): static only (backward compatible), no learned section.
+    assert "past renders" not in preventive_pitfalls_block()
+    withlearn = preventive_pitfalls_block(store)
+    assert "past renders" in withlearn and "text overlaps the axis" in withlearn
+
+    # Generation injects the learned pitfalls at both codegen sites.
+    gen_src = inspect.getsource(__import__("aetherlab.services.scene_generator", fromlist=["SceneGenerator"]).SceneGenerator._generate_remote)
+    assert "AestheticPitfallStore" in gen_src and gen_src.count("preventive_pitfalls_block(_aesthetic)") == 2
+
+    # The tournament records losing candidates' issues (behavioural: the store file appears).
+    from aetherlab.services.manim_runtime import ManimRuntime
+    rt = ManimRuntime(_settings())
+    rt_src = inspect.getsource(ManimRuntime)
+    assert "_record_aesthetic_pitfalls" in rt_src and "is not winner" in rt_src
+    probe = _settings()
+    rt._record_aesthetic_pitfalls(["Text runs off the right edge"], probe)
+    recorded = AestheticPitfallStore(probe.data_dir / "aesthetic_pitfalls.json").top()
+    assert any("runs off" in p for p, _ in recorded), recorded
+    return "aesthetic pitfall learning: critic issues feed the next generation prompt (F172)"
+
+
+def t_f173():
+    # Quality Flywheel Phase 3b: winners teach — exemplar promotion (human-gated).
+    import inspect
+
+    from aetherlab.services.scene_exemplars import ExemplarCandidateStore, PROMOTE_MIN_SCORE
+
+    code = "from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
+    store = ExemplarCandidateStore(_TMP / "exemplar_candidates.json")
+    # Only a genuine, high-scoring VISION 'ship' is exemplar-worthy.
+    assert store.record(domain="pendulum", code=code, score=9.1, verdict="ship") is True
+    assert store.record(domain="wave", code=code, score=9.9, verdict="skipped") is False  # static proxy
+    assert store.record(domain="wave", code="x=1", score=6.0, verdict="ship") is False    # below bar
+    assert store.record(domain="wave", code="y=2", score=9.0, verdict="revise") is False  # critic unhappy
+    assert store.record(domain="wave", code="   ", score=9.0, verdict="ship") is False    # empty code
+    assert PROMOTE_MIN_SCORE >= 8.0
+    items = ExemplarCandidateStore(_TMP / "exemplar_candidates.json").list()
+    assert len(items) == 1 and items[0]["domain"] == "pendulum" and items[0]["verdict"] == "ship"
+    # Identical code dedups rather than piling up.
+    store.record(domain="pendulum", code=code, score=9.4, verdict="ship")
+    assert len(ExemplarCandidateStore(_TMP / "exemplar_candidates.json").list()) == 1
+
+    # The tournament records winners; the store never lives in the curated source.
+    rt_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert "_record_exemplar_candidate" in rt_src and "ExemplarCandidateStore" in rt_src
+
+    # The promote tool exists, runs, and NEVER auto-edits scene_exemplars.py
+    # (promotion is a reviewed human code change — supply-chain safety).
+    from tools import promote_exemplar
+    tool_src = Path("tools/promote_exemplar.py").read_text(encoding="utf-8")
+    assert 'scene_exemplars.py' in tool_src  # it references the target for humans
+    assert ".write_text(" not in tool_src and "open(" not in tool_src, "promote tool must not write files"
+    assert promote_exemplar.main(["--list"]) == 0  # runs without crashing
+    return "exemplar promotion: high-scoring winners stashed for human-reviewed promotion (F173)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

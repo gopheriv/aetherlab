@@ -16,7 +16,13 @@ test_features.py F163). Keyed by the domains of ``scene_templates.detect_domain`
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ── the exemplars ───────────────────────────────────────────────────────────
 
@@ -223,3 +229,66 @@ def exemplar_block(
         "and variables.\n"
         f"```python\n{code}```\n"
     )
+
+
+# ── Exemplar promotion (the flywheel's "winners teach" channel) ──────────────
+# A tournament winner that the VISION critic scored highly is a proven-good
+# scene. Instead of throwing it away, we stash it as an exemplar *candidate*.
+# Promotion into the curated EXEMPLARS above is a deliberate, human-reviewed
+# code change (tools/promote_exemplar.py) — we NEVER auto-edit this module from
+# model output, because feeding LLM-written code straight back into every future
+# prompt is a supply-chain risk.
+
+PROMOTE_MIN_SCORE = 8.5  # a winner must clear this VISION score to be a candidate
+_MAX_CANDIDATES = 24
+
+
+class ExemplarCandidateStore:
+    """Data-dir-backed store of high-scoring winners proposed as new exemplars.
+
+    Standard-library, fail-soft: no method raises into the render pipeline, and
+    nothing here ever writes to the curated ``EXEMPLARS`` source.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = Path(path) if path else None
+
+    def _load(self) -> list[dict]:
+        if not self.path or not self.path.exists():
+            return []
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception as exc:  # noqa: BLE001 — corruption must not break render
+            log.debug("exemplar-candidate store unreadable: %s", exc)
+            return []
+
+    def record(self, *, domain: str, code: str, score: float, verdict: str) -> bool:
+        """Stash a winner iff the VISION critic approved it above the bar.
+
+        Returns True when stored. Static-proxy (``skipped``) and merely-"revise"
+        winners are rejected — only a genuine ``ship`` verdict at a high score is
+        exemplar-worthy. Deduplicates identical code, newest-first, capped.
+        """
+        if verdict != "ship" or float(score) < PROMOTE_MIN_SCORE or not str(code).strip():
+            return False
+        if not self.path:
+            return False
+        try:
+            items = [c for c in self._load() if c.get("code") != code]
+            items.insert(0, {
+                "domain": str(domain or "unknown"),
+                "code": str(code),
+                "score": round(float(score), 3),
+                "verdict": str(verdict),
+                "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            })
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(items[:_MAX_CANDIDATES], indent=2), encoding="utf-8")
+            return True
+        except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
+            log.debug("could not record exemplar candidate: %s", exc)
+            return False
+
+    def list(self) -> list[dict]:
+        return self._load()
