@@ -3473,6 +3473,7 @@ class _QuestionCard(QtWidgets.QFrame):
         super().__init__(parent)
         self.setObjectName("CardFrame")
         self._q = question
+        self._answered = False
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
@@ -3505,6 +3506,13 @@ class _QuestionCard(QtWidgets.QFrame):
             layout.addWidget(self._feedback)
 
     def _answer_mcq(self, choice: str) -> None:
+        # BUG-27: only the first selection counts. toggled fires on every
+        # radio change, so without this guard a student who switches options
+        # (or clicks each until Correct appears) would record multiple
+        # attempts, inflating the persisted course score. Lock after answering.
+        if self._answered:
+            return
+        self._answered = True
         correct = str(choice).strip() == str(self._q.answer).strip()
         why = f" — {self._q.why}" if self._q.why else ""
         self._feedback.setText(
@@ -3513,6 +3521,8 @@ class _QuestionCard(QtWidgets.QFrame):
         self._feedback.setStyleSheet(
             f"color: {'#10B981' if correct else '#F43F5E'}; font-size: 12px;"
         )
+        for button in self._group.buttons():
+            button.setEnabled(False)
         self.answer_recorded.emit(correct, str(choice))
 
     def _reveal_open(self) -> None:

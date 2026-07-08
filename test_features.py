@@ -3636,6 +3636,14 @@ def t_f167():
         card = lv.findChildren(_QuestionCard)[0]
         card._answer_mcq(wrong)
         assert got == [(0, False, wrong)]
+        # BUG-27 regression: switching the selection after answering must not
+        # record a second attempt (the card locks on first answer).
+        right = plan.questions[0].answer
+        card._answer_mcq(right)
+        assert got == [(0, False, wrong)], "quiz card re-recorded after answering"
+        assert card._answered and all(
+            not b.isEnabled() for b in card._group.buttons()
+        ), "quiz card not locked after answering"
         lv.set_course_summary("Quiz score 0/1. Review orbital shape next.")
         assert "Review orbital shape" in lv._course_status.text()
     finally:

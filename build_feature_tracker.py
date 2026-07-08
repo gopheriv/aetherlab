@@ -2059,8 +2059,8 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "`CourseProgressStore.record_quiz_answer()` persists attempts by lesson_key with correctness, choice, concept, and timestamp; LessonView question cards emit graded answers; MainWindow records them and updates the course status strip. Implementation reference: aetherlab/services/course_mode.py:23 / aetherlab/services/course_mode.py:29 / aetherlab/services/course_mode.py:117 / aetherlab/ui/widgets.py:3466 / aetherlab/ui/main_window.py:1259.",
         "If progress cannot be saved, the status bar reports the issue and the lesson remains usable.",
         "harness",
-        "PASS",
-        "None",
+        "FAIL",
+        "BUG-27",
         "PASS",
     ),
     "F168": _story_tuple(
@@ -2206,6 +2206,7 @@ DEFECTS: dict[str, str] = {
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
     "F34": "BUG-23: solve cache accepted any existing video path, including zero-byte/corrupt MP4s; cached rendered scenes now require a playable video. BUG-25: UI worker now uses the same playable-video guard instead of Path.exists().",
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
+    "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
 }
 
 
