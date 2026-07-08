@@ -2246,6 +2246,49 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F128": ("PASS", "None", "PASS"),
     "F129": ("PASS", "None", "PASS"),
     "F130": ("PASS", "None", "PASS"),
+    # ── Batch 5: Product / Render / Narration / Lesson / Security / Cloud /
+    #    Docs / Quality (F131-F168) ──────────────────────────────────────────
+    # Substantive tests throughout (voiceover rate parsing, SRT timing, lesson
+    # planner curriculum, fact-check in-place, quality-score cache, candidate
+    # tournament, exemplars, secret-guard scan). The three live-cloud stories
+    # (F153/F154/F155) are stub-verified here and were live-smoked historically
+    # (see baseline) but not re-run this session -> PARTIAL, never faked PASS.
+    # F148/F166/F167 already stamped inline. DEFECTS-linked bugs noted.
+    "F131": ("PASS", "None", "PASS"),
+    "F132": ("PASS", "None", "PASS"),
+    "F133": ("PASS", "None", "PASS"),
+    "F134": ("PASS", "None", "PASS"),
+    "F135": ("PASS", "None", "PASS"),
+    "F136": ("PASS", "None", "PASS"),
+    "F137": ("PASS", "None", "PASS"),
+    "F138": ("PASS", "None", "PASS"),
+    "F139": ("PASS", "None", "PASS"),
+    "F140": ("PASS", "None", "PASS"),
+    "F141": ("PASS", "None", "PASS"),
+    "F142": ("PASS", "None", "PASS"),
+    "F143": ("PASS", "BUG-9; BUG-23", "PASS"),
+    "F144": ("PASS", "None", "PASS"),
+    "F145": ("PASS", "BUG-8; BUG-9", "PASS"),
+    "F146": ("PASS", "None", "PASS"),
+    "F147": ("PASS", "BUG-7", "PASS"),
+    "F149": ("PASS", "None", "PASS"),
+    "F150": ("PASS", "None", "PASS"),
+    "F151": ("PASS", "None", "PASS"),
+    "F152": ("PASS", "None", "PASS"),
+    "F153": ("PARTIAL", "BUG-19", "PARTIAL"),
+    "F154": ("PARTIAL", "BUG-15; BUG-17; BUG-18; BUG-20", "PARTIAL"),
+    "F155": ("PARTIAL", "None", "PARTIAL"),
+    "F156": ("PASS", "None", "PASS"),
+    "F157": ("PASS", "None", "PASS"),
+    "F158": ("PASS", "None", "PASS"),
+    "F159": ("PASS", "None", "PASS"),
+    "F160": ("PASS", "BUG-16", "PASS"),
+    "F161": ("PASS", "None", "PASS"),
+    "F162": ("PASS", "None", "PASS"),
+    "F163": ("PASS", "None", "PASS"),
+    "F164": ("PASS", "None", "PASS"),
+    "F165": ("PASS", "None", "PASS"),
+    "F168": ("PASS", "None", "PASS"),
 }
 
 
