@@ -27,7 +27,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "visual_regression" / "cases.json"
-DEFAULT_OUT = ROOT / "visual_regression" / "runs" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+DEFAULT_OUT = (
+    ROOT
+    / "visual_regression"
+    / "runs"
+    / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+)
 
 SECRET_ENV_KEYS = (
     "AETHERLAB_OPENAI_API_KEY",
@@ -54,10 +59,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--quality", default="l", choices=("l", "m", "h", "p", "k"))
     parser.add_argument("--limit", type=int, default=0, help="Audit only the first N cases.")
-    parser.add_argument("--regenerate", action="store_true", help="Bypass lesson/chapter caches where supported.")
-    parser.add_argument("--compare", type=Path, default=None, help="Optional previous run directory with summary.json.")
-    parser.add_argument("--strict", action="store_true",
-                        help="Fail (exit 1) on quality violations, soft warnings, and comparison regressions, not just render failures.")
+    parser.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="Bypass lesson/chapter caches where supported.",
+    )
+    parser.add_argument(
+        "--compare",
+        type=Path,
+        default=None,
+        help="Optional previous run directory with summary.json.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Fail (exit 1) on quality violations, soft warnings, and "
+            "comparison regressions, not just render failures."
+        ),
+    )
     args = parser.parse_args(argv)
 
     cases = load_cases(args.cases)
@@ -132,7 +152,12 @@ def _harden_environment() -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
 
 
-async def run_cases(cases: list[dict[str, Any]], out_dir: Path, quality: str, regenerate: bool) -> dict[str, Any]:
+async def run_cases(
+    cases: list[dict[str, Any]],
+    out_dir: Path,
+    quality: str,
+    regenerate: bool,
+) -> dict[str, Any]:
     from aetherlab.core.settings import load_settings
     from aetherlab.services.lesson_pipeline import LessonPipeline
     from aetherlab.services.pipeline import AetherLabPipeline
@@ -158,7 +183,12 @@ async def run_cases(cases: list[dict[str, Any]], out_dir: Path, quality: str, re
         print(f"[{index}/{len(cases)}] render {case['id']}", flush=True)
         try:
             artifact = await render_case(case, pipeline, lesson_pipeline, quality, regenerate)
-            metrics = audit_video(Path(artifact["video_path"]), out_dir, case["id"], artifact.get("srt_path"))
+            metrics = audit_video(
+                Path(artifact["video_path"]),
+                out_dir,
+                case["id"],
+                artifact.get("srt_path"),
+            )
             public_artifact = public_artifact_paths(artifact)
             case_result = {
                 "id": case["id"],
@@ -208,7 +238,10 @@ async def render_case(
             "rendered_chapter_indexes": list(bundle.rendered_chapter_indexes),
         }
 
-    request = ProblemRequest(prompt=str(case["prompt"]), session_id=f"visual-regression-{case['id']}")
+    request = ProblemRequest(
+        prompt=str(case["prompt"]),
+        session_id=f"visual-regression-{case['id']}",
+    )
     if regenerate:
         key = pipeline.cache.ensure_request(request)
         pipeline.cache.clear_artifacts(key)
@@ -225,7 +258,12 @@ async def render_case(
     }
 
 
-def audit_video(video_path: Path, out_dir: Path, case_id: str, srt_path: str | None = None) -> dict[str, Any]:
+def audit_video(
+    video_path: Path,
+    out_dir: Path,
+    case_id: str,
+    srt_path: str | None = None,
+) -> dict[str, Any]:
     if not video_path.exists():
         raise FileNotFoundError(video_path)
 
@@ -245,7 +283,11 @@ def audit_video(video_path: Path, out_dir: Path, case_id: str, srt_path: str | N
     # Treat only near-identical consecutive frames as static. Smooth Manim
     # motion can have low per-frame RMS, especially after compression, so this
     # threshold is intentionally tight and range-based.
-    static_flags = np.concatenate([[False], diffs < 0.035]) if len(diffs) else np.array([False] * len(frames))
+    static_flags = (
+        np.concatenate([[False], diffs < 0.035])
+        if len(diffs)
+        else np.array([False] * len(frames))
+    )
     blank_ranges = flag_ranges(blank_flags, times, min_duration=0.20)
     static_ranges = flag_ranges(static_flags, times, min_duration=0.75)
     transitions = top_transitions(diffs, times)
@@ -329,7 +371,11 @@ def estimate_frame_period(times: np.ndarray) -> float:
     return float(np.median(deltas)) if len(deltas) else 1 / 24
 
 
-def flag_ranges(flags: np.ndarray, times: np.ndarray, min_duration: float) -> list[dict[str, float]]:
+def flag_ranges(
+    flags: np.ndarray,
+    times: np.ndarray,
+    min_duration: float,
+) -> list[dict[str, float]]:
     if len(flags) == 0:
         return []
     period = estimate_frame_period(times)
@@ -398,7 +444,11 @@ SRT_RE = re.compile(
 )
 
 
-def audit_subtitles(path: Path, duration: float, transitions: list[dict[str, float]]) -> dict[str, Any] | None:
+def audit_subtitles(
+    path: Path,
+    duration: float,
+    transitions: list[dict[str, float]],
+) -> dict[str, Any] | None:
     if not path.exists():
         return {"path": public_path(path), "cue_count": 0, "warnings": ["srt path missing"]}
     text = path.read_text(encoding="utf-8", errors="replace").strip()
@@ -419,7 +469,9 @@ def audit_subtitles(path: Path, duration: float, transitions: list[dict[str, flo
             "start": round(start, 3),
             "end": round(end, 3),
             "duration": round(max(0.0, end - start), 3),
-            "nearest_transition_delta": round(nearest_delta, 3) if nearest_delta is not None else None,
+            "nearest_transition_delta": (
+                round(nearest_delta, 3) if nearest_delta is not None else None
+            ),
             "text_sample": body[:90],
         })
     if text and not cues:
@@ -481,10 +533,16 @@ def quality_failures(case: dict[str, Any]) -> list[str]:
         reasons.append(f"duration {duration:.2f}s below {_MIN_DURATION_S:.0f}s floor")
     if fps < _MIN_FPS:
         reasons.append(f"fps {fps:.1f} below {_MIN_FPS:.0f}")
-    longest_blank = max((float(r.get("duration", 0.0)) for r in metrics.get("blank_ranges") or []), default=0.0)
+    longest_blank = max(
+        (float(r.get("duration", 0.0)) for r in metrics.get("blank_ranges") or []),
+        default=0.0,
+    )
     if longest_blank > _MAX_BLANK_SPAN_S:
         reasons.append(f"blank span {longest_blank:.2f}s exceeds {_MAX_BLANK_SPAN_S:.1f}s")
-    longest_static = max((float(r.get("duration", 0.0)) for r in metrics.get("static_ranges") or []), default=0.0)
+    longest_static = max(
+        (float(r.get("duration", 0.0)) for r in metrics.get("static_ranges") or []),
+        default=0.0,
+    )
     if duration > 0 and longest_static > max(3.0, duration * 0.6):
         reasons.append(f"static span {longest_static:.2f}s dominates the {duration:.1f}s render")
     if case.get("kind") == "lesson":
@@ -522,7 +580,10 @@ def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] 
             "duration_delta": round(new_dur - old_dur, 3),
             "frame_count_delta": int(new_metrics["frame_count"]) - int(old_metrics["frame_count"]),
             "blank_ratio_delta": round(new_metrics["blank_ratio"] - old_metrics["blank_ratio"], 4),
-            "static_ratio_delta": round(new_metrics["static_ratio"] - old_metrics["static_ratio"], 4),
+            "static_ratio_delta": round(
+                new_metrics["static_ratio"] - old_metrics["static_ratio"],
+                4,
+            ),
             "regressions": regressions,
         })
     regression_count = sum(len(d["regressions"]) for d in deltas)
@@ -545,7 +606,11 @@ def decide_exit(report: dict[str, Any], *, strict: bool) -> int:
 
 
 def write_outputs(out_dir: Path, report: dict[str, Any]) -> None:
-    (out_dir / "summary.json").write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
+    (out_dir / "summary.json").write_text(
+        json.dumps(report, indent=2),
+        encoding="utf-8",
+        newline="\n",
+    )
     write_metrics_csv(out_dir / "metrics.csv", report)
     (out_dir / "summary.md").write_text(render_summary_md(report), encoding="utf-8", newline="\n")
 
@@ -597,7 +662,10 @@ def render_summary_md(report: dict[str, Any]) -> str:
         metrics = case.get("metrics", {})
         warnings = "; ".join(metrics.get("warnings", [])) if metrics else case.get("error", "")
         lines.append(
-            "| {id} | {kind} | {status} | {duration} | {fps} | {frames} | {blank} | {static} | {warnings} |".format(
+            (
+                "| {id} | {kind} | {status} | {duration} | {fps} | {frames} "
+                "| {blank} | {static} | {warnings} |"
+            ).format(
                 id=case.get("id", ""),
                 kind=case.get("kind", ""),
                 status=case.get("status", ""),
