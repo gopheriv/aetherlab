@@ -12,20 +12,24 @@ Emits: AetherLab_Feature_Tracker.xlsx  (canonical)
 
 Columns per feature:
   ID · Category · Feature · User Story · Expected Behavior (from code) ·
-  Source File(s) · Test Method · Status · Notes
+  Source File(s) · Feature test method · Status · Notes · Story · Persona ·
+  Expected behaviour · Failure-mode expectation · Test method · Phase-2 result ·
+  Errors found · Phase-4 result
 
 Status vocabulary: Documented · PASS · FAIL · PARTIAL · FIXED
-Test Method:       headless (import+run) · static (source assertion) · gui (manual)
+Feature test method: headless (import+run) · static (source assertion) · gui (manual)
+Story Test method:   harness · scripted-ui · manual · live-cloud
 """
 
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 # fmt: off
 # (ID, Category, Feature, User Story, Expected Behavior, Sources, TestMethod, Status, Notes)
-FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
+FEATURES: list[tuple[str, ...]] = [
     # ── Launch / CLI ────────────────────────────────────────────────────────
     ("F01", "Launch", "GUI launch via CLI",
      "As a user, I run `python -m aetherlab` and the desktop app opens.",
@@ -744,14 +748,149 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
 ]
 # fmt: on
 
-HEADERS = [
+BASE_HEADERS = [
     "ID", "Category", "Feature", "User Story", "Expected Behavior",
-    "Source File(s)", "Test Method", "Status", "Notes",
+    "Source File(s)", "Feature test method", "Status", "Notes",
 ]
+STORY_COLUMNS = [
+    "Story",
+    "Persona",
+    "Expected behaviour",
+    "Failure-mode expectation",
+    "Test method",
+    "Phase-2 result",
+    "Errors found",
+    "Phase-4 result",
+]
+HEADERS = BASE_HEADERS + STORY_COLUMNS
 
 ROOT = Path(__file__).resolve().parent
 XLSX_PATH = ROOT / "AetherLab_Feature_Tracker.xlsx"
 CSV_PATH = ROOT / "AetherLab_Feature_Tracker.csv"
+
+PERSONA_LABELS = {
+    "P1": "P1 Student, no AI key",
+    "P2": "P2 Student, local Ollama",
+    "P3": "P3 Educator, cloud AI + vision critic",
+    "P4": "P4 Power user, cloud rendering",
+    "P5": "P5 Returning user",
+}
+
+PERSONA_PRECONDITIONS = {
+    "P1": "No cloud credentials or API key are required; offline/template paths must remain usable.",
+    "P2": "Local-provider settings may point at Ollama; slow or malformed local output must degrade cleanly.",
+    "P3": "AI-backed generation and optional visual critique may be configured; quality feedback must be visible.",
+    "P4": "A render repository/token may be configured; local rendering and clear fallback remain available.",
+    "P5": "The data directory may already contain settings, caches, history, progress, or old exported bundles.",
+}
+
+FAILURE_EXPECTATIONS = {
+    "cloud": "If cloud credentials, workflow provisioning, polling, or artifact download fails, the user sees a masked, actionable status and local fallback remains available.",
+    "render": "If rendering fails, times out, or returns a missing/corrupt video, the user sees a failure state and can retry without stale artifacts being treated as valid.",
+    "lesson": "If lesson planning, chapter rendering, narration, or assembly fails, successful partial context is preserved and the user sees which step failed.",
+    "settings": "If saved config, environment values, or legacy files are absent/corrupt, defaults are used and secrets are never exposed.",
+    "cache": "If cached data is missing, stale, corrupt, or schema-drifted, the app rebuilds or falls back instead of surfacing stale paths or KeyErrors.",
+    "export": "If an export target is unavailable or an asset is missing, the user gets a clear error and no share bundle leaks secrets or absolute private paths.",
+    "default": "If the dependency, file, or service behind this feature is unavailable, the user sees a recoverable message instead of a stack trace or dead control.",
+}
+
+
+def _persona_for(category: str, feature: str, source: str) -> str:
+    text = f"{category} {feature} {source}".lower()
+    if any(key in text for key in ("cloud", "render repo", "github", "workflow")):
+        return "P4"
+    if any(key in text for key in ("ollama", "provider", "qwen", "local model")):
+        return "P2"
+    if any(key in text for key in ("history", "cache", "progress", "settings", "bundle", "export", "library")):
+        return "P5"
+    if any(key in text for key in ("critic", "quality", "prompt quality", "tournament", "exemplar")):
+        return "P3"
+    return "P1"
+
+
+def _failure_expectation(category: str, feature: str, expected: str) -> str:
+    text = f"{category} {feature} {expected}".lower()
+    for key in ("cloud", "render", "lesson", "settings", "cache", "export"):
+        if key in text:
+            return FAILURE_EXPECTATIONS[key]
+    return FAILURE_EXPECTATIONS["default"]
+
+
+def _story_test_method(category: str, feature: str, source: str, legacy_method: str) -> str:
+    text = f"{category} {feature} {source}".lower()
+    if "cloud" in text and any(key in text for key in ("dispatch", "poll", "artifact", "workflow", "render")):
+        return "live-cloud"
+    if legacy_method == "gui":
+        return "scripted-ui"
+    if legacy_method in {"headless", "static"}:
+        return "harness"
+    return "manual"
+
+
+def _story_steps(feature: str, legacy_method: str) -> str:
+    if legacy_method == "gui":
+        return (
+            f"1. Open AetherLab. 2. Navigate to the UI surface for {feature}. "
+            "3. Perform the visible action. 4. Observe the window state, artifact, or message."
+        )
+    if legacy_method == "headless":
+        return (
+            f"1. Run the harness or command path for {feature}. "
+            "2. Inspect the returned object, generated artifact, or persisted state."
+        )
+    return (
+        f"1. Read and trigger the code path for {feature}. "
+        "2. Assert the documented branch, guard, or wiring remains present."
+    )
+
+
+def _line_ref_for_token(token: str) -> str | None:
+    cleaned = token.strip().strip("(),")
+    if not cleaned or "." not in cleaned:
+        return None
+    if cleaned.startswith("aetherlab/"):
+        candidate = ROOT / cleaned
+    elif cleaned.startswith(("tools/", "docs/", ".github/")):
+        candidate = ROOT / cleaned
+    elif cleaned in {"build_feature_tracker.py", "test_features.py", "feature_test_results.json", "ERRORS_FOUND.md"}:
+        candidate = ROOT / cleaned
+    elif cleaned == "__main__.py":
+        candidate = ROOT / "aetherlab" / cleaned
+    elif cleaned.startswith(("core/", "services/", "ui/")):
+        candidate = ROOT / "aetherlab" / cleaned
+    else:
+        candidate = ROOT / cleaned
+    return f"{cleaned}:1" if candidate.exists() else None
+
+
+def _source_line_refs(source: str) -> str:
+    refs: list[str] = []
+    for match in re.finditer(r"[\w./-]+\.(?:py|md|yml|json|bat)", source):
+        ref = _line_ref_for_token(match.group(0))
+        if ref and ref not in refs:
+            refs.append(ref)
+    return " / ".join(refs) if refs else source
+
+
+def _story_fields(row: tuple[str, ...]) -> tuple[str, ...]:
+    fid, category, feature, user_story, expected, source, legacy_method, _status, _notes = row[:9]
+    persona = _persona_for(category, feature, source)
+    story = (
+        f"US-{fid}: As {PERSONA_LABELS[persona]}, when I use {feature}, I expect the observable "
+        f"behaviour described by the implementation. Preconditions: "
+        f"{PERSONA_PRECONDITIONS[persona]} Steps: {_story_steps(feature, legacy_method)} "
+        f"Primary existing story: {user_story}"
+    )
+    expected_behaviour = f"{expected} Implementation reference: {_source_line_refs(source)}."
+    failure = _failure_expectation(category, feature, expected)
+    story_method = _story_test_method(category, feature, source, legacy_method)
+    return (story, persona, expected_behaviour, failure, story_method, "PENDING", "None", "PENDING")
+
+
+FEATURES = [
+    row if len(row) > len(BASE_HEADERS) else row + _story_fields(row)
+    for row in FEATURES
+]
 
 
 def write_csv() -> None:
@@ -804,7 +943,7 @@ def write_xlsx() -> None:
             ws.cell(row=r, column=8).fill = PatternFill("solid", fgColor=sfill)
             ws.cell(row=r, column=8).font = Font(bold=True)
 
-    widths = [7, 13, 30, 46, 66, 30, 12, 12, 40]
+    widths = [7, 13, 30, 46, 66, 30, 12, 12, 40, 58, 12, 72, 58, 16, 16, 24, 16]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -836,7 +975,7 @@ def set_status(feature_id: str, status: str, note: str = "") -> None:
     """Update a feature's status/notes in-place (used by the test phases)."""
     for i, row in enumerate(FEATURES):
         if row[0] == feature_id:
-            FEATURES[i] = row[:7] + (status, note)
+            FEATURES[i] = row[:7] + (status, note) + row[9:]
             return
     raise KeyError(feature_id)
 

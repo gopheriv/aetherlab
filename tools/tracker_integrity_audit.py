@@ -22,7 +22,20 @@ ERRORS_FOUND = ROOT / "ERRORS_FOUND.md"
 
 VALID_STATUSES = {"Documented", "PASS", "FAIL", "PARTIAL", "FIXED"}
 VALID_TEST_METHODS = {"headless", "static", "gui"}
+VALID_PERSONAS = {"P1", "P2", "P3", "P4", "P5"}
+VALID_STORY_TEST_METHODS = {"harness", "scripted-ui", "manual", "live-cloud"}
+VALID_PHASE_RESULTS = {"PENDING", "PASS", "FAIL", "BLOCKED", "PARTIAL", "DEFERRED"}
 VALID_RESULTS = {"PASS", "FAIL"}
+REQUIRED_STORY_COLUMNS = [
+    "Story",
+    "Persona",
+    "Expected behaviour",
+    "Failure-mode expectation",
+    "Test method",
+    "Phase-2 result",
+    "Errors found",
+    "Phase-4 result",
+]
 
 
 def _load_generator() -> Any:
@@ -97,6 +110,12 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         issues.append(f"CSV headers differ from generator: {csv_headers!r}")
     if xlsx_headers != module.HEADERS:
         issues.append(f"XLSX headers differ from generator: {xlsx_headers!r}")
+    missing_story_columns = [col for col in REQUIRED_STORY_COLUMNS if col not in csv_headers]
+    if missing_story_columns:
+        issues.append(f"CSV missing story columns: {missing_story_columns}")
+    xlsx_missing_story_columns = [col for col in REQUIRED_STORY_COLUMNS if col not in xlsx_headers]
+    if xlsx_missing_story_columns:
+        issues.append(f"XLSX missing story columns: {xlsx_missing_story_columns}")
     if csv_rows != expected:
         issues.append("CSV rows differ from build_feature_tracker.py after apply_results().")
     if xlsx_rows != expected:
@@ -117,8 +136,21 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
             issues.append(f"{fid} missing Expected Behavior")
         if row["Status"] not in VALID_STATUSES:
             issues.append(f"{fid} invalid status {row['Status']!r}")
-        if row["Test Method"] not in VALID_TEST_METHODS:
-            issues.append(f"{fid} invalid test method {row['Test Method']!r}")
+        if row["Feature test method"] not in VALID_TEST_METHODS:
+            issues.append(f"{fid} invalid feature test method {row['Feature test method']!r}")
+        for col in REQUIRED_STORY_COLUMNS:
+            if not row.get(col, "").strip():
+                issues.append(f"{fid} missing {col}")
+        if row.get("Story") and not row["Story"].startswith(f"US-{fid}:"):
+            issues.append(f"{fid} story id does not match feature id")
+        if row.get("Persona") and row["Persona"] not in VALID_PERSONAS:
+            issues.append(f"{fid} invalid persona {row['Persona']!r}")
+        if row.get("Test method") and row["Test method"] not in VALID_STORY_TEST_METHODS:
+            issues.append(f"{fid} invalid story test method {row['Test method']!r}")
+        if row.get("Phase-2 result") and row["Phase-2 result"] not in VALID_PHASE_RESULTS:
+            issues.append(f"{fid} invalid Phase-2 result {row['Phase-2 result']!r}")
+        if row.get("Phase-4 result") and row["Phase-4 result"] not in VALID_PHASE_RESULTS:
+            issues.append(f"{fid} invalid Phase-4 result {row['Phase-4 result']!r}")
 
     csv_id_set = set(feature_ids)
     result_ids = set(results)
@@ -162,6 +194,7 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         "ok": not issues,
         "issues": issues,
         "feature_count": len(csv_rows),
+        "story_count": sum(1 for row in csv_rows if row.get("Story", "").strip()),
         "result_count": len(results),
         "test_count": len(test_ids),
         "defect_count": len(defect_ids),

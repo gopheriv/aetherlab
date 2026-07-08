@@ -3487,11 +3487,13 @@ def t_f165():
 
     report = audit(allow_pending_result="F168")
     assert report["feature_count"] >= 168, report
+    assert report["story_count"] == report["feature_count"], report
     assert report["result_count"] >= report["feature_count"] - 1, report
     assert report["test_count"] == report["feature_count"], report
     assert report["ok"], report["issues"]
     return (
         f"tracker integrity: {report['feature_count']} features/"
+        f"{report['story_count']} stories/"
         f"{report['result_count']} results/{report['test_count']} tests aligned (F165)"
     )
 
