@@ -749,6 +749,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a maintainer, a release cannot silently lower scene/lesson quality: a committed golden-set baseline gates every run.",
      "tools/prompt_quality_lab.py expands the canonical prompt set to a 12-prompt golden set spanning mechanics/waves/fields/orbital plus a lesson, all renderable keyless so the baseline is reproducible. evaluate_gate() is a pure ratchet: it fails (CLI exit 2) when a run's mean score drops beyond --score-tolerance (render-noise headroom, default 0.5) or the render pass rate drops at all vs the committed tools/prompt_quality_baseline.json. --gate/--baseline/--score-tolerance wire it into the CLI so it can guard later Quality-Flywheel phases. Phase 0 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "tools/prompt_quality_lab.py / tools/prompt_quality_baseline.json / docs/QUALITY_FLYWHEEL_MISSION.md", "headless", "Documented", ""),
+    ("F170", "Quality", "Per-axis critic rubric + no-vision fallback",
+     "As a maintainer, the visual critic scores each render on five explicit axes so candidates can be ranked and losers can be diagnosed — even with no vision model.",
+     "services/scene_critic.py defines CRITIC_AXES (legibility/composition/palette/structure/substance, 0-2 each = 0-10). CRITIC_SYSTEM_PROMPT requests a per-axis breakdown; critique_video parses it via _coerce_breakdown, which validates against the fixed schema and — rather than silently zeroing malformed LLM output (the BUG-7 lesson) — spreads a valid aggregate score evenly and flags it vision-approx. static_quality_estimate() maps the scene_validation static battery (+ optional visual-regression metrics) onto the same axes for a deterministic, discriminating keyless proxy (verdict stays skipped). SceneBundle persists critique_breakdown backward-compatibly; all three manim_runtime copy sites propagate it and the tournament ranks keyless candidates by the static proxy instead of dropping them. prompt_quality_lab surfaces the breakdown without changing the gated score. Phase 1 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "services/scene_critic.py / core/models.py / services/manim_runtime.py / tools/prompt_quality_lab.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2087,6 +2091,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "If the baseline file is missing the gate exits 3 with an actionable message; render non-determinism within tolerance never trips the gate.",
         "harness",
     ),
+    "F170": _story_tuple(
+        "US-F170: As P3 Educator, cloud AI + vision critic, when a render is judged, I expect a five-axis 0-2 breakdown I can rank on; and as P1 Student, no AI key, I expect a deterministic static proxy so ranking still works offline. Preconditions: a rendered scene exists. Steps: 1. Parse a critic reply into a breakdown. 2. Feed a malformed breakdown and confirm it is approximated, not zeroed. 3. Estimate a keyless scene statically and confirm a worse scene ranks lower.",
+        "P3",
+        "`CRITIC_AXES` fixes the five 0-2 axes; `_coerce_breakdown()` validates the model's breakdown against the schema and approximates-and-flags malformed output instead of silent-zeroing; `static_quality_estimate()` maps the static battery to the same axes with verdict skipped; `SceneBundle.critique_breakdown` persists backward-compatibly and all three manim_runtime copy sites propagate it. Implementation reference: aetherlab/services/scene_critic.py:1 / aetherlab/core/models.py:145 / aetherlab/services/manim_runtime.py:266.",
+        "Malformed LLM breakdowns are approximated (never silent-zeroed); old caches without the field load cleanly; keyless mode ranks by the static proxy without a vision model; the critic never raises.",
+        "harness",
+    ),
 }
 
 
@@ -2305,6 +2316,11 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # logic is unit-tested deterministically (synthetic + committed baseline);
     # the committed baseline was generated from a real keyless 12-prompt run.
     "F169": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 1 (F170) ─────────────────────────────────────
+    # Per-axis rubric + backward-compatible persistence + static no-vision
+    # proxy, all deterministically unit-tested (coerce/approx/static/round-trip)
+    # without a live vision model or a render.
+    "F170": ("PASS", "None", "PASS"),
 }
 
 

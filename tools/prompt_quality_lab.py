@@ -374,10 +374,27 @@ def storyboard_summary(storyboard: dict | None) -> dict[str, Any]:
 
 
 def critic_summary(scene: Any) -> dict[str, Any]:
+    # Per-axis breakdown for visibility (F170). When the scene carries a real
+    # vision breakdown, surface it; otherwise (keyless/offline — the golden set's
+    # default) attach the static proxy so reports still show per-axis quality.
+    # This is INFORMATIONAL ONLY: `score` stays the persisted vision score, so
+    # score_case() and the committed --gate baseline are unaffected.
+    breakdown = {str(k): float(v) for k, v in (getattr(scene, "critique_breakdown", {}) or {}).items()}
+    source = "vision" if breakdown else ""
+    if not breakdown:
+        try:
+            from aetherlab.services.scene_critic import static_quality_estimate
+
+            est = static_quality_estimate(str(getattr(scene, "code", "") or ""))
+            breakdown, source = est.breakdown, est.breakdown_source
+        except Exception:  # noqa: BLE001 — report enrichment must never fail a run
+            breakdown, source = {}, ""
     return {
         "score": float(getattr(scene, "quality_score", 0.0) or 0.0),
         "verdict": str(getattr(scene, "critique_verdict", "") or "skipped"),
         "issues": [str(i) for i in getattr(scene, "critique_issues", []) or []],
+        "breakdown": breakdown,
+        "breakdown_source": source,
     }
 
 

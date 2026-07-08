@@ -31,9 +31,21 @@ log = logging.getLogger(__name__)
 
 _FRAME_DIR = Path(tempfile.gettempdir()) / "aetherlab" / "critic_frames"
 
+# The five rubric axes, each scored 0-2, summing to the 0-10 total. Fixed and
+# ordered so per-axis scores are comparable across runs and models — the
+# flywheel ranks candidates on these, and Phase 3 learns from the weakest axis.
+CRITIC_AXES: tuple[str, ...] = (
+    "legibility",
+    "composition",
+    "palette",
+    "structure",
+    "substance",
+)
+_AXIS_MAX = 2.0
+
 CRITIC_SYSTEM_PROMPT = """You are the AetherLab visual critic — a demanding animation director reviewing
 frames sampled uniformly from a rendered Manim physics scene. Judge the RENDER,
-not the idea. Score against this rubric:
+not the idea. Score each axis from 0 (broken) to 2 (excellent):
 
 1. LEGIBILITY — all text readable, nothing cut off by the frame edge,
    no overlapping elements collapsing into clutter.
@@ -47,10 +59,14 @@ not the idea. Score against this rubric:
 5. SUBSTANCE — the physics is actually visualized (motion, curves, fields),
    not just a title card; frames change meaningfully across the video.
 
+The total score is the sum of the five axes (0-10).
+
 Return STRICT JSON only:
 {"verdict": "ship" | "revise",
  "score": <0-10>,
- "issues": ["specific, actionable problems, worst first"],
+ "breakdown": {"legibility": 0-2, "composition": 0-2, "palette": 0-2,
+               "structure": 0-2, "substance": 0-2},
+ "issues": ["specific, actionable problems, worst first; name the weak axis"],
  "strengths": ["what works"]}
 
 Verdict "ship" requires score >= 7 and no legibility failures. Be strict:
@@ -63,10 +79,39 @@ class Critique:
     score: float = 0.0
     issues: list[str] = field(default_factory=list)
     strengths: list[str] = field(default_factory=list)
+    # Per-axis 0-2 scores (keys == CRITIC_AXES). Empty when no judgement was
+    # made. `breakdown_source` records how it was produced so callers never
+    # mistake an approximation or a static proxy for a real vision judgement:
+    #   "vision"        — the vision model returned a valid per-axis breakdown
+    #   "vision-approx" — vision gave a score but a malformed/absent breakdown,
+    #                     reconstructed evenly from the aggregate score
+    #   "static"        — no vision available; heuristic proxy from static gates
+    #   ""              — no breakdown at all (skipped, empty)
+    breakdown: dict[str, float] = field(default_factory=dict)
+    breakdown_source: str = ""
 
     @property
     def should_revise(self) -> bool:
         return self.verdict == "revise"
+
+
+def _coerce_breakdown(raw: object, score: float) -> tuple[dict[str, float], str]:
+    """Validate a model-supplied per-axis breakdown against the fixed schema.
+
+    Returns ``(breakdown, source)``. A well-formed breakdown (a dict carrying
+    every axis with a numeric value) is clamped to 0-2 and returned as
+    ``"vision"``. Anything malformed is NOT silently zeroed (the BUG-7 lesson):
+    a valid aggregate ``score`` is instead spread evenly across the axes and
+    flagged ``"vision-approx"`` so the caller knows it is an approximation.
+    """
+    if isinstance(raw, dict) and all(
+        axis in raw and isinstance(raw.get(axis), (int, float)) and not isinstance(raw.get(axis), bool)
+        for axis in CRITIC_AXES
+    ):
+        return {a: max(0.0, min(_AXIS_MAX, float(raw[a]))) for a in CRITIC_AXES}, "vision"
+    # Approximate from the aggregate score, spread evenly, clamped per axis.
+    per_axis = max(0.0, min(_AXIS_MAX, float(score) / len(CRITIC_AXES)))
+    return {a: round(per_axis, 3) for a in CRITIC_AXES}, "vision-approx"
 
 
 def extract_frames(video_path: str | Path, count: int = 6) -> list[Path]:
@@ -243,12 +288,82 @@ async def critique_video(
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         payload = json.loads(match.group(0) if match else raw)
         verdict = str(payload.get("verdict", "ship")).lower()
+        score = float(payload.get("score", 0.0) or 0.0)
+        breakdown, source = _coerce_breakdown(payload.get("breakdown"), score)
         return Critique(
             verdict="revise" if verdict == "revise" else "ship",
-            score=float(payload.get("score", 0.0) or 0.0),
+            score=score,
             issues=[str(i) for i in payload.get("issues", [])],
             strengths=[str(s) for s in payload.get("strengths", [])],
+            breakdown=breakdown,
+            breakdown_source=source,
         )
     except Exception as exc:  # noqa: BLE001 — critique must never break renders
         log.info("Visual critique unavailable (%s); shipping render as-is.", exc)
         return Critique(verdict="skipped")
+
+
+def static_quality_estimate(
+    code: str, metrics: dict | None = None
+) -> Critique:
+    """Heuristic per-axis proxy when no vision model can watch the render.
+
+    Keyless/offline is the common case; without this the flywheel has no signal
+    to rank candidates and the tournament silently drops them all. This maps the
+    existing *static* gates (``services/scene_validation``) — and optional render
+    metrics from ``tools/visual_regression.audit_video`` — onto the same five
+    axes so ranking is deterministic and discriminating (a worse scene scores
+    lower), never random.
+
+    ``verdict`` stays ``"skipped"`` so this is never mistaken for a real vision
+    judgement; ``breakdown_source`` is ``"static"``.
+    """
+    # Import here so this module keeps importing with no heavy deps.
+    from aetherlab.services.scene_validation import (
+        check_latex_strings,
+        estimate_duration,
+        scene_hygiene_warnings,
+        validate_scene,
+    )
+
+    axes = {a: _AXIS_MAX for a in CRITIC_AXES}
+    try:
+        ok, lint_issues = validate_scene(code or "")
+        if not ok:
+            # A scene that fails the lint battery is structurally broken.
+            axes["legibility"] -= min(1.5, 0.5 * len(lint_issues))
+            axes["structure"] -= min(1.0, 0.5 * len(lint_issues))
+        hygiene = scene_hygiene_warnings(code or "")
+        # Out-of-frame / overlap / leftover-mobject warnings hurt what a viewer
+        # can actually read and how balanced the frame is.
+        axes["legibility"] -= min(1.5, 0.5 * len(hygiene))
+        axes["composition"] -= min(1.5, 0.5 * len(hygiene))
+        if check_latex_strings(code or ""):
+            axes["substance"] -= 0.5
+        est = estimate_duration(code or "")
+        # Pacing/structure: a 2-second scene has no beginning-middle-end; a scene
+        # that never calls play() has no motion (no substance).
+        if est.total_seconds < 4.0:
+            axes["structure"] -= 1.0
+            axes["substance"] -= 0.5
+        elif est.total_seconds < 8.0:
+            axes["structure"] -= 0.5
+        if est.play_calls == 0:
+            axes["substance"] -= 1.5
+        if metrics:
+            blank = float(metrics.get("blank_ratio", 0.0) or 0.0)
+            static = float(metrics.get("static_ratio", 0.0) or 0.0)
+            axes["substance"] -= min(1.5, blank * 6.0 + static * 3.0)
+    except Exception as exc:  # noqa: BLE001 — a proxy must never break a render
+        log.info("Static quality estimate failed (%s); returning neutral proxy.", exc)
+
+    breakdown = {a: round(max(0.0, min(_AXIS_MAX, v)), 3) for a, v in axes.items()}
+    score = round(sum(breakdown.values()), 3)
+    return Critique(
+        verdict="skipped",
+        score=score,
+        issues=[],
+        strengths=[],
+        breakdown=breakdown,
+        breakdown_source="static",
+    )

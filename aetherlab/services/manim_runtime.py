@@ -49,6 +49,7 @@ class SceneCandidate:
     score: float = 0.0
     verdict: str = ""
     issues: list[str] = field(default_factory=list)
+    breakdown: dict[str, float] = field(default_factory=dict)
     duration_delta: float = 9999.0
 
 
@@ -266,6 +267,7 @@ class ManimRuntime:
                 quality_score=winner.score,
                 critique_verdict=winner.verdict,
                 critique_issues=list(winner.issues),
+                critique_breakdown=dict(winner.breakdown),
             )
             return await self.render_scene_with_repair(
                 selected, s, quality=quality, brief=brief or request.prompt, progress=progress
@@ -380,15 +382,24 @@ class ManimRuntime:
                 brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
                 crit = await critique_video(draft.video_path, brief, settings, frame_count=frame_count)
                 if crit.verdict == "skipped":
-                    return None
+                    # No vision judgement (keyless/offline). Instead of dropping
+                    # the candidate — which would leave the tournament with no
+                    # ranking signal and silently collapse to the single path —
+                    # score it with the static per-axis proxy so ranking is
+                    # deterministic and discriminating.
+                    from aetherlab.services.scene_critic import static_quality_estimate
+
+                    crit = static_quality_estimate(draft.code)
                 draft.quality_score = float(crit.score or 0.0)
                 draft.critique_verdict = str(crit.verdict or "")
                 draft.critique_issues = list(crit.issues)
+                draft.critique_breakdown = dict(crit.breakdown)
                 candidate.scene = draft
                 candidate.draft_video_path = draft.video_path
                 candidate.score = draft.quality_score
                 candidate.verdict = draft.critique_verdict
                 candidate.issues = list(draft.critique_issues)
+                candidate.breakdown = dict(crit.breakdown)
                 return candidate
 
         results = await asyncio.gather(*(run_one(c) for c in candidates))
@@ -686,6 +697,7 @@ class ManimRuntime:
                 scene_bundle.quality_score = float(crit.score or 0.0)
                 scene_bundle.critique_verdict = str(crit.verdict or "")
                 scene_bundle.critique_issues = list(crit.issues)
+                scene_bundle.critique_breakdown = dict(crit.breakdown)
                 if crit.verdict == "skipped":
                     break
                 scene_bundle.diagnostics.append(

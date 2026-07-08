@@ -142,6 +142,10 @@ class SceneBundle:
     quality_score: float = 0.0
     critique_verdict: str = ""
     critique_issues: list[str] = field(default_factory=list)
+    # Per-axis 0-2 critic breakdown (keys == scene_critic.CRITIC_AXES). Empty on
+    # old cache rows and when no judgement was made; additive, so reuse behaviour
+    # is unchanged.
+    critique_breakdown: dict[str, float] = field(default_factory=dict)
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -165,6 +169,12 @@ class SceneBundle:
             critique_verdict=str(payload.get("critique_verdict", "")),
             critique_issues=[str(i) for i in payload.get("critique_issues", [])]
             if isinstance(payload.get("critique_issues"), list) else [],
+            critique_breakdown={
+                str(k): float(v)
+                for k, v in payload.get("critique_breakdown", {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            if isinstance(payload.get("critique_breakdown"), dict) else {},
         )
 
 

@@ -3817,6 +3817,61 @@ def t_f169():
     return "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
 
 
+def t_f170():
+    # Quality Flywheel Phase 1: the trustworthy per-axis judge.
+    import inspect
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services import scene_critic as sc
+    from aetherlab.services.scene_critic import (
+        CRITIC_AXES, Critique, _coerce_breakdown, static_quality_estimate,
+    )
+
+    assert set(CRITIC_AXES) == {"legibility", "composition", "palette", "structure", "substance"}
+
+    # A well-formed breakdown validates as "vision" and is clamped 0-2.
+    good = {"legibility": 2, "composition": 1.5, "palette": 2, "structure": 1, "substance": 9}
+    b, src = _coerce_breakdown(good, 8.0)
+    assert src == "vision" and b["substance"] == 2.0 and set(b) == set(CRITIC_AXES), (src, b)
+    # BUG-7 lesson: a malformed breakdown with a valid score is NOT silent-zeroed
+    # — it is approximated from the score and flagged, not dropped.
+    b2, src2 = _coerce_breakdown({"legibility": "oops"}, 6.0)
+    assert src2 == "vision-approx" and abs(sum(b2.values()) - 6.0) < 1e-6 and all(v > 0 for v in b2.values()), (src2, b2)
+
+    # The rubric prompt asks for the per-axis breakdown.
+    assert '"breakdown"' in sc.CRITIC_SYSTEM_PROMPT and "0-2" in sc.CRITIC_SYSTEM_PROMPT
+
+    # Static no-vision proxy: non-zero, discriminating, verdict stays "skipped".
+    good_code = ("from manim import *\nclass S(Scene):\n    def construct(self):\n"
+                 "        for i in range(5):\n            self.play(Create(Dot()), run_time=2)\n        self.wait(2)\n")
+    bad_code = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.add(Text('x'))\n"
+    eg, eb = static_quality_estimate(good_code), static_quality_estimate(bad_code)
+    assert eg.breakdown_source == "static" and eg.verdict == "skipped"
+    assert eg.score > 0 and set(eg.breakdown) == set(CRITIC_AXES)
+    assert eb.score < eg.score, (eb.score, eg.score)  # a worse scene ranks lower
+    # metrics (blank/static frames) push substance down.
+    noisy = static_quality_estimate(good_code, {"blank_ratio": 0.5, "static_ratio": 0.5})
+    assert noisy.breakdown["substance"] < eg.breakdown["substance"]
+
+    # SceneBundle persists the breakdown and round-trips; OLD payloads still load.
+    sb = SceneBundle("S", "c", "manim", "rendered", critique_breakdown={"legibility": 2.0})
+    rt = SceneBundle.from_json(sb.to_json())
+    assert rt.critique_breakdown == {"legibility": 2.0}
+    assert SceneBundle.from_json({"class_name": "S", "code": "c"}).critique_breakdown == {}
+    # a malformed persisted breakdown coerces cleanly, never raises.
+    assert SceneBundle.from_json({"critique_breakdown": {"legibility": "x", "composition": 1}}).critique_breakdown == {"composition": 1.0}
+
+    # All three manim_runtime critique-copy sites propagate the breakdown, and the
+    # tournament uses the static proxy instead of dropping keyless candidates.
+    rt_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]))
+    assert rt_src.count("critique_breakdown") >= 3, "all three copy sites must carry the breakdown"
+    assert "static_quality_estimate" in rt_src, "keyless candidates must be statically scored, not dropped"
+
+    # Critique default is backward-compatible (empty breakdown, no source).
+    assert Critique(verdict="skipped").breakdown == {} and Critique(verdict="skipped").breakdown_source == ""
+    return "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 
