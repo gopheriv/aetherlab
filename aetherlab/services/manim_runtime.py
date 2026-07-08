@@ -92,6 +92,33 @@ def candidate_budget(storyboard: dict | None, cap: int) -> int:
     return max(1, min(cap, 1 + int(difficulty * (cap - 1))))
 
 
+# Default candidate cap when the tournament runs auto-on for a configured user.
+AUTO_TOURNAMENT_CAP = 3
+
+
+def effective_candidate_cap(settings: "AppSettings | None") -> int:
+    """The effective candidate cap in [1, 8] (Phase 6: default-on, safely).
+
+    An explicit ``scene_candidates > 1`` is the power-user override. Otherwise,
+    when a vision critic (API key + vision model) is configured and
+    ``auto_tournament`` is on, default to ``AUTO_TOURNAMENT_CAP`` so configured
+    users get the multi-candidate quality loop with no extra clicks — Phase-4
+    escalation keeps the *typical* cost at one render. Keyless/offline (no
+    critic) stays at 1: exactly one render, exactly as fast as before.
+    """
+    if settings is None:
+        return 1
+    explicit = int(getattr(settings, "scene_candidates", 1) or 1)
+    if explicit > 1:
+        return min(explicit, 8)
+    has_critic = bool(
+        getattr(settings, "openai_api_key", None) and getattr(settings, "vision_model", None)
+    )
+    if has_critic and bool(getattr(settings, "auto_tournament", True)):
+        return AUTO_TOURNAMENT_CAP
+    return 1
+
+
 def detect_latex() -> bool:
     """True when a LaTeX toolchain is available for Manim's MathTex/Tex.
 
@@ -254,11 +281,14 @@ class ManimRuntime:
 
     def scene_tournament_enabled(self, settings: "AppSettings | None" = None) -> bool:
         s = settings or self._settings
+        # Requires a vision critic (to rank candidates) and an effective cap > 1
+        # — which is true either by an explicit scene_candidates>1 or by the
+        # auto_tournament default. Keyless/offline always resolves to 1 → off.
         return bool(
             s is not None
-            and int(getattr(s, "scene_candidates", 1) or 1) > 1
             and getattr(s, "openai_api_key", None)
             and getattr(s, "vision_model", None)
+            and effective_candidate_cap(s) > 1
         )
 
     async def generate_render_tournament(
@@ -281,7 +311,7 @@ class ManimRuntime:
             )
 
         try:
-            cap = max(1, min(int(getattr(s, "scene_candidates", 1) or 1), 8))
+            cap = effective_candidate_cap(s)
             # Cheap-first (Phase 4): render ONE candidate, then fan out the rest
             # of a difficulty-scaled budget ONLY if that first render is weak.
             first_built = await self._build_scene_candidates(
@@ -428,7 +458,7 @@ class ManimRuntime:
             estimate_duration, scene_hygiene_warnings, validate_scene,
         )
 
-        cap = max(1, min(int(getattr(settings, "scene_candidates", 1) or 1), 8))
+        cap = effective_candidate_cap(settings)
         n = cap if count is None else max(0, int(count))
         engine, base_diagnostics = self.detect_engine()
         generator = SceneGenerator(settings)

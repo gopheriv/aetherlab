@@ -777,6 +777,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a power user, I open a render-farm dashboard to see each job's status, per-candidate scores, the winner, sanitized failures, and any local fallback.",
      "ui/ledger_panel.RenderLedgerPanel is a self-contained read-only widget (its own module, not widgets.py) that lists render-ledger jobs and, per job, shows the status timeline, per-candidate critic scores with the winner highlighted, the sanitized failure log tail, and the local-fallback reason/output path. It reads services/render_ledger (already scrubbed at write time), shows an empty state when there are no jobs, and never crashes on a missing/corrupt ledger. SettingsDialog exposes it via a 'View render ledger' button in the cloud row (_open_render_ledger opens it in a dialog). docs/CLOUD_RENDERING.md explains debugging cloud renders from the dashboard. Phase 5 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "ui/ledger_panel.py / ui/main_window.py", "gui", "Documented", ""),
+    ("F177", "Quality", "Multi-candidate quality default-on (configured critics)",
+     "As a user with a vision critic configured, I get the multi-candidate quality loop automatically — no extra clicks — while keyless/offline stays exactly as fast.",
+     "core/settings.auto_tournament (bool, default True; env AETHERLAB_AUTO_TOURNAMENT + app-config, round-trips through the Settings dialog). manim_runtime.effective_candidate_cap() returns the effective cap: an explicit scene_candidates>1 wins; else, when a vision critic (api key + vision model) is configured and auto_tournament is on, it defaults to AUTO_TOURNAMENT_CAP (3); else 1. scene_tournament_enabled() now gates on a critic AND effective_candidate_cap>1, so configured users get the tournament by default and keyless/offline resolves to a single render, exactly as fast. Phase-4 escalation keeps the typical configured cost at one render. The Settings toggle 'Multi-candidate quality (auto): render extra takes only when the first is weak' opts out. Phase 6 (final) of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "core/settings.py / services/manim_runtime.py / ui/main_window.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2164,6 +2168,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "A missing ledger shows an empty state, not an error; only already-scrubbed data is displayed; the panel constructs offscreen without a media backend.",
         "scripted-ui",
     ),
+    "F177": _story_tuple(
+        "US-F177: As P3 Educator with a vision critic, when I run a solve, I expect the quality tournament to run automatically with no extra clicks; and as P1 Student with no key, I expect exactly one render, exactly as fast. Preconditions: a vision model may or may not be configured. Steps: 1. Resolve the effective cap with/without a critic. 2. Confirm the tournament is on for a critic and off keyless. 3. Toggle it off and confirm single-shot.",
+        "P3",
+        "`auto_tournament` (default True) + `effective_candidate_cap()` make the tournament default-on for a configured vision critic (cap = AUTO_TOURNAMENT_CAP) while keyless/offline resolves to 1; `scene_tournament_enabled()` gates on a critic AND cap>1; a Settings toggle and env override opt out; explicit scene_candidates>1 still wins. Implementation reference: aetherlab/core/settings.py:60 / aetherlab/services/manim_runtime.py:80 / aetherlab/ui/main_window.py:255.",
+        "No vision critic -> single render, never slower; the toggle and env override cleanly disable auto-on; Phase-4 escalation bounds the configured cost.",
+        "harness",
+    ),
 }
 
 
@@ -2402,6 +2413,8 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # ── Quality Flywheel Phase 5 (F175 ledger, F176 dashboard panel) ────────
     "F175": ("PASS", "None", "PASS"),
     "F176": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 6 — final: default-on for configured critics ─
+    "F177": ("PASS", "None", "PASS"),
 }
 
 

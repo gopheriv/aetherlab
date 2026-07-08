@@ -254,6 +254,22 @@ class SettingsDialog(QtWidgets.QDialog):
         vision_hint.setWordWrap(True)
         form.addWidget(vision_hint)
 
+        self._auto_tournament_check = QtWidgets.QCheckBox(
+            "Multi-candidate quality (auto): render extra takes only when the first is weak"
+        )
+        self._auto_tournament_check.setChecked(getattr(settings, "auto_tournament", True))
+        self._auto_tournament_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        form.addWidget(self._auto_tournament_check)
+        auto_hint = QtWidgets.QLabel(
+            "When a vision model is set, AetherLab renders one scene and only "
+            "generates more candidates (picking the best) if that first render "
+            "scores low — so most runs still cost a single render. No effect "
+            "without a vision model."
+        )
+        auto_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        auto_hint.setWordWrap(True)
+        form.addWidget(auto_hint)
+
         # ── References (design v3: web references) ──
         form.addSpacing(4)
         form.addWidget(self._section("REFERENCES"))
@@ -600,6 +616,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "vision_model": self._vision_edit.text().strip() or None,
             "web_references": self._web_refs_check.isChecked(),
             "narration_enabled": self._narration_check.isChecked(),
+            "auto_tournament": self._auto_tournament_check.isChecked(),
             "tts_voice": self._tts_voice_edit.text().strip() or None,
         }
 
@@ -1096,6 +1113,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "vision_model": vals["vision_model"],
                     "web_references": "1" if vals["web_references"] else "0",
                     "narration_enabled": "1" if vals["narration_enabled"] else "0",
+                    "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
                 }
             )
@@ -1118,6 +1136,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 vision_model=vals["vision_model"],
                 web_references=vals["web_references"],
                 narration_enabled=vals["narration_enabled"],
+                auto_tournament=vals["auto_tournament"],
                 tts_voice=vals["tts_voice"] or self.settings.tts_voice,
             )
             self.command_bar.set_quality(vals["default_quality"])

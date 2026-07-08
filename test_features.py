@@ -4178,6 +4178,57 @@ def t_f176():
     return "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
 
 
+def t_f177():
+    # Quality Flywheel Phase 6: default-on for configured critics, safely.
+    import os
+    from dataclasses import replace
+
+    from aetherlab.core.settings import AppSettings, load_settings
+    from aetherlab.services.manim_runtime import (
+        AUTO_TOURNAMENT_CAP, ManimRuntime, effective_candidate_cap,
+    )
+    from aetherlab.ui.main_window import SettingsDialog
+
+    assert AppSettings.__dataclass_fields__["auto_tournament"].default is True
+
+    base = _settings()
+    keyless = replace(base, openai_api_key=None, vision_model=None, scene_candidates=1, auto_tournament=True)
+    critic = replace(base, openai_api_key="k", vision_model="v", scene_candidates=1, auto_tournament=True)
+    off = replace(critic, auto_tournament=False)
+    power = replace(base, openai_api_key="k", vision_model="v", scene_candidates=5, auto_tournament=False)
+
+    # Keyless/offline: exactly one render, tournament off — unchanged and no slower.
+    assert effective_candidate_cap(keyless) == 1
+    assert not ManimRuntime(keyless).scene_tournament_enabled(keyless)
+    # Configured critic: default-on with the auto cap (Phase-4 escalation keeps it cheap).
+    assert effective_candidate_cap(critic) == AUTO_TOURNAMENT_CAP
+    assert ManimRuntime(critic).scene_tournament_enabled(critic)
+    # Opt-out toggle -> single shot again.
+    assert effective_candidate_cap(off) == 1 and not ManimRuntime(off).scene_tournament_enabled(off)
+    # Power-user explicit scene_candidates override wins regardless of the toggle.
+    assert effective_candidate_cap(power) == 5 and ManimRuntime(power).scene_tournament_enabled(power)
+
+    # load_settings honours the env override.
+    old = os.environ.get("AETHERLAB_AUTO_TOURNAMENT")
+    try:
+        os.environ["AETHERLAB_AUTO_TOURNAMENT"] = "0"
+        assert load_settings().auto_tournament is False
+    finally:
+        if old is None:
+            os.environ.pop("AETHERLAB_AUTO_TOURNAMENT", None)
+        else:
+            os.environ["AETHERLAB_AUTO_TOURNAMENT"] = old
+
+    # The Settings dialog exposes the toggle and round-trips it (BUG-4 class).
+    dialog = SettingsDialog(_settings())
+    try:
+        assert hasattr(dialog, "_auto_tournament_check")
+        assert "auto_tournament" in dialog.get_settings()
+    finally:
+        dialog.close()
+    return "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

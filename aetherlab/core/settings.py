@@ -57,6 +57,10 @@ class AppSettings:
     min_quality_score: float = 0.0
     scene_candidates: int = 1
     scene_candidate_concurrency: int = 2
+    # When a vision critic is configured, run the multi-candidate quality
+    # tournament by default (cheap-first escalation keeps it near one render).
+    # Independent of scene_candidates, which is the explicit power-user override.
+    auto_tournament: bool = True
     provider_source: str = "environment"
 
 
@@ -288,6 +292,11 @@ def load_settings() -> AppSettings:
             os.getenv("AETHERLAB_SCENE_CANDIDATE_CONCURRENCY"),
             app_cfg.get("scene_candidate_concurrency"),
             default=2,
+        ),
+        auto_tournament=_as_bool(
+            os.getenv("AETHERLAB_AUTO_TOURNAMENT"),
+            app_cfg.get("auto_tournament"),
+            default=True,
         ),
         provider_source=source,
     )

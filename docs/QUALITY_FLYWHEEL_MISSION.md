@@ -591,3 +591,27 @@ fail-soft for everyone else; the committed golden-set baseline shows mean critic
 score up and success rate not down; the ledger/dashboard makes each tournament
 visible; `F169`–`F177` are cataloged, story-written, tested, and stamped; all
 mechanical gates green; a written hand-audit note accompanies the final status.
+
+---
+
+## Status: SHIPPED (all phases delivered)
+
+The full flywheel is implemented and green. Each phase is one or two catalog
+features, tested and stamped:
+
+| Phase | Feature(s) | What it delivered |
+|---|---|---|
+| 0 · Instrument | F169 | 12-prompt golden set + `--gate` release ratchet (committed baseline mean 5.22) |
+| 1 · Trustworthy judge | F170 | Five-axis critic rubric + defensive parsing + no-vision static proxy |
+| 2 · Parallel fan-out | F171 | Per-candidate cloud `job_id` isolation (closes the BUG-15 race under concurrency) |
+| 3 · Close the loop | F172, F173 | Losers teach (aesthetic pitfalls → prompt); winners teach (human-reviewed exemplar promotion) |
+| 4 · Budget control | F174 | Difficulty-scaled, cheap-first escalation (render 1, fan out only when weak) |
+| 5 · Observe | F175, F176 | Secret-scrubbed render-farm ledger + read-only dashboard panel |
+| 6 · Default-on | F177 | Tournament auto-on for configured critics; keyless stays single-shot; one toggle |
+
+**The loop:** measure → judge → fan-out → learn → spend-wisely → observe →
+default-on. Every phase is fail-soft; keyless/offline users are never slower.
+The committed golden-set baseline stayed at 5.22 throughout (the keyless path
+never enters the tournament), so `--gate` protected the offline floor at every
+step. A provider-backed baseline (`--allow-provider`) can be committed later to
+also ratchet the quality keyed users see.

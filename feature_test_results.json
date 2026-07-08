@@ -653,11 +653,11 @@
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 64/64 current surfaces (F164)"
+    "note": "feature-surface audit covers 66/66 current surfaces (F164)"
   },
   "F165": {
-    "status": "FAIL",
-    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F176'], result-tracker=[]\"]"
+    "status": "PASS",
+    "note": "tracker integrity: 177 features/177 stories/177 results/177 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -702,5 +702,9 @@
   "F176": {
     "status": "PASS",
     "note": "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
+  },
+  "F177": {
+    "status": "PASS",
+    "note": "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
   }
 }
