@@ -361,7 +361,7 @@
   },
   "F91": {
     "status": "PASS",
-    "note": "responsive shell + media/canvas minimums fit small screens"
+    "note": "responsive shell + command bar + media/canvas minimums fit small screens"
   },
   "F92": {
     "status": "PASS",

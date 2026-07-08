@@ -1392,7 +1392,7 @@ def t_f90():
 def t_f91():
     from aetherlab.ui.live_canvas import LiveCanvas
     from aetherlab.ui.main_window import MainWindow
-    from aetherlab.ui.widgets import LessonView, SimulationPanel
+    from aetherlab.ui.widgets import CommandBar, LessonView, SimulationPanel
 
     w = MainWindow(_settings())
     try:
@@ -1412,6 +1412,13 @@ def t_f91():
         assert canvas.minimumWidth() <= 260
         assert canvas.minimumHeight() <= 180
 
+        command = CommandBar()
+        command.resize(520, 120)
+        command.show()
+        _app.processEvents()
+        assert command.input.width() >= 220, command.input.width()
+        command.close()
+
         lesson = LessonView()
         assert lesson._outline.minimumWidth() <= 160
         assert lesson._outline.maximumWidth() <= 280
@@ -1424,7 +1431,7 @@ def t_f91():
         probe = getattr(w, "_ollama_probe", None)
         if probe and probe.isRunning():
             probe.wait(5000)
-    return "responsive shell + media/canvas minimums fit small screens"
+    return "responsive shell + command bar + media/canvas minimums fit small screens"
 
 
 def t_f92():

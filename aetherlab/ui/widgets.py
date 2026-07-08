@@ -648,9 +648,16 @@ class CommandBar(QtWidgets.QWidget):
 
         shell = QtWidgets.QFrame()
         shell.setObjectName("CommandBarShell")
-        layout = QtWidgets.QHBoxLayout(shell)
+        layout = QtWidgets.QVBoxLayout(shell)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
+
+        input_row = QtWidgets.QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(10)
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(10)
 
         # Examples popup button (ghost, menu anchored above the bar)
         self._examples_btn = QtWidgets.QPushButton("Examples")
@@ -658,12 +665,12 @@ class CommandBar(QtWidgets.QWidget):
         self._examples_btn.setIcon(icons.icon("lightbulb", 14, "#94A3B8"))
         self._examples_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._examples_btn.clicked.connect(self._show_examples_menu)
-        layout.addWidget(self._examples_btn)
+        input_row.addWidget(self._examples_btn)
 
         divider = QtWidgets.QFrame()
         divider.setObjectName("VDivider")
         divider.setFixedWidth(1)
-        layout.addWidget(divider)
+        input_row.addWidget(divider)
 
         # Prompt field - transparent inside the shell
         self.input = QtWidgets.QLineEdit()
@@ -676,7 +683,11 @@ class CommandBar(QtWidgets.QWidget):
         # the prompt is focused (design v2 restrained-glow guideline).
         self._shell = shell
         self.input.installEventFilter(self)
-        layout.addWidget(self.input, 1)
+        self.input.setMinimumWidth(220)
+        input_row.addWidget(self.input, 1)
+
+        layout.addLayout(input_row)
+        action_row.addStretch(1)
 
         # Render quality selector
         self._quality = QtWidgets.QComboBox()
@@ -687,7 +698,7 @@ class CommandBar(QtWidgets.QWidget):
         self._quality.setToolTip(
             "Render quality — Draft 480p / Standard 720p / High 1080p"
         )
-        layout.addWidget(self._quality)
+        action_row.addWidget(self._quality)
 
         # Learn button (topic explainer): build a full narrated lesson.
         self.learn_button = QtWidgets.QPushButton("Learn")
@@ -696,7 +707,7 @@ class CommandBar(QtWidgets.QWidget):
         self.learn_button.setToolTip("Build a full multi-chapter video lesson for this topic")
         self.learn_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.learn_button.clicked.connect(self._learn)
-        layout.addWidget(self.learn_button)
+        action_row.addWidget(self.learn_button)
 
         # Run button (primary) / Cancel (danger) swap
         self.run_button = QtWidgets.QPushButton("Run")
@@ -704,7 +715,7 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.setIcon(icons.icon("play", 14, "#04141A"))
         self.run_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.run_button.clicked.connect(self._submit)
-        layout.addWidget(self.run_button)
+        action_row.addWidget(self.run_button)
 
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.cancel_button.setObjectName("CancelButton")
@@ -712,7 +723,9 @@ class CommandBar(QtWidgets.QWidget):
         self.cancel_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
         self.cancel_button.hide()
-        layout.addWidget(self.cancel_button)
+        action_row.addWidget(self.cancel_button)
+
+        layout.addLayout(action_row)
 
         outer.addWidget(shell)
 
