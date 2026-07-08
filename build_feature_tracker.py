@@ -773,6 +773,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a power user, I expect a persisted, secret-scrubbed ledger of render jobs and tournaments — what queued, ran, failed, downloaded, or fell back — so cloud rendering is debuggable.",
      "services/render_ledger.RenderJobLedger is a JSON-backed, fail-soft, standard-library ledger under data_dir/render_ledger.json. It records a status timeline (queued/in_progress/completed/failed/cancelled/rate_limited/artifact_downloaded/fallback_local/rendered), per-candidate critic scores + the winner index, sanitized failure log tails, fallback reason and final path, capped to the most recent jobs. scrub() redacts GitHub/OpenAI/Slack tokens, bearer tokens, private keys, and api_key/secret assignments from every persisted free-text field. generate_render_tournament records the tournament (candidates + winner + backend); CloudRenderBackend.render records the cloud lifecycle (queued->in_progress->failed-with-log/timeout->artifact_downloaded->rendered); manim_runtime._render_once records the cloud->local fallback against the same job id. Phase 5 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "services/render_ledger.py / services/render_backend.py / services/manim_runtime.py", "headless", "Documented", ""),
+    ("F176", "Quality", "Render-farm dashboard panel",
+     "As a power user, I open a render-farm dashboard to see each job's status, per-candidate scores, the winner, sanitized failures, and any local fallback.",
+     "ui/ledger_panel.RenderLedgerPanel is a self-contained read-only widget (its own module, not widgets.py) that lists render-ledger jobs and, per job, shows the status timeline, per-candidate critic scores with the winner highlighted, the sanitized failure log tail, and the local-fallback reason/output path. It reads services/render_ledger (already scrubbed at write time), shows an empty state when there are no jobs, and never crashes on a missing/corrupt ledger. SettingsDialog exposes it via a 'View render ledger' button in the cloud row (_open_render_ledger opens it in a dialog). docs/CLOUD_RENDERING.md explains debugging cloud renders from the dashboard. Phase 5 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "ui/ledger_panel.py / ui/main_window.py", "gui", "Documented", ""),
 ]
 # fmt: on
 
@@ -2153,6 +2157,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "A missing/corrupt ledger never breaks a render; no token/key/bearer/private-key ever persists; unknown states are never written; the ledger stays bounded.",
         "harness",
     ),
+    "F176": _story_tuple(
+        "US-F176: As P4 Power user, cloud rendering, when I open the render-farm dashboard, I expect a readable list of jobs with per-candidate scores, the winner, sanitized failures, and fallback reasons. Preconditions: a ledger may exist under the data dir. Steps: 1. Open the dashboard from Settings. 2. Select a tournament job. 3. Confirm candidate scores, winner, and scrubbed failures render.",
+        "P4",
+        "`RenderLedgerPanel` lists ledger jobs and renders each job's timeline, per-candidate scores (winner highlighted), sanitized failure tail, and fallback reason; it shows an empty state and never crashes on a missing/corrupt ledger. SettingsDialog exposes it via a 'View render ledger' button. Implementation reference: aetherlab/ui/ledger_panel.py:1 / aetherlab/ui/main_window.py:220.",
+        "A missing ledger shows an empty state, not an error; only already-scrubbed data is displayed; the panel constructs offscreen without a media backend.",
+        "scripted-ui",
+    ),
 }
 
 
@@ -2388,8 +2399,9 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F173": ("PASS", "None", "PASS"),
     # ── Quality Flywheel Phase 4 (F174 cheap-first escalation) ──────────────
     "F174": ("PASS", "None", "PASS"),
-    # ── Quality Flywheel Phase 5a (F175 render-farm ledger) ─────────────────
+    # ── Quality Flywheel Phase 5 (F175 ledger, F176 dashboard panel) ────────
     "F175": ("PASS", "None", "PASS"),
+    "F176": ("PASS", "None", "PASS"),
 }
 
 

@@ -222,6 +222,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._cloud_test_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._cloud_test_btn.clicked.connect(self._test_cloud_render)
         cloud_row.addWidget(self._cloud_test_btn)
+        self._ledger_btn = QtWidgets.QPushButton("View render ledger")
+        self._ledger_btn.setObjectName("SecondaryButton")
+        self._ledger_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._ledger_btn.clicked.connect(self._open_render_ledger)
+        cloud_row.addWidget(self._ledger_btn)
         self._cloud_result = QtWidgets.QLabel("")
         self._cloud_result.setStyleSheet("color: #64748B; font-size: 11px;")
         self._cloud_result.setWordWrap(True)
@@ -481,6 +486,18 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._test_result.setText(message)
         self._test_btn.setEnabled(True)
+
+    def _open_render_ledger(self) -> None:
+        """Open the read-only render-farm dashboard for this data dir."""
+        from aetherlab.ui.ledger_panel import RenderLedgerPanel
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Render farm")
+        dialog.resize(780, 540)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(RenderLedgerPanel(self._settings.data_dir / "render_ledger.json", dialog))
+        dialog.exec()
 
     def _test_cloud_render(self) -> None:
         from dataclasses import replace

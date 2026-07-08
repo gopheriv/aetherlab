@@ -114,3 +114,25 @@ Cloud failures map back to the normal render contract:
 
 The existing render repair, visual critique, and narration loops operate on the
 returned `SceneBundle` exactly as they do for local renders.
+
+## Debugging with the render-farm dashboard
+
+Every cloud render and scene tournament is recorded in a **render-farm ledger**
+(`services/render_ledger.RenderJobLedger`, JSON under
+`<data_dir>/render_ledger.json`). Open it from **Settings → View render ledger**
+to see, per job:
+
+- the status timeline — `queued → in_progress → completed/failed/cancelled/
+  rate_limited → artifact_downloaded → rendered`, or `fallback_local`;
+- for a tournament, the **per-candidate critic scores with the winner
+  highlighted** — i.e. *why* this scene was chosen;
+- a **sanitized failure log tail** (tokens/keys are redacted at write time, so
+  the ledger is safe to share) and the classified failure kind;
+- the **local-fallback reason** and the final output path when cloud was
+  unavailable.
+
+The ledger is fail-soft and capped: it never breaks a render and keeps only the
+most recent jobs. Because every free-text field is scrubbed on the way in, no
+credential is ever persisted. To debug a failed cloud render, read its log tail
+and timeline here first; to confirm a tournament, check the candidate scores and
+the winner index.

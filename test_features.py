@@ -4130,6 +4130,54 @@ def t_f175():
     return "render-farm ledger: secret-scrubbed job/candidate events with tournament + cloud wiring (F175)"
 
 
+def t_f176():
+    # Quality Flywheel Phase 5b: the render-farm dashboard UI panel.
+    from aetherlab.services.render_ledger import RenderJobLedger
+    from aetherlab.ui.ledger_panel import RenderLedgerPanel
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.ui.qt_compat import QtWidgets
+
+    ledger_path = _TMP / "panel_ledger.json"
+    led = RenderJobLedger(ledger_path)
+    led.start(job_id="j1", scene_class="AetherLabScene", quality="l", backend="github-actions")
+    led.candidates("j1", [{"index": 0, "score": 5.0, "verdict": "revise"},
+                          {"index": 1, "score": 8.8, "verdict": "ship"}])
+    led.winner("j1", 1)
+    led.finish("j1", "rendered", "/x.mp4")
+    led.failure("j2", "boom Authorization: Bearer ghp_SECRET1234567890TOKEN", kind="oom")
+
+    panel = RenderLedgerPanel(ledger_path)
+    try:
+        assert panel._jobs.count() == 2, panel._jobs.count()
+        # Select the tournament job and confirm the winner + candidate scores show.
+        win_row = next(i for i, r in enumerate(panel._records) if r.get("winner_index") is not None)
+        panel._jobs.setCurrentRow(win_row)
+        detail = panel._details.toHtml()
+        assert "winner" in detail.lower() and "8.8" in detail, detail[:200]
+        # The failure job's log tail was scrubbed at write time — never shows a token.
+        fail_row = next(i for i, r in enumerate(panel._records) if r.get("status") == "failed")
+        panel._jobs.setCurrentRow(fail_row)
+        assert "ghp_" not in panel._details.toHtml()
+    finally:
+        panel.close()
+
+    # An absent ledger shows the empty state, not a crash.
+    empty = RenderLedgerPanel(_TMP / "no_such_ledger.json")
+    try:
+        assert empty._jobs.count() == 0 and empty._empty.isVisibleTo(empty)
+    finally:
+        empty.close()
+
+    # The dashboard is reachable from the Settings cloud surface.
+    dialog = SettingsDialog(_settings())
+    try:
+        assert hasattr(dialog, "_open_render_ledger")
+        assert "View render ledger" in [b.text() for b in dialog.findChildren(QtWidgets.QPushButton)]
+    finally:
+        dialog.close()
+    return "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

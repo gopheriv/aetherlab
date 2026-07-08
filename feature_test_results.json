@@ -653,11 +653,11 @@
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 63/63 current surfaces (F164)"
+    "note": "feature-surface audit covers 64/64 current surfaces (F164)"
   },
   "F165": {
     "status": "FAIL",
-    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F175'], result-tracker=[]\"]"
+    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F176'], result-tracker=[]\"]"
   },
   "F166": {
     "status": "PASS",
@@ -698,5 +698,9 @@
   "F175": {
     "status": "PASS",
     "note": "render-farm ledger: secret-scrubbed job/candidate events with tournament + cloud wiring (F175)"
+  },
+  "F176": {
+    "status": "PASS",
+    "note": "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
   }
 }
