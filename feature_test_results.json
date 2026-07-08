@@ -656,8 +656,8 @@
     "note": "feature-surface audit covers 63/63 current surfaces (F164)"
   },
   "F165": {
-    "status": "FAIL",
-    "note": "AssertionError: ['CSV rows differ from build_feature_tracker.py after apply_results().', 'XLSX rows differ from build_feature_tracker.py after apply_results().']"
+    "status": "PASS",
+    "note": "tracker integrity: 168 features/168 stories/168 results/168 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",

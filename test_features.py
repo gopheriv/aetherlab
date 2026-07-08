@@ -2595,7 +2595,20 @@ def t_f148():
     import subprocess
     import imageio_ffmpeg
     import av
+    from aetherlab.services.assembly import _segment_starts
     from aetherlab.services.cards import render_card_png
+
+    # BUG-6 invariant guard: seg k must start at max(sum(durs[0..k-1]) - k*d, 0)
+    # exactly — the double-subtraction bug drifted later crossfades early. Check
+    # 1/2/3/11-segment and zero-duration cases directly (no render needed).
+    for durs, d in (
+        ([5.0], 0.5), ([5.0, 4.0], 0.5), ([3.0, 4.0, 5.0], 0.5),
+        ([2.2, 6, 2.2, 6, 2.2, 6, 2.2, 6, 2.2, 6, 3.0], 0.5), ([0.0, 0.0, 0.0], 0.2),
+    ):
+        starts = _segment_starts(durs, d)
+        for k in range(len(durs)):
+            assert abs(starts[k] - max(sum(durs[:k]) - k * d, 0.0)) < 1e-9, (durs, d, k, starts)
+        assert all(starts[i] <= starts[i + 1] + 1e-9 for i in range(len(starts) - 1)), starts
     from aetherlab.services.assembly import assemble_lesson
     png = render_card_png(_TMP / "card.png", kicker="Chapter 2",
                           title="The idea", subtitle="undergrad")

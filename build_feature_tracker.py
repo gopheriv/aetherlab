@@ -1926,6 +1926,9 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "`render_card_png()` creates Pillow cards; `assemble_lesson()` builds intro/chapter/end segment plan, normalizes to 1280x720/30fps, adds silence for cards/mixed audio, crossfades with cumulative offsets, and falls back to normalized concat or clips. Implementation reference: aetherlab/services/cards.py:80 / aetherlab/services/assembly.py:53 / aetherlab/services/assembly.py:282.",
         "PIL/ffmpeg/xfade failure degrades to a simpler playable lesson rather than losing all chapter clips.",
         "harness",
+        "PASS",
+        "None",
+        "PASS",
     ),
     "F149": _story_tuple(
         "US-F149: As P5 Returning user, when I reopen the same lesson topic/audience, I expect planning and fact-checking to reuse a disk cache unless I regenerate. Preconditions: data_dir is writable. Steps: 1. Build a lesson. 2. Build same topic/audience again. 3. Build with regenerate=True.",
