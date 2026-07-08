@@ -65,9 +65,9 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user, explicit env vars win over saved config, which wins over the legacy Qwen file.",
      "load_settings resolves model/api_key/base_url in that order; provider_source labels the winning tier.",
      "core/settings.py", "headless", "Documented", ""),
-    ("F09", "Settings", "Qwen ~/.qwen/settings.json autoload",
-     "As a Qwen Code user, AetherLab auto-detects my provider.",
-     "load_qwen_settings extracts model name, base URL, and api key (via envKey/env) without logging secrets; returns {} if absent/corrupt.",
+    ("F09", "Settings", "Qwen ~/.qwen/settings.json opt-in loader",
+     "As a Qwen Code user, I can intentionally reuse my provider settings.",
+     "load_qwen_settings extracts model name, base URL, and api key (via envKey/env) without logging secrets; returns {} if absent/corrupt. load_settings only applies it when AETHERLAB_QWEN_AUTOLOAD=1 so student installs do not silently inherit unrelated credentials.",
      "core/settings.py", "headless", "Documented", ""),
     ("F10", "Settings", "Settings dialog (Ctrl+,/gear)",
      "As a user, I open Settings to edit provider, rendering, and paths.",
@@ -872,8 +872,168 @@ def _source_line_refs(source: str) -> str:
     return " / ".join(refs) if refs else source
 
 
+def _story_tuple(
+    story: str,
+    persona: str,
+    expected: str,
+    failure: str,
+    test_method: str,
+    phase2: str = "PENDING",
+    errors: str = "None",
+    phase4: str = "PENDING",
+) -> tuple[str, ...]:
+    return (story, persona, expected, failure, test_method, phase2, errors, phase4)
+
+
+STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "F01": _story_tuple(
+        "US-F01: As P1 Student, no AI key, when I run `python -m aetherlab`, I expect the desktop workbench to open with settings loaded. Preconditions: PyQt6 is installed. Steps: 1. Start the CLI with no flags. 2. Wait for the main window. 3. Close the app. Primary existing story: As a user, I run `python -m aetherlab` and the desktop app opens.",
+        "P1",
+        "`main()` parses flags, sets best-effort logging, imports `run_app`, and returns the Qt event-loop result; `run_app()` calls `require_qt()`, creates `QApplication`, loads settings, constructs `MainWindow`, shows it, and runs `app.exec()`. Implementation reference: aetherlab/__main__.py:72 / aetherlab/ui/app.py:24 / aetherlab/ui/qt_compat.py:18.",
+        "If Qt import or launch raises RuntimeError, the CLI prints the actionable message to stderr and exits 2 instead of showing a traceback.",
+        "scripted-ui",
+    ),
+    "F02": _story_tuple(
+        "US-F02: As P1 Student, no AI key, when I run `python -m aetherlab --smoke`, I expect a headless pipeline summary that proves solve, RAG, and scene generation completed. Preconditions: no GUI is required; built-in fallback solving may be used. Steps: 1. Run the smoke command. 2. Read stdout. 3. Confirm cache key, solver, keywords, RAG count, scene engine, and scene status are printed.",
+        "P1",
+        "`--smoke` runs `_run_smoke()`, builds `AetherLabPipeline(load_settings())`, awaits `pipeline.run(ProblemRequest(prompt=...))`, then prints cache key, solver model, keywords or `none`, RAG hit count, scene engine, and scene status before returning 0. Implementation reference: aetherlab/__main__.py:23 / aetherlab/__main__.py:57.",
+        "If the pipeline raises, the CLI process fails rather than launching a half-initialized GUI; test harnesses catch this as a non-zero smoke result.",
+        "harness",
+    ),
+    "F03": _story_tuple(
+        "US-F03: As P1 Student, no AI key, when I pass a prompt after `--smoke`, I expect that exact prompt to drive the headless run. Preconditions: CLI is available. Steps: 1. Run `python -m aetherlab --smoke \"custom prompt\"`. 2. Compare behaviour with the default smoke run. 3. Confirm argparse accepted the custom string.",
+        "P1",
+        "`build_parser()` defines `--smoke` with `nargs='?'`, a default const prompt, and user-provided prompt override; `main()` passes `args.smoke` to `_run_smoke()`. Implementation reference: aetherlab/__main__.py:17 / aetherlab/__main__.py:23 / aetherlab/__main__.py:86.",
+        "If the prompt is omitted, argparse uses the built-in damped-oscillator smoke prompt; if invalid CLI flags are passed, argparse exits with its normal usage error.",
+        "harness",
+    ),
+    "F04": _story_tuple(
+        "US-F04: As P5 Returning user, when the GUI process crashes under the watchdog, I expect AetherLab to restart with increasing delay, but a normal close should stop. Preconditions: watchdog is launched from the project root. Steps: 1. Start `aetherlab_watchdog.py` or `start.bat`. 2. Let the child exit non-zero. 3. Observe restart logging; then close cleanly and observe no relaunch.",
+        "P5",
+        "`aetherlab_watchdog.main()` runs `[sys.executable, '-m', 'aetherlab']`, logs exit code and uptime, stops on exit code 0, resets delay after a healthy run, and otherwise sleeps with exponential backoff capped at 60 seconds. Implementation reference: aetherlab_watchdog.py:37.",
+        "If the child cannot start, the exception is logged, treated as exit -1, and the watchdog follows the same backoff path instead of crashing.",
+        "harness",
+    ),
+    "F05": _story_tuple(
+        "US-F05: As P1 Student, no AI key, when PyQt6 is missing, I expect an install hint instead of a Python stack trace. Preconditions: PyQt6 import fails. Steps: 1. Trigger `require_qt()` through app launch or directly in a harness. 2. Read stderr/exception text. 3. Confirm it names PyQt6 and a pip install command.",
+        "P1",
+        "`require_qt()` raises RuntimeError with a PyQt6 install instruction when the optional import shim captured an import error; `main()` catches RuntimeError from import/run_app and exits 2. Implementation reference: aetherlab/ui/qt_compat.py:18 / aetherlab/__main__.py:91 / aetherlab/__main__.py:97.",
+        "The sad path is the feature: missing Qt returns an actionable message and exit code 2, not an uncaught import traceback.",
+        "harness",
+    ),
+    "F06": _story_tuple(
+        "US-F06: As P5 Returning user, when I launch with AETHERLAB, OpenAI, or compatible manim-bot environment values, I expect settings to reflect the highest-precedence explicit values. Preconditions: environment variables may be set; app config and legacy `.env` may also exist. Steps: 1. Set data/model/key/base-url/timeout variables. 2. Call `load_settings()`. 3. Verify paths, provider fields, timeout, and migration aliases.",
+        "P5",
+        "`load_settings()` reads AETHERLAB data/cache/chroma/library paths, OpenAI-compatible model/key/base URL aliases, LLM timeout, provider preset, legacy manim-bot `.env`, cloud aliases, and visual critic settings into `AppSettings`. Implementation reference: aetherlab/core/settings.py:106 / aetherlab/core/settings.py:133 / aetherlab/core/settings.py:137 / aetherlab/core/settings.py:185 / aetherlab/core/settings.py:317.",
+        "If config files are absent or corrupt, loaders return empty mappings and defaults are used; secrets are read into settings but are not logged.",
+        "harness",
+    ),
+    "F07": _story_tuple(
+        "US-F07: As P5 Returning user, when I save fields in Settings, I expect non-empty values to survive restart and empty values to be removed. Preconditions: a writable data directory exists. Steps: 1. Save app config values. 2. Reload app config. 3. Call `load_settings()` and confirm saved path/provider values flow into settings.",
+        "P5",
+        "`app_config_path()` is under the AetherLab data dir, `save_app_config()` merges new values while dropping empty/None keys, and `load_app_config()` ignores missing/corrupt JSON. `load_settings()` uses saved data_dir/library/provider values below env precedence. Implementation reference: aetherlab/core/settings.py:71 / aetherlab/core/settings.py:76 / aetherlab/core/settings.py:92 / aetherlab/core/settings.py:106.",
+        "If settings.json is missing, unreadable, or invalid JSON, the app falls back to defaults instead of blocking startup.",
+        "harness",
+    ),
+    "F08": _story_tuple(
+        "US-F08: As P5 Returning user, when the same provider value exists in env, app config, legacy `.env`, and Qwen settings, I expect the documented precedence to choose the explicit environment value first. Preconditions: conflicting provider tiers are available. Steps: 1. Seed app config and legacy mappings. 2. Set an env override. 3. Call `load_settings()` and inspect provider fields/source.",
+        "P5",
+        "`load_settings()` resolves model, API key, and base URL as environment, then app config, then legacy manim-bot `.env`, then opt-in Qwen settings; `provider_source` labels the winning tier. Implementation reference: aetherlab/core/settings.py:106 / aetherlab/core/settings.py:133 / aetherlab/core/settings.py:137 / aetherlab/core/settings.py:143 / aetherlab/core/settings.py:151 / aetherlab/core/settings.py:292.",
+        "If lower-precedence files are corrupt or missing, they are skipped; if env values are blank, they do not override saved usable values.",
+        "harness",
+    ),
+    "F09": _story_tuple(
+        "US-F09: As P2 Student, local Ollama, when I intentionally opt into Qwen-compatible settings, I expect AetherLab to parse model, base URL, and API key without silently inheriting credentials by default. Preconditions: a Qwen settings JSON exists and `AETHERLAB_QWEN_AUTOLOAD=1` is set for full settings use. Steps: 1. Call `load_qwen_settings(path)` on a valid Qwen file. 2. Call `load_settings()` with and without the opt-in env. 3. Confirm default launches do not auto-use Qwen credentials.",
+        "P2",
+        "`load_qwen_settings()` reads model name, OpenAI provider baseUrl, envKey/env API key, and source; `load_settings()` only consults it when `AETHERLAB_QWEN_AUTOLOAD == '1'`. Implementation reference: aetherlab/core/settings.py:129 / aetherlab/core/settings.py:403.",
+        "If the Qwen file is absent, corrupt, or not opted in, `{}` is returned or ignored and the app uses the next available/default provider without leaking secrets.",
+        "harness",
+        errors="BUG-24",
+    ),
+    "F10": _story_tuple(
+        "US-F10: As P5 Returning user, when I open Settings, edit provider/rendering/path fields, and press Save, I expect the dialog to stay usable on small screens and persist the chosen values. Preconditions: main window is open with writable app config. Steps: 1. Press Ctrl+, or the gear. 2. Edit provider, quality, render mode, GitHub fields, library path, and data path. 3. Save and inspect the status message/reloaded settings.",
+        "P5",
+        "`SettingsDialog` builds a scrollable provider/rendering/vision/references/narration/paths form, hides secret fields by default, fits available screen geometry, and `_open_settings()` saves accepted values through `save_app_config()` before replacing `self.settings`. Implementation reference: aetherlab/ui/main_window.py:84 / aetherlab/ui/main_window.py:352 / aetherlab/ui/main_window.py:1056.",
+        "Cancel rejects without saving; corrupt existing config falls back to defaults; environment variables still override saved values on the next load.",
+        "scripted-ui",
+    ),
+    "F11": _story_tuple(
+        "US-F11: As P5 Returning user, when I first launch on Windows or another OS, I expect AetherLab data and Chroma directories to be placed in a stable per-user location. Preconditions: `LOCALAPPDATA` may or may not be set. Steps: 1. Clear explicit path env vars. 2. Call `load_settings()`. 3. Inspect data_dir and chroma_path.",
+        "P5",
+        "`_default_data_dir()` and `_default_chroma_path()` use `%LOCALAPPDATA%/AetherLab` on Windows-like environments and `~/.aetherlab` elsewhere; `load_settings()` derives default cache/library paths from that data dir. Implementation reference: aetherlab/core/settings.py:106 / aetherlab/core/settings.py:433 / aetherlab/core/settings.py:441.",
+        "If LOCALAPPDATA is absent, paths still resolve under the user's home directory; no launch-working-directory cache is used by default.",
+        "harness",
+    ),
+    "F12": _story_tuple(
+        "US-F12: As P1 Student, no AI key, when I type a prompt and press Enter, Run, or Ctrl+Enter, I expect one solve run to start and the prompt field to clear. Preconditions: command bar is visible and not busy. Steps: 1. Type a non-empty prompt. 2. Press Enter or Run, or use Ctrl+Enter from the main window. 3. Observe the submitted signal/start pipeline and cleared input.",
+        "P1",
+        "`CommandBar._submit()` trims text, emits `submitted(prompt)`, and clears the field only while Run is visible; `MainWindow._build_shortcuts()` wires Ctrl+Return to the same submit path and `_connect_signals()` wires submitted to `start_pipeline()`. Implementation reference: aetherlab/ui/widgets.py:782 / aetherlab/ui/main_window.py:774 / aetherlab/ui/main_window.py:794.",
+        "Empty prompts and busy/cancel state do nothing, preventing duplicate blank runs or submit while the cancel button is active.",
+        "scripted-ui",
+    ),
+    "F13": _story_tuple(
+        "US-F13: As P1 Student, no AI key, when I open Examples and choose a prompt, I expect the prompt field to fill and focus without starting a run. Preconditions: command bar is visible. Steps: 1. Click Examples. 2. Pick a listed prompt. 3. Confirm it appears in the field and focus returns there.",
+        "P1",
+        "`CommandBar._show_examples_menu()` creates a QMenu from `EXAMPLE_PROMPTS`, truncates long labels for display, anchors the menu above the button, and `_pick_example()` writes the full prompt into the input and focuses it. Implementation reference: aetherlab/ui/widgets.py:609 / aetherlab/ui/widgets.py:745 / aetherlab/ui/widgets.py:760.",
+        "If the menu is dismissed without choosing, no prompt is changed and no run starts.",
+        "scripted-ui",
+    ),
+    "F14": _story_tuple(
+        "US-F14: As P1 Student, no AI key, when I choose Draft, Standard, or High, I expect the selected render quality to be passed to Manim as l, m, or h. Preconditions: command bar is visible. Steps: 1. Select each quality. 2. Read `get_render_quality()`. 3. Start a run and inspect worker render_quality.",
+        "P1",
+        "`CommandBar._QUALITIES` maps Draft/Standard/High to `l/m/h`; `get_render_quality()` returns the current flag with Draft fallback, `set_quality()` selects by flag, and `MainWindow.start_pipeline()` passes the flag to `PipelineWorker`. Implementation reference: aetherlab/ui/widgets.py:640 / aetherlab/ui/widgets.py:764 / aetherlab/ui/widgets.py:769 / aetherlab/ui/main_window.py:1326.",
+        "Unknown quality text falls back to Draft (`l`) rather than passing an invalid Manim quality flag.",
+        "harness",
+    ),
+    "F15": _story_tuple(
+        "US-F15: As P1 Student, no AI key, when a run starts, I expect Run/Learn to disappear, Cancel to appear, and the prompt field to be disabled until the run ends or is cancelled. Preconditions: command bar is idle. Steps: 1. Start a solve run. 2. Observe button/input state. 3. Cancel or finish and observe idle state restored.",
+        "P1",
+        "`CommandBar.set_busy()` hides Run and Learn, shows Cancel, and disables input; `start_pipeline()` calls it true, `_on_worker_finished()` calls it false, and `_cancel_pipeline()` resets it immediately on cancellation. Implementation reference: aetherlab/ui/widgets.py:776 / aetherlab/ui/main_window.py:1131 / aetherlab/ui/main_window.py:1326 / aetherlab/ui/main_window.py:1378.",
+        "If cancellation happens during loading, `_cancel_pipeline()` also hides the simulation loading surface and returns to the best available page.",
+        "scripted-ui",
+    ),
+    "F16": _story_tuple(
+        "US-F16: As P1 Student, no AI key, when I submit a physics prompt, I expect the solve pipeline to progress through solver, references, scene generation, render, and final result. Preconditions: prompt is non-empty; local fallback generation is allowed. Steps: 1. Submit a prompt. 2. Watch Running view/status updates. 3. Confirm analysis, references, scene, video, and history are updated.",
+        "P1",
+        "`PipelineWorker._run_async()` ensures a cache key, solves or reuses solver output, ingests/searches references, generates/reuses scene code, renders/reuses MP4, emits intermediate ready signals, and finally emits `PipelineResult`; MainWindow handlers update the panels. Implementation reference: aetherlab/ui/workers.py:69 / aetherlab/ui/workers.py:174 / aetherlab/ui/main_window.py:1413 / aetherlab/ui/main_window.py:1421.",
+        "If any stage raises, `PipelineWorker.run()` emits a `PipelineError`; `MainWindow.on_failure()` shows status, toast details, error banner, and returns to a recoverable page.",
+        "harness",
+    ),
+    "F17": _story_tuple(
+        "US-F17: As P1 Student, no AI key, when a pipeline run advances, I expect the Running view and stepper to show the current stage and reset cleanly for the next run. Preconditions: a solve run is active. Steps: 1. Start a run. 2. Observe progress labels for Solve/RAG/Scene/Render. 3. Start another run and confirm elapsed/stage state does not leak.",
+        "P1",
+        "`MainWindow.start_pipeline()` resets and shows the timeline, marks the stepper cancellable, sets stage 0, and `_on_progress()` maps progress percentages to Solve/RAG/Scene/Render stage states and RunningView text. Implementation reference: aetherlab/ui/main_window.py:1326 / aetherlab/ui/main_window.py:1378.",
+        "If the run is cancelled or fails, the stepper becomes non-cancellable and moves to the cancelled/error state instead of leaving stale active UI.",
+        "scripted-ui",
+    ),
+    "F18": _story_tuple(
+        "US-F18: As P1 Student, no AI key, when I cancel a solve in progress, I expect the worker to stop at a stage boundary and the app to become usable again. Preconditions: a solve worker is running. Steps: 1. Start a run. 2. Press Cancel or Escape. 3. Observe cancellation status, idle command bar, and no stale loading screen.",
+        "P1",
+        "`PipelineWorker.cancel()` sets a cancellation flag, `_check_cancelled()` raises between major stages, `run()` converts the sentinel into a status message, and `MainWindow._cancel_pipeline()` resets busy/cancellable/loading state immediately. Implementation reference: aetherlab/ui/workers.py:43 / aetherlab/ui/workers.py:47 / aetherlab/ui/workers.py:52 / aetherlab/ui/main_window.py:1131.",
+        "Cancellation is cooperative: if a subprocess or long operation is inside a stage, the user sees cancelling state until the next cancellation check rather than an immediate hard kill.",
+        "scripted-ui",
+    ),
+    "F19": _story_tuple(
+        "US-F19: As P1 Student, no AI key, when I try to start a second solve while one is running, I expect AetherLab to refuse the duplicate run and keep the current one intact. Preconditions: `self.worker` is running. Steps: 1. Start a run. 2. Submit another prompt before it finishes. 3. Read the status bar.",
+        "P1",
+        "`MainWindow.start_pipeline()` checks `self.worker.isRunning()` and returns after showing `Pipeline is already running.` before allocating a new worker. Implementation reference: aetherlab/ui/main_window.py:1326.",
+        "The duplicate attempt does not disconnect signals, delete the current worker, clear current progress, or enqueue a hidden second run.",
+        "scripted-ui",
+    ),
+    "F20": _story_tuple(
+        "US-F20: As P5 Returning user, when I run another solve after a previous worker finished, I expect old worker signals to be disconnected so callbacks do not multiply. Preconditions: a completed worker object may still be attached. Steps: 1. Finish one run. 2. Start another. 3. Confirm old signals are disconnected and the stale worker is scheduled for deletion.",
+        "P5",
+        "`MainWindow.start_pipeline()` disconnects status/ready/failure/finished/progress signals from an existing non-running worker inside a guarded block, calls `deleteLater()`, clears `self.worker`, then constructs and wires a fresh `PipelineWorker`. Implementation reference: aetherlab/ui/main_window.py:1326.",
+        "If a signal was already disconnected or the worker was deleted, TypeError/RuntimeError is ignored and a fresh worker is still created.",
+        "harness",
+    ),
+}
+
+
 def _story_fields(row: tuple[str, ...]) -> tuple[str, ...]:
     fid, category, feature, user_story, expected, source, legacy_method, _status, _notes = row[:9]
+    if fid in STORY_OVERRIDES:
+        return STORY_OVERRIDES[fid]
     persona = _persona_for(category, feature, source)
     story = (
         f"US-{fid}: As {PERSONA_LABELS[persona]}, when I use {feature}, I expect the observable "
@@ -994,6 +1154,7 @@ DEFECTS: dict[str, str] = {
     "F143": "BUG-9: partial lesson renders compacted successful scenes, then zipped them against all renderable chapters; surviving clips could receive the wrong narration/title. Pipeline now carries plan indexes with rendered scenes. BUG-23: lesson chapter cache accepted any existing video path, including zero-byte/corrupt MP4s; cached chapter videos now require a playable video.",
     "F145": "BUG-8/BUG-9: chapter-seek offsets use produced-video starts, and partial lessons map chapter offsets by plan index so skipped middle chapters do not mislabel surviving clips.",
     "F86": "BUG-10: compile_latex_to_pdf could return a stale PDF after a failed pdflatex run; it now removes stale output first and requires returncode 0 plus fresh output.",
+    "F09": "BUG-24: tracker copy described Qwen settings as automatic autoload, but load_settings gates Qwen reuse behind AETHERLAB_QWEN_AUTOLOAD=1; canonical wording now matches the implemented privacy guard.",
     "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
     "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
