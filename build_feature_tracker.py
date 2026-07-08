@@ -1608,6 +1608,9 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "`validate_code_safety()` AST-walks code for import allowlist, banned runtime helpers, banned names/attributes/strings, and unsafe dunders; ManimRuntime calls it for generated candidates and repaired/revised code before render. Implementation reference: aetherlab/services/code_safety.py:89 / aetherlab/services/manim_runtime.py:143 / aetherlab/services/manim_runtime.py:614 / aetherlab/services/manim_runtime.py:710.",
         "Unsafe code counts as a failed generation attempt or aborts repair/revision rather than reaching the Manim subprocess.",
         "harness",
+        "FAIL",
+        "BUG-28",
+        "PASS",
     ),
     "F104": _story_tuple(
         "US-F104: As P3 Educator, cloud AI + vision critic, when render errors recur, I expect AetherLab to learn preventive hints across runs. Preconditions: data_dir is writable and render errors occur. Steps: 1. Trigger known Manim pitfalls. 2. Inspect generation prompt pitfalls. 3. Trigger repair and inspect hints_for output.",
@@ -2199,7 +2202,7 @@ DEFECTS: dict[str, str] = {
     "F86": "BUG-10: compile_latex_to_pdf could return a stale PDF after a failed pdflatex run; it now removes stale output first and requires returncode 0 plus fresh output.",
     "F09": "BUG-24: tracker copy described Qwen settings as automatic autoload, but load_settings gates Qwen reuse behind AETHERLAB_QWEN_AUTOLOAD=1; canonical wording now matches the implemented privacy guard.",
     "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
-    "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked.",
+    "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked. BUG-28: numpy (an allowed import) exposed raw file-I/O sinks (tofile/fromfile/frombuffer/savetxt/loadtxt/genfromtxt/load/save/memmap/DataSource) giving arbitrary host read/write with no banned name/attribute; these attribute sinks are now rejected while legitimate numpy math stays allowed.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
     "F153": "BUG-19: legacy manim-bot .env and existing gh auth sessions were ignored; settings now migrate CLOUD_RENDER_* aliases and GitHub CLI tokens without exposing secrets.",
     "F154": "BUG-15: exact job_id polling prevents attaching to unrelated runs. BUG-17: bundled workflow is provisioned before dispatch/test. BUG-18: removed setup-python cache:pip failure. BUG-20: artifact 302 downloads drop the Bearer header on the signed URL.",
