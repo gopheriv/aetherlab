@@ -729,6 +729,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a maintainer, the generated spreadsheet, CSV, feature-test results, test functions, and defect ledger must agree before I trust the audit status.",
      "tools/tracker_integrity_audit.py imports build_feature_tracker.py, applies feature_test_results.json, and verifies the CSV and XLSX match the generator exactly; feature IDs are unique/contiguous; every row has a user story and expected behavior; statuses/test methods are valid; feature_test_results.json and t_fXX definitions exactly match tracker IDs; DEFECTS entries point to known features marked FIXED; and all DEFECTS bug IDs are documented in ERRORS_FOUND.md. `python tools/tracker_integrity_audit.py --check` exits non-zero on drift.",
      "tools/tracker_integrity_audit.py / build_feature_tracker.py / feature_test_results.json / ERRORS_FOUND.md", "headless", "Documented", ""),
+    ("F166", "Export", "Lesson share bundle export",
+     "As a student or teacher, I export a completed lesson as one portable package I can hand off or open offline.",
+     "services/share_export.export_lesson_bundle writes a ZIP containing index.html, metadata.json, README.txt, study_guide.tex, media/lesson.mp4, subtitles as SRT plus browser-friendly VTT when available, and per-chapter Manim source files. The metadata is share-safe (relative asset names, no API keys, no app config, no absolute local paths). LessonView exposes an Export bundle button, wired through MainWindow to a ZIP save dialog with status feedback.",
+     "services/share_export.py / ui/widgets.py / ui/main_window.py / docs/LESSON_SHARE_EXPORT.md", "headless", "Documented", ""),
 ]
 # fmt: on
 

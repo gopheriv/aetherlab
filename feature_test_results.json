@@ -653,10 +653,14 @@
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 62/62 current surfaces (F164)"
+    "note": "feature-surface audit covers 63/63 current surfaces (F164)"
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 165 features/165 results/165 tests aligned (F165)"
+    "note": "tracker integrity: 166 features/165 results/166 tests aligned (F165)"
+  },
+  "F166": {
+    "status": "PASS",
+    "note": "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
   }
 }

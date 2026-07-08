@@ -3523,6 +3523,7 @@ class LessonView(QtWidgets.QWidget):
 
     chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
     export_requested = QtCore.pyqtSignal()
+    share_bundle_requested = QtCore.pyqtSignal()
     regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -3554,6 +3555,14 @@ class LessonView(QtWidgets.QWidget):
         export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         export_btn.clicked.connect(self.export_requested.emit)
         header.addWidget(export_btn)
+        bundle_btn = QtWidgets.QPushButton("Export bundle")
+        bundle_btn.setObjectName("SecondaryButton")
+        bundle_btn.setAccessibleName("Lesson bundle export")
+        bundle_btn.setIcon(icons.icon("folder-open", 13, "#94A3B8"))
+        bundle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        bundle_btn.setToolTip("Export a portable ZIP with video, subtitles, study guide, and HTML player")
+        bundle_btn.clicked.connect(self.share_bundle_requested.emit)
+        header.addWidget(bundle_btn)
         layout.addLayout(header)
 
         self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)

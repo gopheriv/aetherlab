@@ -3485,8 +3485,8 @@ def t_f164():
 def t_f165():
     from tools.tracker_integrity_audit import audit
 
-    report = audit(allow_pending_result="F165")
-    assert report["feature_count"] >= 165, report
+    report = audit(allow_pending_result="F166")
+    assert report["feature_count"] >= 166, report
     assert report["result_count"] >= report["feature_count"] - 1, report
     assert report["test_count"] == report["feature_count"], report
     assert report["ok"], report["issues"]
@@ -3494,6 +3494,83 @@ def t_f165():
         f"tracker integrity: {report['feature_count']} features/"
         f"{report['result_count']} results/{report['test_count']} tests aligned (F165)"
     )
+
+
+def t_f166():
+    import json
+    import subprocess
+    import zipfile
+
+    import imageio_ffmpeg
+
+    from aetherlab.core.models import LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.share_export import export_lesson_bundle
+    from aetherlab.ui.qt_compat import QtWidgets
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import LessonView
+
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    video = _TMP / "share_lesson.mp4"
+    subprocess.run(
+        [ff, "-y", "-f", "lavfi", "-i",
+         "testsrc=size=160x90:rate=10:duration=0.5", "-pix_fmt", "yuv420p", str(video)],
+        capture_output=True,
+    )
+    assert video.exists() and video.stat().st_size > 0
+    video.with_suffix(".srt").write_text(
+        "1\n00:00:00,000 --> 00:00:00,500\nKepler opens the lesson.\n",
+        encoding="utf-8",
+    )
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    bundle = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "class S1(Scene):\n    pass\n", "e", "rendered", video_path=str(video)),
+            SceneBundle("S2", "class S2(Scene):\n    pass\n", "e", "rendered", video_path=str(video)),
+        ],
+        video_path=str(video),
+        status="assembled",
+        chapter_offsets=[0.0, 3.5],
+        rendered_chapter_indexes=[0, 1],
+    )
+    out = _TMP / "kepler_bundle.zip"
+    summary = export_lesson_bundle(bundle, out)
+    assert summary.path == out and summary.size_bytes > video.stat().st_size
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        assert any(n.endswith("/index.html") for n in names)
+        assert any(n.endswith("/metadata.json") for n in names)
+        assert any(n.endswith("/study_guide.tex") for n in names)
+        assert any(n.endswith("/media/lesson.mp4") for n in names)
+        assert any(n.endswith("/media/lesson.srt") for n in names)
+        assert any(n.endswith("/media/lesson.vtt") for n in names)
+        assert any("/scenes/chapter_01_" in n and n.endswith(".py") for n in names)
+        html = zf.read(next(n for n in names if n.endswith("/index.html"))).decode("utf-8")
+        meta = json.loads(zf.read(next(n for n in names if n.endswith("/metadata.json"))))
+    assert "<video" in html and "media/lesson.vtt" in html and "data-time=\"3.500\"" in html
+    meta_text = json.dumps(meta)
+    assert str(_TMP) not in meta_text and "api_key" not in meta_text.lower()
+    assert meta["assets"]["video"] == "media/lesson.mp4"
+    assert meta["chapters"][0]["rendered"] is True
+
+    lv = LessonView()
+    try:
+        lv.set_lesson(bundle)
+        assert hasattr(lv, "share_bundle_requested")
+        labels = [b.text() for b in lv.findChildren(QtWidgets.QPushButton)]
+        assert "Export bundle" in labels
+    finally:
+        lv.close()
+    mw = MainWindow(_settings())
+    try:
+        assert hasattr(mw, "_export_lesson_bundle")
+    finally:
+        mw.close()
+        probe = getattr(mw, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    return "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

@@ -794,6 +794,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.learn_requested.connect(self.start_lesson)
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
+        self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
@@ -1244,6 +1245,39 @@ class MainWindow(QtWidgets.QMainWindow):
 
         export_lesson_study_guide(bundle.plan, Path(path))
         self.statusBar().showMessage(f"Study guide exported: {path}")
+
+    def _export_lesson_bundle(self) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if not bundle or not getattr(bundle, "video_path", ""):
+            self.statusBar().showMessage("No assembled lesson to export yet.")
+            return
+        default_name = "aetherlab_lesson_bundle.zip"
+        title = getattr(getattr(bundle, "plan", None), "title", "")
+        if title:
+            import re
+
+            slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+            if slug:
+                default_name = f"{slug[:48]}_bundle.zip"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export lesson bundle", default_name, "ZIP Files (*.zip)"
+        )
+        if not path:
+            return
+        try:
+            from aetherlab.services.share_export import export_lesson_bundle
+
+            summary = export_lesson_bundle(bundle, Path(path))
+        except FileNotFoundError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"Lesson bundle export failed: {exc}")
+            return
+        size_mb = summary.size_bytes / 1e6
+        self.statusBar().showMessage(
+            f"Lesson bundle exported: {summary.path} ({size_mb:.1f} MB)"
+        )
 
     def start_pipeline(self, prompt: str) -> None:
         if self.worker and self.worker.isRunning():
