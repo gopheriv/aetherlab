@@ -765,6 +765,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a maintainer, when a tournament produces a critic-approved, high-scoring winner, I expect it stashed as an exemplar candidate I can review and promote — never auto-injected.",
      "scene_exemplars.ExemplarCandidateStore (data-dir JSON, fail-soft) records a tournament winner only when the VISION critic returned verdict 'ship' at score >= PROMOTE_MIN_SCORE (8.5); static-proxy/skipped, 'revise', low-score, and empty-code winners are rejected, and identical code deduplicates. manim_runtime.generate_render_tournament records the winner via _record_exemplar_candidate (domain from detect_domain). tools/promote_exemplar.py lists candidates and emits a paste-ready snippet but NEVER writes scene_exemplars.py — promotion into the curated EXEMPLARS is a deliberate human-reviewed code change (feeding LLM code back into every prompt is a supply-chain risk). Phase 3 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "services/scene_exemplars.py / services/manim_runtime.py / tools/promote_exemplar.py", "headless", "Documented", ""),
+    ("F174", "Quality", "Cheap-first tournament escalation",
+     "As a power user, I expect the tournament to spend compute only when it helps: one render first, more candidates only if that render is weak and the scene is hard.",
+     "manim_runtime.storyboard_difficulty() scores a storyboard 0..1 from its acts/beats/duration; candidate_budget() truncates that to a conservative candidate count in [1, cap] (cap = min(scene_candidates, 8)). generate_render_tournament renders ONE candidate first, computes the budget from its storyboard, and fans out the remaining budget concurrently ONLY when the first render scores below ESCALATE_BELOW_SCORE (8.0) AND the budget allows — so an easy or already-good scene costs one render while a hard, weak one escalates. _build_scene_candidates gained count/start_index so batches preserve absolute indices (temperature diversity + per-candidate cloud variant). Phase 4 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "services/manim_runtime.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2131,6 +2135,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "A missing/corrupt store yields no candidates and never breaks a render; only genuine vision winners are stored; the curated exemplar source is only ever changed by a reviewed human edit.",
         "harness",
     ),
+    "F174": _story_tuple(
+        "US-F174: As P4 Power user, cloud rendering, when I raise the candidate cap, I expect easy or already-good scenes to still cost one render and only hard, weak ones to fan out. Preconditions: the tournament is enabled (cap > 1). Steps: 1. Score a storyboard's difficulty. 2. Render one candidate. 3. Confirm a strong or easy first render does not escalate while a weak+hard one does.",
+        "P4",
+        "`storyboard_difficulty()` + `candidate_budget()` derive a conservative [1, cap] budget; `generate_render_tournament` renders one candidate, then fans out the remaining budget only when the first score < ESCALATE_BELOW_SCORE and the budget allows. Implementation reference: aetherlab/services/manim_runtime.py:55 / aetherlab/services/manim_runtime.py:264.",
+        "A strong first render ships without fan-out; an easy scene never escalates; a first-batch failure still falls back to the single-scene path; keyless static scores usually clear the bar so keyless runs stay single-candidate.",
+        "harness",
+    ),
 }
 
 
@@ -2364,6 +2375,8 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # ── Quality Flywheel Phase 3 (F172 losers teach, F173 winners teach) ────
     "F172": ("PASS", "None", "PASS"),
     "F173": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 4 (F174 cheap-first escalation) ──────────────
+    "F174": ("PASS", "None", "PASS"),
 }
 
 

@@ -3328,7 +3328,7 @@ def t_f161():
         assert scene.quality_score == 8.8
         assert scene.critique_verdict == "ship"
         assert scene.critique_issues == ["minor label crowding"]
-        assert any("Tournament selected candidate 3/3" in d for d in scene.diagnostics)
+        assert any("Tournament winner: candidate #3" in d for d in scene.diagnostics)
         scene.status = "rendered"
         return scene
 
@@ -3996,6 +3996,74 @@ def t_f173():
     assert ".write_text(" not in tool_src and "open(" not in tool_src, "promote tool must not write files"
     assert promote_exemplar.main(["--list"]) == 0  # runs without crashing
     return "exemplar promotion: high-scoring winners stashed for human-reviewed promotion (F173)"
+
+
+def t_f174():
+    # Quality Flywheel Phase 4: difficulty-scaled budget + cheap-first escalation.
+    import asyncio as _asyncio
+    from dataclasses import replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import (
+        ManimRuntime, SceneCandidate, candidate_budget, storyboard_difficulty,
+    )
+
+    EASY = {"acts": [{"beats": ["a"], "duration_s": 6}]}
+    HARD = {"acts": [{"beats": ["a", "b", "c", "d"], "duration_s": 8} for _ in range(4)]}
+    assert storyboard_difficulty(EASY) < storyboard_difficulty(HARD)
+    assert candidate_budget(EASY, 4) == 1, "easy scene must budget a single candidate"
+    assert candidate_budget(HARD, 4) == 4, "hard scene may use the full cap"
+    assert candidate_budget(HARD, 1) == 1 and candidate_budget(None, 4) >= 1
+
+    def _tournament(board, scores):
+        """Run the tournament with stubbed build/score/render; return build calls."""
+        # scene_candidates>1 + key + vision enable the tournament; the stubs mean
+        # no real provider/render is ever touched.
+        s = replace(_settings(), scene_candidates=4, openai_api_key="test-key", vision_model="test-vision")
+        rt = ManimRuntime(s)
+        calls = []
+
+        async def fake_build(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+            calls.append((count, start_index))
+            return [
+                SceneCandidate(index=start_index + i,
+                               scene=SceneBundle("AetherLabScene", "code", "manim", "compiled"),
+                               storyboard=board)
+                for i in range(count or 0)
+            ]
+
+        async def fake_score(cands, settings, progress):
+            for c in cands:
+                c.score = scores.get(c.index, 6.0)
+                c.verdict = "ship" if c.score >= 7 else "revise"
+            return cands
+
+        async def fake_repair(scene, settings=None, quality="l", max_repairs=2,
+                              max_revisions=2, brief="", progress=None):
+            return scene
+
+        rt._build_scene_candidates = fake_build          # type: ignore[assignment]
+        rt._render_and_score_candidates = fake_score     # type: ignore[assignment]
+        rt.render_scene_with_repair = fake_repair        # type: ignore[assignment]
+
+        req = ProblemRequest(prompt="x")
+        solver = SolverResult(summary="", derivation_steps=[], keywords=[], variables={}, model_name="t")
+        rag = RagResult(keywords=[], hits=[], backend="none")
+        _asyncio.run(rt.generate_render_tournament(req, solver, rag, s))
+        return calls
+
+    # A good first render ships immediately — no fan-out, even on a hard scene.
+    good = _tournament(HARD, {0: 9.0})
+    assert good == [(1, 0)], f"a strong first render must not escalate: {good}"
+
+    # A weak first render on a HARD scene escalates to the remaining budget.
+    weak_hard = _tournament(HARD, {0: 5.0})
+    assert weak_hard == [(1, 0), (3, 1)], f"weak+hard must fan out the budget: {weak_hard}"
+
+    # A weak first render on an EASY scene does NOT escalate (budget is 1).
+    weak_easy = _tournament(EASY, {0: 5.0})
+    assert weak_easy == [(1, 0)], f"weak+easy must stay single-candidate: {weak_easy}"
+    return "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

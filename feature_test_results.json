@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "FAIL",
-    "note": "AssertionError: {'ok': False, 'issues': [\"Tracker/results ID mismatch: tracker-result=['F172', 'F173'], result-tracker=[]\"], 'feature_count': 173, 'story_count': 173, 'result_count': 171, 'test_count': 173, 'defect_count': 21, 'bug_ids_in_defects': ['BUG-1', 'BUG-2', 'BUG-3', 'BUG-4', 'BUG-5', 'BUG-"
+    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F174'], result-tracker=[]\"]"
   },
   "F166": {
     "status": "PASS",
@@ -690,5 +690,9 @@
   "F173": {
     "status": "PASS",
     "note": "exemplar promotion: high-scoring winners stashed for human-reviewed promotion (F173)"
+  },
+  "F174": {
+    "status": "PASS",
+    "note": "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
   }
 }

@@ -53,6 +53,45 @@ class SceneCandidate:
     duration_delta: float = 9999.0
 
 
+# ── Tournament budget control (Quality Flywheel Phase 4) ─────────────────────
+# A first candidate scoring at/above this ships immediately; below it, the
+# tournament escalates and fans out more candidates (cheap-first, expensive-only-
+# when-needed). Keyless static-proxy scores are usually high, so keyless runs
+# stay single-candidate cheap; only a genuinely weak (usually vision-judged)
+# first render pays for a fan-out.
+ESCALATE_BELOW_SCORE = 8.0
+
+
+def storyboard_difficulty(storyboard: dict | None) -> float:
+    """Estimate a storyboard's rendering difficulty in [0.0, 1.0].
+
+    Harder scenes (more acts, more beats, longer runtime) are worth more
+    candidates. An unknown/missing storyboard is treated as medium so we neither
+    starve nor overspend on it.
+    """
+    if not isinstance(storyboard, dict):
+        return 0.5
+    acts = [a for a in (storyboard.get("acts") or []) if isinstance(a, dict)]
+    beats = sum(len(a.get("beats") or []) for a in acts)
+    duration = sum(float(a.get("duration_s") or 0.0) for a in acts)
+    score = (
+        min(len(acts) / 4.0, 1.0) * 0.4
+        + min(beats / 12.0, 1.0) * 0.4
+        + min(duration / 25.0, 1.0) * 0.2
+    )
+    return max(0.0, min(1.0, score))
+
+
+def candidate_budget(storyboard: dict | None, cap: int) -> int:
+    """Difficulty-scaled maximum number of candidates, clamped to [1, cap]."""
+    if cap <= 1:
+        return 1
+    difficulty = storyboard_difficulty(storyboard)
+    # Truncate (not round) so budgets stay conservative — cheap-first is the
+    # whole point: an easy scene gets 1, only a clearly hard one reaches the cap.
+    return max(1, min(cap, 1 + int(difficulty * (cap - 1))))
+
+
 def detect_latex() -> bool:
     """True when a LaTeX toolchain is available for Manim's MathTex/Tex.
 
@@ -242,10 +281,27 @@ class ManimRuntime:
             )
 
         try:
-            candidates = await self._build_scene_candidates(request, solver, rag, s, aspect, progress)
-            if not candidates:
-                raise RuntimeError("no candidate passed static gates")
-            scored = await self._render_and_score_candidates(candidates, s, progress)
+            cap = max(1, min(int(getattr(s, "scene_candidates", 1) or 1), 8))
+            # Cheap-first (Phase 4): render ONE candidate, then fan out the rest
+            # of a difficulty-scaled budget ONLY if that first render is weak.
+            first_built = await self._build_scene_candidates(
+                request, solver, rag, s, aspect, progress, count=1, start_index=0
+            )
+            scored = await self._render_and_score_candidates(first_built, s, progress)
+            budget = candidate_budget(scored[0].storyboard, cap) if scored else cap
+            best_so_far = max((c.score for c in scored), default=-1.0)
+            if (not scored or best_so_far < ESCALATE_BELOW_SCORE) and budget > len(scored):
+                if progress:
+                    progress(
+                        f"First render scored {best_so_far:.1f}; escalating to "
+                        f"{budget} candidate(s)"
+                    )
+                more = await self._build_scene_candidates(
+                    request, solver, rag, s, aspect, progress,
+                    count=budget - len(scored), start_index=len(first_built),
+                )
+                if more:
+                    scored += await self._render_and_score_candidates(more, s, progress)
             if not scored:
                 raise RuntimeError("no candidate rendered and scored")
             winner = sorted(
@@ -269,8 +325,8 @@ class ManimRuntime:
                 status="compiled",
                 diagnostics=list(winner.scene.diagnostics) + [
                     (
-                        f"Tournament selected candidate {winner.index + 1}/"
-                        f"{len(candidates)} with score {winner.score:.1f}."
+                        f"Tournament winner: candidate #{winner.index + 1}, best of "
+                        f"{len(scored)} rendered (score {winner.score:.1f})."
                     )
                 ],
                 storyboard=winner.storyboard,
@@ -326,21 +382,30 @@ class ManimRuntime:
         settings: "AppSettings",
         aspect: str,
         progress: Callable[[str], None] | None,
+        count: int | None = None,
+        start_index: int = 0,
     ) -> list[SceneCandidate]:
+        """Generate ``count`` candidates numbered from ``start_index``.
+
+        ``count=None`` builds the full configured cap (legacy behaviour).
+        Escalation builds one at a time, so absolute indices are preserved for
+        temperature diversity and per-candidate cloud isolation (variant).
+        """
         from aetherlab.services.code_safety import validate_code_safety
         from aetherlab.services.scene_validation import (
             estimate_duration, scene_hygiene_warnings, validate_scene,
         )
 
-        n = max(1, min(int(getattr(settings, "scene_candidates", 1) or 1), 8))
+        cap = max(1, min(int(getattr(settings, "scene_candidates", 1) or 1), 8))
+        n = cap if count is None else max(0, int(count))
         engine, base_diagnostics = self.detect_engine()
         generator = SceneGenerator(settings)
         candidates: list[SceneCandidate] = []
         class_name = "AetherLabScene"
-        for i in range(n):
+        for i in range(start_index, start_index + n):
             try:
                 if progress:
-                    progress(f"Generating scene candidate {i + 1}/{n}")
+                    progress(f"Generating scene candidate {i + 1}")
                 seed = f"candidate {i + 1}: distinct camera/composition/pacing, same physics"
                 board = await generator.storyboard(
                     request,
