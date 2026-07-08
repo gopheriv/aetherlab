@@ -745,6 +745,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a maintainer improving prompts, I can measure whether scene and lesson generations got better across canonical physics tasks.",
      "tools/prompt_quality_lab.py defines six canonical prompts (pendulum, Kepler orbit, standing wave, Fourier series, E&M field, and Kepler lesson mode), renders them through the real local pipeline, reuses visual_regression audit metrics/contact sheets, records storyboard presence/act count plus persisted critic score/verdict/issues, writes summary.json/summary.md/scores.csv under an ignored .analysis run directory, and compares against a previous report for score drops or duration collapse. docs/PROMPT_QUALITY_LAB.md documents safe provider mode and report interpretation.",
      "tools/prompt_quality_lab.py / docs/PROMPT_QUALITY_LAB.md", "headless", "Documented", ""),
+    ("F169", "Quality", "Quality flywheel gate (golden-set ratchet)",
+     "As a maintainer, a release cannot silently lower scene/lesson quality: a committed golden-set baseline gates every run.",
+     "tools/prompt_quality_lab.py expands the canonical prompt set to a 12-prompt golden set spanning mechanics/waves/fields/orbital plus a lesson, all renderable keyless so the baseline is reproducible. evaluate_gate() is a pure ratchet: it fails (CLI exit 2) when a run's mean score drops beyond --score-tolerance (render-noise headroom, default 0.5) or the render pass rate drops at all vs the committed tools/prompt_quality_baseline.json. --gate/--baseline/--score-tolerance wire it into the CLI so it can guard later Quality-Flywheel phases. Phase 0 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "tools/prompt_quality_lab.py / tools/prompt_quality_baseline.json / docs/QUALITY_FLYWHEEL_MISSION.md", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2076,6 +2080,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "Reports are written under ignored analysis output and avoid committing raw videos or secrets.",
         "harness",
     ),
+    "F169": _story_tuple(
+        "US-F169: As P3 Educator/maintainer, when I change generation, prompts, or the critic, I expect a committed golden-set baseline to fail my run if it lowers quality. Preconditions: tools/prompt_quality_baseline.json is committed. Steps: 1. Run `prompt_quality_lab --gate`. 2. Confirm an unchanged/improved run passes. 3. Confirm a mean-score or pass-rate regression exits non-zero.",
+        "P3",
+        "`load_prompt_set()` returns a >=12-prompt golden set spanning mechanics/waves/fields/orbital plus a lesson, all renderable keyless. `evaluate_gate(baseline, report, score_tolerance)` is a pure ratchet: it reports ok=False with reasons when the mean score falls beyond the tolerance or the render pass rate drops, and main() wires --gate/--baseline/--score-tolerance to exit 2 on regression. Implementation reference: tools/prompt_quality_lab.py:1 / tools/prompt_quality_baseline.json:1 / docs/QUALITY_FLYWHEEL_MISSION.md:1.",
+        "If the baseline file is missing the gate exits 3 with an actionable message; render non-determinism within tolerance never trips the gate.",
+        "harness",
+    ),
 }
 
 
@@ -2289,6 +2300,11 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F164": ("PASS", "None", "PASS"),
     "F165": ("PASS", "None", "PASS"),
     "F168": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 0 (F169) ─────────────────────────────────────
+    # New feature built + tested this pass: golden-set + gate ratchet. The gate
+    # logic is unit-tested deterministically (synthetic + committed baseline);
+    # the committed baseline was generated from a real keyless 12-prompt run.
+    "F169": ("PASS", "None", "PASS"),
 }
 
 

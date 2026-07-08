@@ -656,8 +656,8 @@
     "note": "feature-surface audit covers 63/63 current surfaces (F164)"
   },
   "F165": {
-    "status": "PASS",
-    "note": "tracker integrity: 168 features/168 stories/168 results/168 tests aligned (F165)"
+    "status": "FAIL",
+    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F169'], result-tracker=[]\"]"
   },
   "F166": {
     "status": "PASS",
@@ -670,5 +670,9 @@
   "F168": {
     "status": "PASS",
     "note": "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
+  },
+  "F169": {
+    "status": "PASS",
+    "note": "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
   }
 }

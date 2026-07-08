@@ -3775,6 +3775,48 @@ def t_f168():
     return "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
 
 
+def t_f169():
+    # Quality Flywheel Phase 0: the golden-set + release ratchet (gate).
+    from tools import prompt_quality_lab as lab
+
+    # Golden set spans the domains AetherLab serves and is >= 12 prompts.
+    prompts = lab.load_prompt_set()
+    ids = {p["id"] for p in prompts}
+    assert len(prompts) >= 12, len(prompts)
+    assert {"pendulum", "projectile", "doppler", "rc_circuit", "escape_velocity"} <= ids, ids
+    assert any(p["mode"] == "lesson" for p in prompts), "golden set must exercise a lesson"
+
+    # The gate is a pure function: identical/improved/within-tolerance runs pass;
+    # a real mean-score drop or ANY render-pass-rate drop fails. This is the
+    # deterministic proof of the ratchet (no rendering needed).
+    base = {"summary": {"mean_score": 6.0, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, base)["ok"], "identical run must pass the gate"
+    better = {"summary": {"mean_score": 6.8, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, better)["ok"], "improvement must pass"
+    noisy = {"summary": {"mean_score": 5.7, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, noisy)["ok"], "within-tolerance noise must pass"
+    worse = {"summary": {"mean_score": 5.2, "case_count": 12, "pass_count": 12}}
+    g = lab.evaluate_gate(base, worse)
+    assert not g["ok"] and any("mean score regressed" in r for r in g["reasons"]), g
+    fewer = {"summary": {"mean_score": 6.0, "case_count": 12, "pass_count": 10}}
+    g2 = lab.evaluate_gate(base, fewer)
+    assert not g2["ok"] and any("pass rate" in r for r in g2["reasons"]), g2
+
+    # A committed baseline exists and gates cleanly against itself (delta 0),
+    # proving the wired file path — not just synthetic dicts.
+    baseline_path = Path("tools/prompt_quality_baseline.json")
+    assert baseline_path.exists(), "committed baseline must ship with the gate"
+    committed = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert committed.get("summary", {}).get("case_count", 0) >= 12, committed.get("summary")
+    assert lab.evaluate_gate(committed, committed)["ok"], "baseline must gate against itself"
+
+    # The CLI wires --gate/--baseline/--score-tolerance.
+    import inspect
+    main_src = inspect.getsource(lab.main)
+    assert "--gate" in main_src and "evaluate_gate" in main_src, "gate must be wired into the CLI"
+    return "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

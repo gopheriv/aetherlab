@@ -26,14 +26,14 @@ variables, or raw provider responses.
 
 ## Canonical Prompts
 
-The built-in set covers:
+The built-in **golden set** (12 prompts) spans the domains AetherLab serves and
+is renderable keyless so the committed baseline is reproducible:
 
-- pendulum
-- Kepler orbit
-- standing wave
-- Fourier series
-- E&M field
-- Kepler lesson mode
+- mechanics: pendulum, projectile, collision
+- waves: standing wave, Fourier series, Doppler, interference
+- fields: E&M field (dipole), RC circuit
+- orbital: Kepler orbit, escape velocity
+- lesson mode: Kepler lesson
 
 You can pass a custom JSON list:
 
@@ -87,3 +87,26 @@ python tools\prompt_quality_lab.py `
 
 The comparison flags score drops greater than 1 point and duration collapses
 greater than 25%.
+
+## Gate (the release ratchet)
+
+`--gate` turns the lab into a CI-style quality ratchet (Phase 0 of the Quality
+Flywheel, `docs/QUALITY_FLYWHEEL_MISSION.md`). It runs the golden set, then
+compares the fresh mean score and render pass rate against a **committed**
+baseline (`tools/prompt_quality_baseline.json`, tracked in git — not under the
+ignored `.analysis/`):
+
+```powershell
+python tools\prompt_quality_lab.py --out .analysis\prompt-quality-lab\gate --gate
+```
+
+- Exit **0**: quality held or improved.
+- Exit **2**: the mean score fell by more than `--score-tolerance` (default
+  `0.5`, absorbing render non-determinism) **or** the render pass rate dropped
+  at all. Every later Quality-Flywheel phase's change must keep this green.
+- Exit **3**: no committed baseline found — generate one and commit it first.
+
+`evaluate_gate()` is a pure function (baseline dict + report dict → verdict), so
+the ratchet logic is unit-tested without rendering (feature F169). To refresh
+the baseline after a genuine, reviewed improvement, run the lab once and copy
+its `summary.json` to `tools/prompt_quality_baseline.json`.

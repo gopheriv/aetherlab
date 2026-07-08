@@ -24,6 +24,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / ".analysis" / "prompt-quality-lab"
+# Committed, tracked baseline (NOT under the gitignored .analysis/). The gate
+# ratchets fresh runs against this file so quality can only move up over time.
+DEFAULT_BASELINE = ROOT / "tools" / "prompt_quality_baseline.json"
+# How far the mean score may fall before the gate fails (render non-determinism
+# tolerance). Pass-rate is not allowed to drop at all.
+DEFAULT_SCORE_TOLERANCE = 0.5
 
 CANONICAL_PROMPTS: list[dict[str, Any]] = [
     {
@@ -56,6 +62,47 @@ CANONICAL_PROMPTS: list[dict[str, Any]] = [
         "quality": "l",
         "prompt": "Animate electric field lines around a dipole.",
     },
+    # ── Phase-0 golden-set expansion (Quality Flywheel) ─────────────────────
+    # Six more solve prompts so the gated baseline spans the domains AetherLab
+    # claims to serve (mechanics / waves / fields / orbital). Every prompt
+    # renders in keyless template mode too, so the baseline is reproducible
+    # without an API key.
+    {
+        "id": "projectile",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Show the parabolic trajectory of a projectile and its range.",
+    },
+    {
+        "id": "collision",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Illustrate an elastic collision between two masses on a track.",
+    },
+    {
+        "id": "doppler",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Visualize the Doppler effect for a moving sound source.",
+    },
+    {
+        "id": "interference",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Show two-source interference producing a fringe pattern.",
+    },
+    {
+        "id": "rc_circuit",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Animate the charging curve of an RC circuit over time.",
+    },
+    {
+        "id": "escape_velocity",
+        "mode": "solve",
+        "quality": "l",
+        "prompt": "Explain escape velocity by launching a body from a planet's surface.",
+    },
     {
         "id": "lesson_kepler",
         "mode": "lesson",
@@ -87,6 +134,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--compare", type=Path, default=None)
     parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="Ratchet: fail (exit 2) if this run regresses the mean score beyond "
+        "--score-tolerance or drops the render pass rate vs the committed baseline.",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=DEFAULT_BASELINE,
+        help=f"Committed baseline summary.json for --gate (default {DEFAULT_BASELINE}).",
+    )
+    parser.add_argument(
+        "--score-tolerance",
+        type=float,
+        default=DEFAULT_SCORE_TOLERANCE,
+        help="How far the mean score may fall before --gate fails.",
+    )
+    parser.add_argument(
         "--allow-provider",
         action="store_true",
         help="Use configured LLM/vision providers. Reports still never write secrets.",
@@ -114,7 +179,26 @@ def main(argv: list[str] | None = None) -> int:
         f"{sum(1 for c in report['cases'] if c['status'] == 'fail')}; "
         f"mean score: {report['summary']['mean_score']:.2f}"
     )
-    return 1 if any(c["status"] == "fail" for c in report["cases"]) else 0
+
+    render_failed = any(c["status"] == "fail" for c in report["cases"])
+
+    if args.gate:
+        if not args.baseline.exists():
+            print(f"GATE: no baseline at {args.baseline}; run once and commit it first.")
+            return 3
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        gate = evaluate_gate(baseline, report, score_tolerance=args.score_tolerance)
+        print(
+            f"GATE: baseline mean {gate['baseline_mean']:.2f} -> run mean "
+            f"{gate['report_mean']:.2f} (delta {gate['mean_delta']:+.2f}); "
+            f"{'PASS' if gate['ok'] and not render_failed else 'FAIL'}"
+        )
+        for reason in gate["reasons"]:
+            print(f"  - {reason}")
+        if not gate["ok"]:
+            return 2
+
+    return 1 if render_failed else 0
 
 
 def load_prompt_set(path: Path | None = None) -> list[dict[str, Any]]:
@@ -367,6 +451,51 @@ def compare_lab_reports(compare_dir: Path | None, report: dict[str, Any]) -> dic
             "regressions": reasons,
         })
     return {"baseline": str(baseline), "deltas": deltas, "regression_count": regressions}
+
+
+def evaluate_gate(
+    baseline: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    score_tolerance: float = DEFAULT_SCORE_TOLERANCE,
+) -> dict[str, Any]:
+    """The release ratchet (flywheel step 7): compare a fresh report to a
+    committed baseline. A release may not drop the mean critic/quality score by
+    more than ``score_tolerance`` (render non-determinism headroom), and may not
+    drop the render pass rate at all. Pure function — no I/O — so it is unit
+    testable without rendering anything.
+
+    Returns ``{ok, reasons, mean_delta, pass_delta, baseline_mean, report_mean}``.
+    """
+    b = baseline.get("summary", {}) or {}
+    r = report.get("summary", {}) or {}
+    b_mean = float(b.get("mean_score", 0.0) or 0.0)
+    r_mean = float(r.get("mean_score", 0.0) or 0.0)
+    mean_delta = round(r_mean - b_mean, 3)
+
+    b_cases = int(b.get("case_count", 0) or 0)
+    r_cases = int(r.get("case_count", 0) or 0)
+    b_pass = (int(b.get("pass_count", 0) or 0) / b_cases) if b_cases else 0.0
+    r_pass = (int(r.get("pass_count", 0) or 0) / r_cases) if r_cases else 0.0
+    pass_delta = round(r_pass - b_pass, 4)
+
+    reasons: list[str] = []
+    tol = abs(float(score_tolerance))
+    if mean_delta < -tol:
+        reasons.append(
+            f"mean score regressed {b_mean:.2f} -> {r_mean:.2f} "
+            f"(delta {mean_delta:+.2f}, tolerance {tol:.2f})"
+        )
+    if pass_delta < -1e-9:
+        reasons.append(f"render pass rate dropped {b_pass:.0%} -> {r_pass:.0%}")
+    return {
+        "ok": not reasons,
+        "reasons": reasons,
+        "mean_delta": mean_delta,
+        "pass_delta": pass_delta,
+        "baseline_mean": round(b_mean, 3),
+        "report_mean": round(r_mean, 3),
+    }
 
 
 def write_outputs(out_dir: Path, report: dict[str, Any]) -> None:
