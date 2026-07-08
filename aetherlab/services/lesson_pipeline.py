@@ -361,6 +361,10 @@ def _chapter_solver(ch: LessonChapter, plan: LessonPlan) -> SolverResult:
 
 
 def _scene_cache_usable(scene: SceneBundle, settings: "AppSettings") -> bool:
+    from aetherlab.services.pipeline import _video_exists
+
+    if scene.status == "rendered" and not _video_exists(scene.video_path):
+        return False
     min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
     if min_score <= 0:
         return True
@@ -450,11 +454,13 @@ class _ChapterCache:
             return {}
 
     def get(self, key: str) -> SceneBundle | None:
+        from aetherlab.services.pipeline import _video_exists
+
         entry = self._load().get(key)
         if not entry:
             return None
         scene = SceneBundle.from_json(entry, cached=True)
-        if scene.video_path and Path(scene.video_path).exists():
+        if scene.status == "rendered" and _video_exists(scene.video_path):
             return scene
         return None
 

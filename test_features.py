@@ -538,7 +538,13 @@ def t_f34():
     from aetherlab.services.pipeline import _video_exists
     assert _video_exists("") is False
     assert _video_exists(str(_TMP / "nope.mp4")) is False
-    return "_video_exists guards empty/missing"
+    empty = _TMP / "empty.mp4"
+    empty.write_bytes(b"")
+    assert _video_exists(str(empty)) is False
+    fake = _TMP / "fake.mp4"
+    fake.write_text("not a playable video", encoding="utf-8")
+    assert _video_exists(str(fake)) is False
+    return "_video_exists guards empty/missing/unplayable"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2373,8 +2379,9 @@ def t_f143():
     assert _chapter_key(ch, plan) != _chapter_key(plan.chapters[0], plan)
 
     # A tiny real mp4 to drive assembly (imageio-ffmpeg is bundled with manim).
-    import subprocess
     import imageio_ffmpeg
+    import subprocess
+
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     clip = _TMP / "seg.mp4"
     subprocess.run([ff, "-y", "-f", "lavfi", "-i",
@@ -2386,6 +2393,13 @@ def t_f143():
     k = _chapter_key(ch, plan)
     cache.put(k, SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(clip)))
     assert cache.get(k) is not None and cache.get("missing") is None
+    bad_clip = _TMP / "truncated.mp4"
+    bad_clip.write_bytes(b"")
+    cache.put(
+        "bad",
+        SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(bad_clip)),
+    )
+    assert cache.get("bad") is None, "chapter cache must reject unplayable videos"
 
     s = replace(_settings(), openai_api_key=None, narration_enabled=False)
     lp = LessonPipeline(s)
@@ -3068,8 +3082,16 @@ def t_f160():
     cache.store_scene(key, scene)
     assert cache.get(key).scene.quality_score == 8.25
 
+    import subprocess
+    import imageio_ffmpeg
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
     video = _TMP / "cached.mp4"
-    video.write_bytes(b"fake mp4 marker")
+    subprocess.run(
+        [ff, "-y", "-f", "lavfi", "-i",
+         "testsrc=size=160x90:rate=10:duration=0.5", "-pix_fmt", "yuv420p", str(video)],
+        capture_output=True,
+    )
+    assert video.exists()
 
     class _LLM:
         async def solve(self, _request):

@@ -171,9 +171,9 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a user, switching Manim engine regenerates the scene.",
      "Scene reused only if cached.engine == current engine and status ∈ {compiled, rendered}.",
      "ui/workers.py / services/pipeline.py", "static", "Documented", ""),
-    ("F34", "Cache", "Video re-render on missing file",
-     "As a user, a deleted cached video re-renders automatically.",
-     "A 'rendered' scene whose video_path no longer exists is re-rendered; needs_render covers compiled and missing-video rendered.",
+    ("F34", "Cache", "Video re-render on missing/unplayable file",
+     "As a user, a deleted or corrupted cached video re-renders automatically.",
+     "A 'rendered' scene whose video_path is missing, empty, or unplayable is re-rendered; playable-video validation covers compiled and stale rendered scenes.",
      "ui/workers.py / services/pipeline.py", "static", "Documented", ""),
 
     # ── RAG ─────────────────────────────────────────────────────────────────
@@ -840,7 +840,7 @@ DEFECTS: dict[str, str] = {
     "F06": "BUG-5: llm_context_window setting was defined but unused (dead config).",
     "F148": "BUG-6: xfade chain double-subtracted the overlap (cum += durs[k]-d), drifting every later crossfade early and over-clipping produced-lesson segments.",
     "F147": "BUG-7: _chapter_aspect compared chapter .id (LLM plans default to ''), tagging every id-less chapter 'setup'; now compares by object identity.",
-    "F143": "BUG-9: partial lesson renders compacted successful scenes, then zipped them against all renderable chapters; surviving clips could receive the wrong narration/title. Pipeline now carries plan indexes with rendered scenes.",
+    "F143": "BUG-9: partial lesson renders compacted successful scenes, then zipped them against all renderable chapters; surviving clips could receive the wrong narration/title. Pipeline now carries plan indexes with rendered scenes. BUG-23: lesson chapter cache accepted any existing video path, including zero-byte/corrupt MP4s; cached chapter videos now require a playable video.",
     "F145": "BUG-8/BUG-9: chapter-seek offsets use produced-video starts, and partial lessons map chapter offsets by plan index so skipped middle chapters do not mislabel surviving clips.",
     "F86": "BUG-10: compile_latex_to_pdf could return a stale PDF after a failed pdflatex run; it now removes stale output first and requires returncode 0 plus fresh output.",
     "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
@@ -849,6 +849,7 @@ DEFECTS: dict[str, str] = {
     "F153": "BUG-19: legacy manim-bot .env and existing gh auth sessions were ignored; settings now migrate CLOUD_RENDER_* aliases and GitHub CLI tokens without exposing secrets.",
     "F154": "BUG-15: exact job_id polling prevents attaching to unrelated runs. BUG-17: bundled workflow is provisioned before dispatch/test. BUG-18: removed setup-python cache:pip failure. BUG-20: artifact 302 downloads drop the Bearer header on the signed URL.",
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
+    "F34": "BUG-23: solve cache accepted any existing video path, including zero-byte/corrupt MP4s; cached rendered scenes now require a playable video.",
 }
 
 

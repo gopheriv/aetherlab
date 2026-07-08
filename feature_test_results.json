@@ -133,7 +133,7 @@
   },
   "F34": {
     "status": "PASS",
-    "note": "_video_exists guards empty/missing"
+    "note": "_video_exists guards empty/missing/unplayable"
   },
   "F35": {
     "status": "PASS",

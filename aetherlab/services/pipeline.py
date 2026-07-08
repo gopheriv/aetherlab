@@ -114,7 +114,29 @@ class AetherLabPipeline:
 
 
 def _video_exists(video_path: str) -> bool:
-    return bool(video_path) and Path(video_path).exists()
+    if not video_path:
+        return False
+    path = Path(video_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            stream = next(iter(container.streams.video), None)
+            if stream is None:
+                return False
+            for _frame in container.decode(stream):
+                return True
+            return False
+    except ImportError:
+        return size > 1024
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _merge_web_references(rag, keywords, settings):
