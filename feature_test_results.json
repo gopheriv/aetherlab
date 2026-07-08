@@ -129,7 +129,7 @@
   },
   "F33": {
     "status": "PASS",
-    "note": "scene reused only on engine+status match"
+    "note": "scene reused only on engine+status match; stale missing videos re-render"
   },
   "F34": {
     "status": "PASS",

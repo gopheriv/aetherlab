@@ -524,9 +524,14 @@ def t_f32():
 
 
 def t_f33():
-    src = inspect.getsource(__import__("aetherlab.services.pipeline", fromlist=["AetherLabPipeline"]).AetherLabPipeline.run)
+    pipeline_mod = __import__("aetherlab.services.pipeline", fromlist=["AetherLabPipeline"])
+    src = inspect.getsource(pipeline_mod.AetherLabPipeline.run)
     assert "engine != current_engine" in src and "compiled" in src
-    return "scene reused only on engine+status match"
+    assert (
+        "Cached rendered video missing; re-rendering." in src
+        and 'scene.video_path = ""' in src
+    )
+    return "scene reused only on engine+status match; stale missing videos re-render"
 
 
 def t_f34():
@@ -2168,6 +2173,7 @@ def t_f135():
     assert 1.0 <= light < heavy <= 5.0, (light, heavy)
     rs = inspect.getsource(ManimRuntime.render_scene)
     assert "_estimate_render_cost" in rs and "1800" in rs  # weight-aware, hard ceiling
+    assert 'scene_bundle.video_path = ""' in rs, "failed renders must not keep stale paths"
     rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
     assert "draft_quality" in rr and "partial success" in rr and "keeping draft" in rr
     return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success (F135)"

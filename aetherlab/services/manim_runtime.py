@@ -436,15 +436,19 @@ class ManimRuntime:
         """
         if scene_bundle.status != "compiled":
             scene_bundle.diagnostics.append("Skipping render: scene did not compile.")
+            if scene_bundle.video_path and not Path(scene_bundle.video_path).exists():
+                scene_bundle.video_path = ""
             return scene_bundle
 
         manim_cmd = self._find_manim_command()
         if not manim_cmd:
             scene_bundle.diagnostics.append("No Manim binary found; returning code-only.")
+            scene_bundle.video_path = ""
             return scene_bundle
 
         s = settings or self._settings
         data_dir = getattr(s, "data_dir", None)
+        scene_bundle.video_path = ""
 
         # ── Isolated per-render workspace (Bug 1) ──
         # A fresh uuid-suffixed dir per render means no two renders ever share
