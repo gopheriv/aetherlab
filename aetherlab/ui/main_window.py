@@ -614,6 +614,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_result: PipelineResult | None = None
         self._has_result = False
         self._timeline_started = False
+        from aetherlab.services.course_mode import CourseProgressStore
+
+        self.course_progress = CourseProgressStore(
+            self.settings.data_dir / "course_progress.json"
+        )
 
         self.setObjectName("MainWindow")
         self.setWindowTitle("AetherLab")
@@ -795,6 +800,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
         self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
+        self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
@@ -1099,6 +1105,11 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")
+            from aetherlab.services.course_mode import CourseProgressStore
+
+            self.course_progress = CourseProgressStore(
+                self.settings.data_dir / "course_progress.json"
+            )
             self.library_panel.set_settings(self.settings)
             self.empty_view.set_status(
                 bool(self.settings.openai_api_key),
@@ -1201,6 +1212,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._last_lesson = bundle
             if bundle.video_path:
                 self.lesson_view.set_lesson(bundle)
+                self._refresh_course_summary(bundle)
                 self.lesson_view.set_video(bundle.video_path)
                 self._workspace.setCurrentIndex(PAGE_LESSON)
                 self.toast.show_message(
@@ -1218,6 +1230,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
+        self._refresh_course_summary(bundle)
         if bundle.video_path:
             self.lesson_view.set_video(bundle.video_path)
         self._workspace.setCurrentIndex(PAGE_LESSON)
@@ -1229,6 +1242,37 @@ class MainWindow(QtWidgets.QMainWindow):
             "success",
             f"Lesson '{bundle.plan.title}' built ({note}). "
             "Watch it, read the transcript, or try the questions.",
+        )
+
+    def _refresh_course_summary(self, bundle) -> None:
+        try:
+            summary = self.course_progress.summary(bundle.plan)
+            self.lesson_view.set_course_summary(
+                f"{summary.message} Next: {summary.next_topic}"
+            )
+        except Exception:  # noqa: BLE001
+            self.lesson_view.set_course_summary(
+                "Course progress is unavailable for this lesson."
+            )
+
+    def _record_lesson_quiz_answer(
+        self, question_index: int, correct: bool, choice: str
+    ) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if not bundle:
+            return
+        try:
+            summary = self.course_progress.record_quiz_answer(
+                bundle.plan, int(question_index), bool(correct), str(choice)
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"Could not save course progress: {exc}")
+            return
+        self.lesson_view.set_course_summary(
+            f"{summary.message} Next: {summary.next_topic}"
+        )
+        self.statusBar().showMessage(
+            f"Course progress saved · {summary.correct}/{summary.attempts}"
         )
 
     def _export_study_guide(self) -> None:

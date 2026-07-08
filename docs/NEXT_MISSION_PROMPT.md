@@ -20,7 +20,7 @@ Current branch: `codex/stabilize-current-branch`
 
 Recent baseline:
 
-- Feature harness: `python test_features.py` -> 165/165 passed.
+- Feature harness: `python test_features.py` -> 167/167 passed.
 - Tracker build: `python build_feature_tracker.py` regenerated CSV/XLSX.
 - Tracker audit: `python tools\tracker_integrity_audit.py --check` passed.
 - Surface audit: `python tools\feature_surface_audit.py --check` passed.
@@ -65,33 +65,56 @@ Last documented defect: **BUG-23** in `ERRORS_FOUND.md`.
 
 ## High-Leverage Mission Backlog
 
-### Mission 1: Share/Export Bundle
+### Completed: Share/Export Bundle
 
-Build one-click export for completed lessons: MP4, SRT, study guide, scene code,
-metadata JSON, and a portable HTML player packed into a ZIP. This turns
-AetherLab output into something a teacher or student can actually hand off.
+Completed as F166. Lessons can export a portable ZIP containing MP4, SRT/VTT,
+study guide, metadata, chapter source files, README, and a static HTML player.
+
+Key files:
+
+- `aetherlab/services/share_export.py`
+- `docs/LESSON_SHARE_EXPORT.md`
+- `LessonView` / `MainWindow` export-bundle wiring
+
+### Completed: Course Mode Lite
+
+Completed as F167. Multiple-choice quiz answers persist to
+`data_dir/course_progress.json`; the lesson page shows a score and recommended
+next topic based on missed objectives.
+
+Key files:
+
+- `aetherlab/services/course_mode.py`
+- `docs/COURSE_MODE.md`
+- `_QuestionCard` / `LessonView` / `MainWindow` quiz-progress wiring
+
+### Next Mission: Prompt Quality Lab
+
+Build a repeatable prompt-evaluation lab for the rendering pipeline. AetherLab
+already has visual regression, candidate tournaments, exemplars, and VLM critic
+hooks, but it lacks a compact way to answer: "Did this prompt/exemplar change
+make generated lessons and scenes better?"
+
+Implement a command under `tools/` that runs a small canonical prompt set and
+writes a lightweight report with:
+
+- prompt id, prompt text, quality tier, and mode (solve/lesson);
+- storyboard metadata presence and act count;
+- render path status, duration, fps, blank/static metrics;
+- visual critic score/verdict/issues when a vision model is configured;
+- contact sheet path, not raw frame dumps;
+- before/after comparison against a saved report.
 
 Done means:
 
-- deterministic bundle layout;
-- no secrets in metadata;
-- HTML opens locally and plays the lesson MP4 with subtitles;
-- user-facing UI action from `LessonView` or `MainWindow`;
-- tracker row and regression test.
+- canonical prompts for pendulum, Kepler orbit, standing wave, Fourier series,
+  E&M field, and derivation/lesson mode;
+- JSON + Markdown report outputs under an ignored run directory;
+- docs explaining how to interpret the score table;
+- a tracker feature and regression tests for the report parser/comparison logic;
+- no raw videos or frame directories committed.
 
-### Mission 2: Course Mode
-
-Chain lessons into a lightweight course plan with saved quiz performance and
-recommended next topics. This is product value, not only rendering hygiene.
-
-Done means:
-
-- persistent course/session model;
-- quiz results stored per lesson;
-- next-lesson recommendation based on missed concepts;
-- small UI surface in the lesson page.
-
-### Mission 3: Render Farm Dashboard
+### Candidate Later: Render Farm Dashboard
 
 Expose cloud-render jobs as a real dashboard: queued, running, failed, complete,
 artifact downloaded, fallback-to-local state, and log tail.
@@ -103,20 +126,7 @@ Done means:
 - rate-limit and timeout messages are human-readable;
 - stubs cover success, failure, cancellation, and fallback.
 
-### Mission 4: Prompt Quality Lab
-
-Add an in-repo prompt evaluation harness for 6 canonical physics prompts. It
-records generated storyboard metadata, render metrics, visual critic score, and
-contact sheet paths in a compact report.
-
-Done means:
-
-- no raw videos committed;
-- repeatable command under `tools/`;
-- baseline score table in docs;
-- at least two prompt/exemplar improvements measured against the report.
-
-### Mission 5: UI Modularization
+### Candidate Later: UI Modularization
 
 Split the large `aetherlab/ui/widgets.py` into cohesive modules without
 behavior change: command bar, reference cards, scene player, lesson view,

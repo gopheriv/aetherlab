@@ -3485,8 +3485,8 @@ def t_f164():
 def t_f165():
     from tools.tracker_integrity_audit import audit
 
-    report = audit(allow_pending_result="F166")
-    assert report["feature_count"] >= 166, report
+    report = audit(allow_pending_result="F167")
+    assert report["feature_count"] >= 167, report
     assert report["result_count"] >= report["feature_count"] - 1, report
     assert report["test_count"] == report["feature_count"], report
     assert report["ok"], report["issues"]
@@ -3571,6 +3571,61 @@ def t_f166():
         if probe and probe.isRunning():
             probe.wait(5000)
     return "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+
+
+def t_f167():
+    import json
+
+    from aetherlab.core.models import LessonBundle
+    from aetherlab.services.course_mode import CourseProgressStore, lesson_key
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import LessonView, _QuestionCard
+
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    store_path = _TMP / "course_progress.json"
+    store = CourseProgressStore(store_path)
+    wrong = plan.questions[0].choices[-1]
+    summary = store.record_quiz_answer(plan, 0, False, wrong)
+    assert store_path.exists()
+    assert summary.attempts == 1 and summary.correct == 0
+    assert summary.missed_concepts and summary.next_topic.startswith("Review:")
+    data = json.loads(store_path.read_text(encoding="utf-8"))
+    key = lesson_key(plan)
+    assert key in data["lessons"]
+    assert data["lessons"][key]["questions"]["0"]["last_choice"] == wrong
+    assert "api_key" not in json.dumps(data).lower()
+    summary2 = CourseProgressStore(store_path).summary(plan)
+    assert summary2.attempts == 1 and summary2.missed_concepts == summary.missed_concepts
+
+    lv = LessonView()
+    try:
+        lv.set_lesson(LessonBundle(plan=plan))
+        assert "Course progress" in lv._course_status.text()
+        got = []
+        lv.quiz_answered.connect(lambda i, ok, choice: got.append((i, ok, choice)))
+        card = lv.findChildren(_QuestionCard)[0]
+        card._answer_mcq(wrong)
+        assert got == [(0, False, wrong)]
+        lv.set_course_summary("Quiz score 0/1. Review orbital shape next.")
+        assert "Review orbital shape" in lv._course_status.text()
+    finally:
+        lv.close()
+
+    mw = MainWindow(_settings())
+    try:
+        mw._last_lesson = LessonBundle(plan=plan)
+        mw.course_progress = CourseProgressStore(_TMP / "main_course_progress.json")
+        mw._record_lesson_quiz_answer(0, False, wrong)
+        assert mw.course_progress.path.exists()
+        assert "Review" in mw.lesson_view._course_status.text()
+    finally:
+        mw.close()
+        probe = getattr(mw, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    assert Path("docs/COURSE_MODE.md").read_text(encoding="utf-8")
+    return "course progress persists quiz answers and updates lesson recommendation strip (F167)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

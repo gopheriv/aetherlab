@@ -733,6 +733,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a student or teacher, I export a completed lesson as one portable package I can hand off or open offline.",
      "services/share_export.export_lesson_bundle writes a ZIP containing index.html, metadata.json, README.txt, study_guide.tex, media/lesson.mp4, subtitles as SRT plus browser-friendly VTT when available, and per-chapter Manim source files. The metadata is share-safe (relative asset names, no API keys, no app config, no absolute local paths). LessonView exposes an Export bundle button, wired through MainWindow to a ZIP save dialog with status feedback.",
      "services/share_export.py / ui/widgets.py / ui/main_window.py / docs/LESSON_SHARE_EXPORT.md", "headless", "Documented", ""),
+    ("F167", "Course", "Course progress from lesson quizzes",
+     "As a student, AetherLab remembers my quiz answers and tells me what to study next.",
+     "services/course_mode.CourseProgressStore persists quiz attempts to data_dir/course_progress.json keyed by lesson topic+audience, with per-question correctness, last choice, concept, and timestamp. LessonView question cards emit graded multiple-choice answers; MainWindow records them and updates a course status strip with score plus a recommended next topic. Wrong answers recommend the mapped objective; clean scores recommend a domain-appropriate follow-up. docs/COURSE_MODE.md documents the local-only scope and privacy boundary.",
+     "services/course_mode.py / ui/widgets.py / ui/main_window.py / docs/COURSE_MODE.md", "headless", "Documented", ""),
 ]
 # fmt: on
 

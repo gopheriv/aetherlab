@@ -657,10 +657,14 @@
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 166 features/165 results/166 tests aligned (F165)"
+    "note": "tracker integrity: 167 features/166 results/167 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
     "note": "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+  },
+  "F167": {
+    "status": "PASS",
+    "note": "course progress persists quiz answers and updates lesson recommendation strip (F167)"
   }
 }

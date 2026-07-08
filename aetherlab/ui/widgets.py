@@ -3467,6 +3467,8 @@ class _QuestionCard(QtWidgets.QFrame):
     """One check-yourself item: MCQ radios with immediate feedback, or an open
     question that reveals a model answer."""
 
+    answer_recorded = QtCore.pyqtSignal(bool, str)
+
     def __init__(self, index: int, question, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("CardFrame")
@@ -3511,6 +3513,7 @@ class _QuestionCard(QtWidgets.QFrame):
         self._feedback.setStyleSheet(
             f"color: {'#10B981' if correct else '#F43F5E'}; font-size: 12px;"
         )
+        self.answer_recorded.emit(correct, str(choice))
 
     def _reveal_open(self) -> None:
         self._feedback.setText(f"Model answer: {self._q.answer}")
@@ -3524,6 +3527,7 @@ class LessonView(QtWidgets.QWidget):
     chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
     export_requested = QtCore.pyqtSignal()
     share_bundle_requested = QtCore.pyqtSignal()
+    quiz_answered = QtCore.pyqtSignal(int, bool, str)  # question index, correct, choice
     regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -3579,6 +3583,21 @@ class LessonView(QtWidgets.QWidget):
         self._transcript.setReadOnly(True)
         self._tabs.addTab(self._transcript, "Transcript")
 
+        self._questions_page = QtWidgets.QWidget()
+        questions_page_layout = QtWidgets.QVBoxLayout(self._questions_page)
+        questions_page_layout.setContentsMargins(0, 0, 0, 0)
+        questions_page_layout.setSpacing(8)
+        self._course_status = QtWidgets.QLabel(
+            "Course progress starts when you answer a quiz question."
+        )
+        self._course_status.setObjectName("CourseProgressStatus")
+        self._course_status.setWordWrap(True)
+        self._course_status.setStyleSheet(
+            "color: #94A3B8; font-size: 12px; padding: 8px 10px; "
+            "border: 1px solid #1E293B; border-radius: 8px; background: #0D0D14;"
+        )
+        questions_page_layout.addWidget(self._course_status)
+
         self._questions_scroll = QtWidgets.QScrollArea()
         self._questions_scroll.setWidgetResizable(True)
         self._questions_host = QtWidgets.QWidget()
@@ -3586,7 +3605,8 @@ class LessonView(QtWidgets.QWidget):
         self._questions_layout.setSpacing(10)
         self._questions_layout.addStretch()
         self._questions_scroll.setWidget(self._questions_host)
-        self._tabs.addTab(self._questions_scroll, "Questions")
+        questions_page_layout.addWidget(self._questions_scroll, 1)
+        self._tabs.addTab(self._questions_page, "Questions")
 
         self._references = QtWidgets.QTextEdit()
         self._references.setReadOnly(True)
@@ -3738,9 +3758,11 @@ class LessonView(QtWidgets.QWidget):
             if w:
                 w.deleteLater()
         for i, q in enumerate(plan.questions, 1):
-            self._questions_layout.insertWidget(
-                self._questions_layout.count() - 1, _QuestionCard(i, q)
+            card = _QuestionCard(i, q)
+            card.answer_recorded.connect(
+                lambda correct, choice, idx=i - 1: self._on_quiz_answer(idx, correct, choice)
             )
+            self._questions_layout.insertWidget(self._questions_layout.count() - 1, card)
 
         cites: list[str] = []
         for ch in plan.chapters:
@@ -3753,7 +3775,14 @@ class LessonView(QtWidgets.QWidget):
         )
 
         self._seed_explore(plan)
+        self.set_course_summary("Course progress starts when you answer a quiz question.")
         self._set_populated(True)
+
+    def set_course_summary(self, message: str) -> None:
+        self._course_status.setText(message)
+
+    def _on_quiz_answer(self, question_index: int, correct: bool, choice: str) -> None:
+        self.quiz_answered.emit(question_index, bool(correct), str(choice))
 
     def _seed_explore(self, plan) -> None:
         """Seed the 'Play with it' canvas from the lesson's domain + the
