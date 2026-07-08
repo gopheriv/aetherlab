@@ -133,7 +133,7 @@
   },
   "F34": {
     "status": "PASS",
-    "note": "_video_exists guards empty/missing/unplayable"
+    "note": "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache"
   },
   "F35": {
     "status": "PASS",

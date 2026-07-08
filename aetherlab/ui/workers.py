@@ -150,9 +150,15 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         quality_label = {"l": "480p", "m": "720p", "h": "1080p"}.get(self.render_quality, "480p")
         self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
         self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
+        from aetherlab.services.pipeline import _video_exists
+
         needs_render = scene.status == "compiled" or (
-            scene.status == "rendered" and not (scene.video_path and Path(scene.video_path).exists())
+            scene.status == "rendered" and not _video_exists(scene.video_path)
         )
+        if scene.status == "rendered" and needs_render:
+            scene.diagnostics.append("Cached rendered video missing; re-rendering.")
+            scene.status = "compiled"
+            scene.video_path = ""
         if needs_render:
             rendered_scene = await manim.render_scene_with_repair(
                 scene, self.settings, quality=self.render_quality,
@@ -264,6 +270,11 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
 
 def _scene_cache_usable(scene: SceneBundle, settings: AppSettings) -> bool:
+    if scene.status == "rendered":
+        from aetherlab.services.pipeline import _video_exists
+
+        if not _video_exists(scene.video_path):
+            return False
     min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
     if min_score <= 0:
         return True

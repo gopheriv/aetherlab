@@ -535,7 +535,10 @@ def t_f33():
 
 
 def t_f34():
+    from aetherlab.core.models import SceneBundle
     from aetherlab.services.pipeline import _video_exists
+    from aetherlab.ui.workers import _scene_cache_usable
+
     assert _video_exists("") is False
     assert _video_exists(str(_TMP / "nope.mp4")) is False
     empty = _TMP / "empty.mp4"
@@ -544,7 +547,9 @@ def t_f34():
     fake = _TMP / "fake.mp4"
     fake.write_text("not a playable video", encoding="utf-8")
     assert _video_exists(str(fake)) is False
-    return "_video_exists guards empty/missing/unplayable"
+    scene = SceneBundle("s", "code", "engine", "rendered", video_path=str(fake))
+    assert _scene_cache_usable(scene, _settings()) is False
+    return "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache"
 
 
 # ══════════════════════════════════════════════════════════════════════════
