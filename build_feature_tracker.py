@@ -2151,6 +2151,54 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F48": ("PASS", "None", "PASS"),
     "F49": ("PASS", "None", "PASS"),
     "F50": ("PASS", "None", "PASS"),
+    # ── Batch 3: Scene fallback / Render / SceneUI / Canvas / Params /
+    #    Analysis / Navigation / History / Errors / Export / UX (F51-F90) ────
+    # Confirmed behavioural widget/interaction tests (stack indices, negative
+    # spinbox reset, slider<->spinbox sync, toast/error-banner state, history
+    # count round-trips) and the render-wiring/source-assertion tests. F54 is
+    # `manual` (render visual quality is judged by the visual-regression harness
+    # + human review), so it stays PARTIAL: command wiring confirmed here, full
+    # visual verification is out-of-band.
+    "F51": ("PASS", "None", "PASS"),
+    "F52": ("PASS", "None", "PASS"),
+    "F53": ("PASS", "None", "PASS"),
+    "F54": ("PARTIAL", "None", "PARTIAL"),
+    "F55": ("PASS", "None", "PASS"),
+    "F56": ("PASS", "None", "PASS"),
+    "F57": ("PASS", "BUG-21", "PASS"),
+    "F58": ("PASS", "None", "PASS"),
+    "F59": ("PASS", "None", "PASS"),
+    "F60": ("PASS", "None", "PASS"),
+    "F61": ("PASS", "None", "PASS"),
+    "F62": ("PASS", "None", "PASS"),
+    "F63": ("PASS", "None", "PASS"),
+    "F64": ("PASS", "None", "PASS"),
+    "F65": ("PASS", "None", "PASS"),
+    "F66": ("PASS", "None", "PASS"),
+    "F67": ("PASS", "None", "PASS"),
+    "F68": ("PASS", "None", "PASS"),
+    "F69": ("PASS", "None", "PASS"),
+    "F70": ("PASS", "BUG-2", "PASS"),
+    "F71": ("PASS", "None", "PASS"),
+    "F72": ("PASS", "None", "PASS"),
+    "F73": ("PASS", "None", "PASS"),
+    "F74": ("PASS", "None", "PASS"),
+    "F75": ("PASS", "None", "PASS"),
+    "F76": ("PASS", "None", "PASS"),
+    "F77": ("PASS", "None", "PASS"),
+    "F78": ("PASS", "None", "PASS"),
+    "F79": ("PASS", "None", "PASS"),
+    "F80": ("PASS", "None", "PASS"),
+    "F81": ("PASS", "None", "PASS"),
+    "F82": ("PASS", "None", "PASS"),
+    "F83": ("PASS", "None", "PASS"),
+    "F84": ("PASS", "None", "PASS"),
+    "F85": ("PASS", "None", "PASS"),
+    "F86": ("PASS", "BUG-10", "PASS"),
+    "F87": ("PASS", "None", "PASS"),
+    "F88": ("PASS", "None", "PASS"),
+    "F89": ("PASS", "None", "PASS"),
+    "F90": ("PASS", "None", "PASS"),
 }
 
 
