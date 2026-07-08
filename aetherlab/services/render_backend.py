@@ -266,6 +266,14 @@ class CloudRenderBackend:
         cached = manifest.get(job_id)
         client = self.client or GitHubActionsClient.from_settings(settings)
 
+        # Render-farm ledger: observe this cloud job so the dashboard can show
+        # what queued, ran, failed, downloaded, or fell back. Fail-soft.
+        from aetherlab.services.render_ledger import RenderJobLedger
+
+        ledger = RenderJobLedger(Path(settings.data_dir) / "render_ledger.json")
+        ledger.start(job_id=job_id, scene_class=scene.class_name, quality=quality,
+                     fps=fps, backend=self.name, provider="github_actions")
+
         def say(message: str) -> None:
             if progress:
                 try:
@@ -281,6 +289,8 @@ class CloudRenderBackend:
                 scene.status = "rendered"
                 scene.failure_kind = ""
                 scene.diagnostics.append(f"Cloud render cache hit ({job_id}).")
+                ledger.status(job_id, "rendered", "cloud cache hit")
+                ledger.finish(job_id, "rendered", str(video))
                 return scene
 
             say("Preparing render repo")
@@ -315,6 +325,7 @@ class CloudRenderBackend:
                 needs_latex=_needs_latex(scene.code),
                 branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
             )
+            ledger.status(job_id, "in_progress", "dispatched to GitHub Actions")
 
             deadline = time.monotonic() + min(timeout, int(getattr(settings, "cloud_render_timeout", timeout)))
             poll = max(2, int(getattr(settings, "cloud_poll_seconds", 8)))
@@ -341,6 +352,7 @@ class CloudRenderBackend:
                     scene.diagnostics.append(note)
                     scene.status = "render-error"
                     scene.failure_kind = kind
+                    ledger.failure(job_id, stderr, kind=kind)
                     return scene
                 say(f"Cloud render {status or 'queued'}")
                 await asyncio.sleep(poll)
@@ -352,6 +364,7 @@ class CloudRenderBackend:
                 )
                 scene.status = "render-timeout"
                 scene.failure_kind = "timeout"
+                ledger.failure(job_id, f"exceeded time budget ({timeout}s)", kind="timeout")
                 return scene
 
             say("Downloading cloud video")
@@ -372,9 +385,12 @@ class CloudRenderBackend:
             scene.status = "rendered"
             scene.failure_kind = ""
             scene.diagnostics.append(f"Rendered via GitHub Actions ({job_id}).")
+            ledger.status(job_id, "artifact_downloaded", "MP4 downloaded")
+            ledger.finish(job_id, "rendered", str(video))
             return scene
         except Exception as exc:  # noqa: BLE001
             log.warning("Cloud render unavailable; falling back to local: %s", _mask(str(exc)))
+            ledger.status(job_id, "failed", _mask(str(exc)))
             return _cloud_unavailable(scene, f"Cloud render unavailable: {_mask(str(exc))}")
 
     def _download_cached(

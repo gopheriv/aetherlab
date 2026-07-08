@@ -4066,6 +4066,70 @@ def t_f174():
     return "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
 
 
+def t_f175():
+    # Quality Flywheel Phase 5a: the render-farm job/candidate event ledger.
+    import inspect
+    from dataclasses import replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_ledger import RenderJobLedger, STATUSES, scrub
+
+    # Secret scrubbing: tokens/keys/bearer are redacted from any free text.
+    dirty = "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWX key sk-abcdefghijklmnopqrstuvwx Authorization: Bearer zzzz1234yyyy"
+    clean = scrub(dirty)
+    assert "ghp_" not in clean and "sk-" not in clean and "Bearer zzzz" not in clean and "redacted" in clean
+
+    led = RenderJobLedger(_TMP / "ledger_unit.json")
+    # Success job with per-candidate scores + winner.
+    led.start(job_id="j1", scene_class="AetherLabScene", quality="l", fps=30, backend="github-actions", provider="github_actions")
+    led.status("j1", "in_progress", "dispatched")
+    led.candidates("j1", [
+        {"index": 0, "score": 5.0, "verdict": "revise"},
+        {"index": 1, "score": 8.8, "verdict": "ship", "breakdown": {"legibility": 2}},
+    ])
+    led.winner("j1", 1)
+    led.status("j1", "artifact_downloaded", "MP4 downloaded")
+    led.finish("j1", "rendered", "/x/j1.mp4")
+    # Failure with a secret buried in the log tail.
+    led.failure("j2", "NameError line 3\nAuthorization: Bearer ghp_SECRETTOKEN1234567890 boom", kind="hallucinated-api")
+    # Cancellation, rate-limit, and local fallback.
+    led.status("j3", "cancelled", "user cancelled")
+    led.status("j4", "rate_limited", "Retry-After 42")
+    led.fallback("j5", "cloud unavailable: token lacks workflow scope", "/local/j5.mp4")
+
+    j1 = led.get("j1")
+    assert j1["winner_index"] == 1 and j1["status"] == "rendered" and j1["final_path"] == "/x/j1.mp4"
+    assert [c["score"] for c in j1["candidates"]] == [5.0, 8.8]
+    j2 = led.get("j2")
+    assert j2["status"] == "failed" and "ghp_" not in j2["log_tail"] and "redacted" in j2["log_tail"]
+    assert led.get("j5")["status"] == "fallback_local" and "workflow scope" in led.get("j5")["fallback_reason"]
+    # Every recorded timeline status is a known lifecycle state.
+    assert all(e["status"] in STATUSES for j in led.list(50) for e in j["timeline"])
+    # Cap keeps the ledger bounded.
+    capped = RenderJobLedger(_TMP / "ledger_cap.json", max_jobs=3)
+    for i in range(6):
+        capped.start(job_id=f"k{i}")
+    assert len(capped.list(50)) == 3
+
+    # Tournament wiring: per-candidate scores + winner land in the ledger.
+    s = replace(_settings(), data_dir=_TMP / "ledger_tourney")
+    rt = ManimRuntime(s)
+    scored = [
+        SceneCandidate(0, SceneBundle("AetherLabScene", "c0", "e", "rendered"), score=5.0, verdict="revise", breakdown={"legibility": 1.0}),
+        SceneCandidate(1, SceneBundle("AetherLabScene", "c1", "e", "rendered"), score=8.8, verdict="ship", breakdown={"legibility": 2.0}),
+    ]
+    rt._record_tournament_ledger(scored, scored[1], s, "l")
+    tour = RenderJobLedger(s.data_dir / "render_ledger.json").list()
+    assert tour and tour[0]["winner_index"] == 1 and len(tour[0]["candidates"]) == 2
+
+    # The cloud backend and fallback path are wired to the ledger.
+    rb_src = inspect.getsource(__import__("aetherlab.services.render_backend", fromlist=["CloudRenderBackend"]).CloudRenderBackend)
+    assert "RenderJobLedger" in rb_src and "ledger.failure(" in rb_src and "ledger.finish(" in rb_src
+    assert "fallback(" in inspect.getsource(ManimRuntime._render_once)
+    return "render-farm ledger: secret-scrubbed job/candidate events with tournament + cloud wiring (F175)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

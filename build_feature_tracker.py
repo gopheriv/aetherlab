@@ -769,6 +769,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a power user, I expect the tournament to spend compute only when it helps: one render first, more candidates only if that render is weak and the scene is hard.",
      "manim_runtime.storyboard_difficulty() scores a storyboard 0..1 from its acts/beats/duration; candidate_budget() truncates that to a conservative candidate count in [1, cap] (cap = min(scene_candidates, 8)). generate_render_tournament renders ONE candidate first, computes the budget from its storyboard, and fans out the remaining budget concurrently ONLY when the first render scores below ESCALATE_BELOW_SCORE (8.0) AND the budget allows — so an easy or already-good scene costs one render while a hard, weak one escalates. _build_scene_candidates gained count/start_index so batches preserve absolute indices (temperature diversity + per-candidate cloud variant). Phase 4 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "services/manim_runtime.py", "headless", "Documented", ""),
+    ("F175", "Quality", "Render-farm job/candidate ledger",
+     "As a power user, I expect a persisted, secret-scrubbed ledger of render jobs and tournaments — what queued, ran, failed, downloaded, or fell back — so cloud rendering is debuggable.",
+     "services/render_ledger.RenderJobLedger is a JSON-backed, fail-soft, standard-library ledger under data_dir/render_ledger.json. It records a status timeline (queued/in_progress/completed/failed/cancelled/rate_limited/artifact_downloaded/fallback_local/rendered), per-candidate critic scores + the winner index, sanitized failure log tails, fallback reason and final path, capped to the most recent jobs. scrub() redacts GitHub/OpenAI/Slack tokens, bearer tokens, private keys, and api_key/secret assignments from every persisted free-text field. generate_render_tournament records the tournament (candidates + winner + backend); CloudRenderBackend.render records the cloud lifecycle (queued->in_progress->failed-with-log/timeout->artifact_downloaded->rendered); manim_runtime._render_once records the cloud->local fallback against the same job id. Phase 5 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "services/render_ledger.py / services/render_backend.py / services/manim_runtime.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2142,6 +2146,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "A strong first render ships without fan-out; an easy scene never escalates; a first-batch failure still falls back to the single-scene path; keyless static scores usually clear the bar so keyless runs stay single-candidate.",
         "harness",
     ),
+    "F175": _story_tuple(
+        "US-F175: As P4 Power user, cloud rendering, when renders run in the cloud or a tournament picks a winner, I expect a persisted, secret-free ledger I can inspect. Preconditions: renders/tournaments occur. Steps: 1. Record a job's lifecycle + candidates + winner. 2. Confirm a failure log tail is scrubbed of tokens. 3. Confirm the tournament and cloud paths write the ledger.",
+        "P4",
+        "`RenderJobLedger` persists per-job status timelines, per-candidate scores, the winner, scrubbed failure log tails, and fallback reason/path (capped, fail-soft); `scrub()` redacts credentials from every free-text field; the tournament, cloud backend, and local-fallback paths all write it. Implementation reference: aetherlab/services/render_ledger.py:1 / aetherlab/services/render_backend.py:262 / aetherlab/services/manim_runtime.py:250.",
+        "A missing/corrupt ledger never breaks a render; no token/key/bearer/private-key ever persists; unknown states are never written; the ledger stays bounded.",
+        "harness",
+    ),
 }
 
 
@@ -2377,6 +2388,8 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F173": ("PASS", "None", "PASS"),
     # ── Quality Flywheel Phase 4 (F174 cheap-first escalation) ──────────────
     "F174": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 5a (F175 render-farm ledger) ─────────────────
+    "F175": ("PASS", "None", "PASS"),
 }
 
 

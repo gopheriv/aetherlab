@@ -318,6 +318,9 @@ class ManimRuntime:
             # exemplar CANDIDATE for later human review + promotion. Never edits
             # the curated exemplar source automatically (supply-chain safety).
             self._record_exemplar_candidate(winner, solver, s)
+            # Observe: record the tournament (per-candidate scores + winner) in
+            # the render-farm ledger so the dashboard can show why this scene won.
+            self._record_tournament_ledger(scored, winner, s, quality)
             selected = SceneBundle(
                 class_name=winner.scene.class_name,
                 code=winner.scene.code,
@@ -373,6 +376,35 @@ class ManimRuntime:
             )
         except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
             log.info("Could not record exemplar candidate (%s).", exc)
+
+    def _record_tournament_ledger(
+        self, scored: list["SceneCandidate"], winner: "SceneCandidate",
+        settings: "AppSettings", quality: str,
+    ) -> None:
+        """Record the tournament (candidates + winner + backend) in the ledger."""
+        try:
+            import hashlib
+
+            from aetherlab.services.render_ledger import RenderJobLedger
+
+            job_id = "tournament-" + hashlib.sha256(
+                (winner.scene.code + quality).encode("utf-8")
+            ).hexdigest()[:16]
+            mode = str(getattr(settings, "render_mode", "local") or "local")
+            backend = "github-actions" if mode in ("cloud", "auto") else "local"
+            ledger = RenderJobLedger(settings.data_dir / "render_ledger.json")
+            ledger.start(
+                job_id=job_id, scene_class=winner.scene.class_name, quality=quality,
+                backend=backend, provider=str(getattr(settings, "cloud_provider", "")),
+            )
+            ledger.candidates(job_id, [
+                {"index": c.index, "score": c.score, "verdict": c.verdict, "breakdown": c.breakdown}
+                for c in scored
+            ])
+            ledger.winner(job_id, winner.index)
+            ledger.finish(job_id, "rendered")
+        except Exception as exc:  # noqa: BLE001 — observability must never break a render
+            log.info("Could not record tournament ledger (%s).", exc)
 
     async def _build_scene_candidates(
         self,
@@ -924,6 +956,24 @@ class ManimRuntime:
         )
         if local.status == "rendered":
             local.diagnostics.append("Cloud render unavailable; rendered locally.")
+        # Ledger: record the local fallback against the same cloud job id so the
+        # dashboard shows the whole story (cloud attempt -> local fallback).
+        try:
+            from aetherlab.services.render_backend import cloud_job_id, render_fps_for
+            from aetherlab.services.render_ledger import RenderJobLedger
+
+            jid = cloud_job_id(
+                rendered, quality=quality, fps=render_fps_for(rendered.code, quality), variant=variant
+            )
+            reason = next(
+                (d for d in reversed(rendered.diagnostics) if "unavailable" in d.lower()),
+                "Cloud render unavailable; rendered locally.",
+            )
+            RenderJobLedger(s.data_dir / "render_ledger.json").fallback(
+                jid, reason, local.video_path if local.status == "rendered" else ""
+            )
+        except Exception as exc:  # noqa: BLE001 — observability must never break a render
+            log.info("Could not record fallback ledger (%s).", exc)
         return local
 
     async def _add_narration(
