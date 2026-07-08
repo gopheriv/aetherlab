@@ -3544,6 +3544,28 @@ def t_f166():
     out = _TMP / "kepler_bundle.zip"
     summary = export_lesson_bundle(bundle, out)
     assert summary.path == out and summary.size_bytes > video.stat().st_size
+
+    # BUG-26 regression: a mid-export failure must not truncate a prior good
+    # bundle or leave a plausible-but-incomplete zip in its place (atomic write).
+    good_bytes = out.read_bytes()
+    from unittest import mock as _mock
+    from aetherlab.services import share_export as _se
+
+    _orig_write = _se._write
+
+    def _boom(zf, entries, source, arcname, compress_type=None):
+        if arcname.endswith("lesson.mp4"):
+            raise OSError("simulated disk-full during export")
+        return _orig_write(zf, entries, source, arcname, compress_type)
+
+    with _mock.patch.object(_se, "_write", _boom):
+        try:
+            export_lesson_bundle(bundle, out)
+            raise AssertionError("expected export to fail mid-write")
+        except OSError:
+            pass
+    assert out.read_bytes() == good_bytes, "prior bundle destroyed by failed re-export"
+    assert not (out.with_name(out.name + ".part")).exists(), "staging .part leaked"
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
         assert any(n.endswith("/index.html") for n in names)

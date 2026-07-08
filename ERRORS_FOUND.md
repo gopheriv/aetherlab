@@ -83,6 +83,15 @@ render. Fixed and covered by the F154 regression.
 | BUG-24 | Doc-drift | F09 / US-F09 Qwen settings loader | `core/settings.py:129`, `build_feature_tracker.py` | The tracker described Qwen settings as automatic autoload, but `load_settings()` only applies `load_qwen_settings()` when `AETHERLAB_QWEN_AUTOLOAD=1`. The implemented privacy guard is correct, but the canonical feature copy implied a silent credential import. Fixed by renaming F09 to an opt-in loader and making the user story/expected behaviour match the code. Existing tests missed it because F09 only exercised the parser directly, while F128 separately asserted the gated default behaviour. |
 | BUG-25 | Logistical | F34 / US-F34 UI solve cache video validity | `ui/workers.py:154`, `services/pipeline.py:116` | The headless pipeline rejected missing, empty, or unplayable cached rendered MP4s via `_video_exists()`, but the desktop `PipelineWorker` only checked `Path.exists()` before reusing a cached rendered scene. A corrupt non-empty MP4 could therefore be accepted in the real UI solve path while the headless smoke path correctly re-rendered. Fixed by routing the UI worker cache check and render decision through `_video_exists()`, clearing stale video paths before repair render, and extending F34 to assert `_scene_cache_usable()` rejects a fake MP4. Existing tests missed it because F34 only validated the shared helper, not the UI worker's separate reuse condition. |
 
+## Seventh review pass (user-story Phase-2 audit)
+
+Found by executing the F166–F168 user stories against their code paths with the
+adversarial "fails mid-operation" variant rather than the happy path only.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-26 | Logistical / data loss | F166 / US-F166 Lesson share bundle | `services/share_export.py:42` | `export_lesson_bundle` opened `zipfile.ZipFile(output_path, "w")`, which truncates the target immediately, and wrote every asset directly into it. Any mid-write failure (disk full, a missing/unwritable asset, a study-guide error) left a partial zip on disk — and because README/index.html/metadata/study_guide are written before the video, that partial zip still *opened* and looked plausible while missing the MP4, subtitles, and scenes. Re-exporting over a previously-good bundle destroyed it on failure. This is exactly the "misleading share bundle" the F166 failure-mode contract forbids. Fixed by staging into a sibling `<name>.part` file and `os.replace()`-ing onto the target only after the whole zip is written, unlinking the staging file on any exception. Existing test missed it because `t_f166` only asserted a successful export's contents, never a mid-write failure. Regression added to `t_f166`: a forced `_write` failure must leave the prior bundle byte-identical and leave no `.part`. |
+
 ## Notes on non-issues considered and dismissed
 - `SimulationPanel.show_loading` is defined but unused — the shell drives the
   running state via `RunningView`; `hide_loading` is still used. Harmless dead

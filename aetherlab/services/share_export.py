@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -44,36 +45,51 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
     root = _slug(getattr(bundle.plan, "title", "") or "aetherlab-lesson")
     entries: list[str] = []
 
-    with TemporaryDirectory(prefix="aetherlab_share_") as tmp_name:
-        tmp = Path(tmp_name)
-        study_guide = export_lesson_study_guide(bundle.plan, tmp / "study_guide.tex")
-        metadata = _metadata(bundle)
-        srt = _subtitle_path(bundle, video)
-        vtt_text = _srt_to_vtt(srt.read_text(encoding="utf-8")) if srt else ""
-        html_text = _html_player(bundle, metadata, has_track=bool(vtt_text))
-        readme_text = _readme(bundle, bool(srt))
+    # Build into a sibling temp file and atomically replace the target only on
+    # full success. A mid-write failure (disk full, missing asset, study-guide
+    # error) must never truncate the target or leave a plausible-but-incomplete
+    # zip in its place -- that would be exactly the "misleading share bundle"
+    # the failure contract forbids, and would destroy a prior good export.
+    staging = output_path.with_name(output_path.name + ".part")
+    try:
+        with TemporaryDirectory(prefix="aetherlab_share_") as tmp_name:
+            tmp = Path(tmp_name)
+            study_guide = export_lesson_study_guide(bundle.plan, tmp / "study_guide.tex")
+            metadata = _metadata(bundle)
+            srt = _subtitle_path(bundle, video)
+            vtt_text = _srt_to_vtt(srt.read_text(encoding="utf-8")) if srt else ""
+            html_text = _html_player(bundle, metadata, has_track=bool(vtt_text))
+            readme_text = _readme(bundle, bool(srt))
 
-        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            _writestr(zf, entries, f"{root}/README.txt", readme_text)
-            _writestr(zf, entries, f"{root}/index.html", html_text)
-            _writestr(
-                zf,
-                entries,
-                f"{root}/metadata.json",
-                json.dumps(metadata, indent=2, ensure_ascii=False),
-            )
-            _write(zf, entries, study_guide, f"{root}/study_guide.tex")
-            _write(zf, entries, video, f"{root}/media/lesson.mp4", zipfile.ZIP_STORED)
-            if srt:
-                _write(zf, entries, srt, f"{root}/media/lesson.srt")
-            if vtt_text:
-                _writestr(zf, entries, f"{root}/media/lesson.vtt", vtt_text)
-            for idx, scene in enumerate(getattr(bundle, "chapter_scenes", []) or [], 1):
-                code = str(getattr(scene, "code", "") or "")
-                if not code.strip():
-                    continue
-                name = _scene_filename(bundle, idx)
-                _writestr(zf, entries, f"{root}/scenes/{name}", code)
+            with zipfile.ZipFile(staging, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                _writestr(zf, entries, f"{root}/README.txt", readme_text)
+                _writestr(zf, entries, f"{root}/index.html", html_text)
+                _writestr(
+                    zf,
+                    entries,
+                    f"{root}/metadata.json",
+                    json.dumps(metadata, indent=2, ensure_ascii=False),
+                )
+                _write(zf, entries, study_guide, f"{root}/study_guide.tex")
+                _write(zf, entries, video, f"{root}/media/lesson.mp4", zipfile.ZIP_STORED)
+                if srt:
+                    _write(zf, entries, srt, f"{root}/media/lesson.srt")
+                if vtt_text:
+                    _writestr(zf, entries, f"{root}/media/lesson.vtt", vtt_text)
+                for idx, scene in enumerate(getattr(bundle, "chapter_scenes", []) or [], 1):
+                    code = str(getattr(scene, "code", "") or "")
+                    if not code.strip():
+                        continue
+                    name = _scene_filename(bundle, idx)
+                    _writestr(zf, entries, f"{root}/scenes/{name}", code)
+
+        os.replace(staging, output_path)
+    except BaseException:
+        try:
+            staging.unlink()
+        except OSError:
+            pass
+        raise
 
     return LessonBundleExport(
         path=output_path,
