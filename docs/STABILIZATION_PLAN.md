@@ -46,14 +46,14 @@ These fonts are used by produced lesson title cards and bundled in
 
 5. Documentation, trackers, and regression suite
    - Feature tracker spreadsheet/CSV and `ERRORS_FOUND.md`.
-   - `test_features.py`, `test_batch.py`, feature result JSON.
+   - `test_features.py`, `tests/test_batch.py`, feature result JSON.
    - Cloud/settings/UI docs and stabilization notes.
 
 ## Current Verification
 
 - `python test_features.py` passed: 165/165.
 - `python -m pytest -q` passed: 37 passed, 1 external deprecation warning.
-- `python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools` passed.
+- `python -m compileall -q aetherlab tests test_features.py build_feature_tracker.py tools` passed.
 - `git diff --check` passed.
 - Live GitHub Actions cloud smoke passed after provisioning the render workflow
   and downloading a valid MP4 artifact.

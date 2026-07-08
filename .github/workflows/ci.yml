@@ -44,7 +44,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Compile source tree
-        run: python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools
+        run: python -m compileall -q aetherlab tests test_features.py build_feature_tracker.py tools
 
       - name: Check whitespace
         run: git diff --check
