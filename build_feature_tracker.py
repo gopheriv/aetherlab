@@ -753,6 +753,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a maintainer, the visual critic scores each render on five explicit axes so candidates can be ranked and losers can be diagnosed — even with no vision model.",
      "services/scene_critic.py defines CRITIC_AXES (legibility/composition/palette/structure/substance, 0-2 each = 0-10). CRITIC_SYSTEM_PROMPT requests a per-axis breakdown; critique_video parses it via _coerce_breakdown, which validates against the fixed schema and — rather than silently zeroing malformed LLM output (the BUG-7 lesson) — spreads a valid aggregate score evenly and flags it vision-approx. static_quality_estimate() maps the scene_validation static battery (+ optional visual-regression metrics) onto the same axes for a deterministic, discriminating keyless proxy (verdict stays skipped). SceneBundle persists critique_breakdown backward-compatibly; all three manim_runtime copy sites propagate it and the tournament ranks keyless candidates by the static proxy instead of dropping them. prompt_quality_lab surfaces the breakdown without changing the gated score. Phase 1 of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "services/scene_critic.py / core/models.py / services/manim_runtime.py / tools/prompt_quality_lab.py", "headless", "Documented", ""),
+    ("F171", "Quality", "Parallel cloud fan-out with per-candidate isolation",
+     "As a power user with cloud rendering, when the tournament renders N candidates, I expect them to render concurrently on the farm without stealing each other's artifacts.",
+     "manim_runtime._render_and_score_candidates already renders candidates concurrently (asyncio.gather bounded by scene_candidate_concurrency) and routes each through _render_once -> select_backend, so cloud-configured users fan out to GitHub Actions. Phase 2 closes the concurrency race: cloud_job_id (also the cloud cache key) now takes a `variant` salt so byte-identical candidates dispatched at once can no longer collide on the same jobs/<id>.py scene file or <id>.mp4 artifact (the BUG-15 race), while an empty variant stays byte-identical to the legacy id so the single-scene path keeps its content cache. _render_once threads the variant; the tournament passes cand<index>. Keyless candidates are ranked by the Phase-1 static proxy instead of being dropped. tools/cloud_tournament_smoke.py is a manual live end-to-end check; t_f171 proves isolation with a stubbed concurrent render. Phase 2 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "services/render_backend.py / services/manim_runtime.py / tools/cloud_tournament_smoke.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2098,6 +2102,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "Malformed LLM breakdowns are approximated (never silent-zeroed); old caches without the field load cleanly; keyless mode ranks by the static proxy without a vision model; the critic never raises.",
         "harness",
     ),
+    "F171": _story_tuple(
+        "US-F171: As P4 Power user, cloud rendering, when a tournament renders several candidates at once, I expect each to get its own cloud job and artifact even if two candidates produced identical code. Preconditions: a render repo/token may be configured; the headless test stubs GitHub. Steps: 1. Salt cloud_job_id per candidate. 2. Concurrently render identical-code candidates. 3. Confirm distinct job ids and no shared artifact.",
+        "P4",
+        "`cloud_job_id(scene, quality, fps, variant)` salts the content-addressed id (and cloud cache key) so concurrent byte-identical candidates cannot collide on jobs/<id>.py or <id>.mp4 (the BUG-15 race); variant='' preserves the legacy id and single-scene cache. `_render_once(variant=...)` threads it and `_render_and_score_candidates` passes cand<index>; keyless candidates are ranked by the static proxy, not dropped. Implementation reference: aetherlab/services/render_backend.py:480 / aetherlab/services/manim_runtime.py:763 / tools/cloud_tournament_smoke.py:1.",
+        "A candidate's cloud failure scores it out without aborting the tournament; whole-cloud-unavailable falls back to local; identical-code candidates never share an artifact.",
+        "live-cloud",
+    ),
 }
 
 
@@ -2321,6 +2332,13 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # proxy, all deterministically unit-tested (coerce/approx/static/round-trip)
     # without a live vision model or a render.
     "F170": ("PASS", "None", "PASS"),
+    # ── Quality Flywheel Phase 2 (F171) ─────────────────────────────────────
+    # The isolation guarantee (distinct per-candidate cloud job/artifact) is
+    # proven deterministically with a stubbed concurrent render; the live
+    # concurrent GitHub farm run needs real credentials (tools/
+    # cloud_tournament_smoke.py), so this stays PARTIAL like the other
+    # live-cloud stories.
+    "F171": ("PARTIAL", "None", "PARTIAL"),
 }
 
 

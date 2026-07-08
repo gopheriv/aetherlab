@@ -177,8 +177,12 @@ class RenderBackend(Protocol):
         settings: "AppSettings",
         timeout: int,
         progress: Callable[[str], None] | None = None,
+        variant: str = "",
     ) -> SceneBundle:
-        """Render one compiled SceneBundle to a video or failure SceneBundle."""
+        """Render one compiled SceneBundle to a video or failure SceneBundle.
+
+        ``variant`` isolates concurrent tournament candidates (see cloud_job_id).
+        """
 
 
 class LocalRenderBackend:
@@ -200,6 +204,7 @@ class LocalRenderBackend:
         settings: "AppSettings",
         timeout: int,
         progress: Callable[[str], None] | None = None,
+        variant: str = "",  # accepted for interface parity; local renders are already isolated per-process
     ) -> SceneBundle:
         if progress:
             progress("Rendering locally")
@@ -234,6 +239,7 @@ class CloudRenderBackend:
         settings: "AppSettings",
         timeout: int,
         progress: Callable[[str], None] | None = None,
+        variant: str = "",
     ) -> SceneBundle:
         ok, reason = self.available()
         if not ok:
@@ -253,7 +259,7 @@ class CloudRenderBackend:
         )
 
         fps = render_fps_for(scene.code, quality)
-        job_id = cloud_job_id(scene, quality=quality, fps=fps)
+        job_id = cloud_job_id(scene, quality=quality, fps=fps, variant=variant)
         run_dir = _RUNS_DIR / f"cloud_{job_id}_{quality}"
         run_dir.mkdir(parents=True, exist_ok=True)
         manifest = CloudRenderManifest(Path(settings.data_dir) / "cloud_renders.json")
@@ -477,16 +483,26 @@ def render_fps_for(code: str, quality: str) -> int:
     return fps
 
 
-def cloud_job_id(scene: SceneBundle, *, quality: str, fps: int) -> str:
-    payload = "\n".join([
+def cloud_job_id(scene: SceneBundle, *, quality: str, fps: int, variant: str = "") -> str:
+    """Content-addressed cloud job id (also the cloud cache key).
+
+    ``variant`` salts the id so concurrent tournament candidates with
+    byte-identical code never collide on the same ``jobs/<id>.py`` scene file
+    or steal each other's ``<id>.mp4`` artifact (the BUG-15 race under
+    concurrency). An empty variant leaves the hash byte-identical to the legacy
+    id, so the single-scene path keeps hitting its existing cloud cache.
+    """
+    parts = [
         scene.class_name,
         scene.code,
         quality,
         str(fps),
         f"manim=={MANIM_VERSION_PIN}",
         f"workflow={CLOUD_WORKFLOW_VERSION}",
-    ])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+    ]
+    if variant:
+        parts.append(f"variant={variant}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
 
 
 def scan_cloud_payload(code: str) -> str | None:

@@ -376,7 +376,11 @@ class ManimRuntime:
             async with sem:
                 if progress:
                     progress(f"Draft rendering candidate {candidate.index + 1}")
-                draft = await self._render_once(candidate.scene, settings, "l", progress)
+                # variant isolates this candidate's cloud job/artifact so
+                # byte-identical candidates dispatched concurrently never collide.
+                draft = await self._render_once(
+                    candidate.scene, settings, "l", progress, variant=f"cand{candidate.index}"
+                )
                 if draft.status != "rendered" or not draft.video_path:
                     return None
                 brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
@@ -766,8 +770,15 @@ class ManimRuntime:
         settings: "AppSettings | None",
         quality: str,
         progress: Callable[[str], None] | None = None,
+        variant: str = "",
     ) -> SceneBundle:
-        """One render attempt through the selected backend, with local fallback."""
+        """One render attempt through the selected backend, with local fallback.
+
+        ``variant`` isolates concurrent tournament candidates on the cloud
+        backend so byte-identical candidate code cannot collide on the same
+        job id / artifact (see render_backend.cloud_job_id). Empty for the
+        normal single-scene path, which keeps its content-addressed cloud cache.
+        """
         s = settings or self._settings
         if s is None:
             return self.render_scene(scene_bundle, settings, quality)
@@ -786,6 +797,7 @@ class ManimRuntime:
             settings=s,
             timeout=timeout,
             progress=progress,
+            variant=variant,
         )
         if rendered.status != CLOUD_UNAVAILABLE:
             return rendered

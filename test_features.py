@@ -3872,6 +3872,54 @@ def t_f170():
     return "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)"
 
 
+def t_f171():
+    # Quality Flywheel Phase 2: parallel cloud fan-out with per-candidate
+    # job-id isolation (the BUG-15 artifact-steal race under concurrency).
+    import asyncio as _asyncio
+    from dataclasses import replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_backend import cloud_job_id
+
+    code = "class AetherLabScene(Scene):\n    def construct(self):\n        self.play(Create(Dot()))\n        self.wait(1)\n"
+    sb = SceneBundle("AetherLabScene", code, "manim", "compiled")
+
+    # variant salts the cloud id; "" stays byte-identical to the legacy id so the
+    # single-scene path keeps its content-addressed cloud cache.
+    base = cloud_job_id(sb, quality="l", fps=30)
+    assert cloud_job_id(sb, quality="l", fps=30, variant="") == base, "empty variant must preserve cache id"
+    salted = [cloud_job_id(sb, quality="l", fps=30, variant=f"cand{i}") for i in range(4)]
+    assert len(set(salted)) == 4 and base not in salted, salted
+
+    # Concurrently render THREE byte-identical candidates through the real
+    # tournament scorer with a stubbed render; each must get its own variant and
+    # receive its own artifact — never another candidate's.
+    s = _settings()
+    runtime = ManimRuntime(s)
+    seen: list[str] = []
+
+    async def fake_render_once(scene, settings, quality, progress=None, variant=""):
+        seen.append(variant)
+        await _asyncio.sleep(0)  # yield so the gathered candidates interleave
+        return replace(scene, status="rendered", video_path=f"/fake/{variant}.mp4")
+
+    runtime._render_once = fake_render_once  # type: ignore[assignment]
+    candidates = [SceneCandidate(index=i, scene=replace(sb), storyboard=None) for i in range(3)]
+    scored = _asyncio.run(runtime._render_and_score_candidates(candidates, s, None))
+
+    assert sorted(seen) == ["cand0", "cand1", "cand2"], seen  # distinct isolation keys
+    assert scored, "keyless candidates must be scored (static proxy), not dropped"
+    for c in scored:
+        assert c.scene.video_path == f"/fake/cand{c.index}.mp4", (c.index, c.scene.video_path)
+        assert c.score > 0, "static proxy must score keyless candidates for ranking"
+
+    # A manual live-smoke script exists for the real GitHub end-to-end path.
+    smoke = Path("tools/cloud_tournament_smoke.py").read_text(encoding="utf-8")
+    assert "cloud_job_id" in smoke and "variant" in smoke and "asyncio.gather" in smoke
+    return "cloud fan-out: per-candidate job-id isolation prevents concurrent artifact collision (F171)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 
