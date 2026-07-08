@@ -61,3 +61,14 @@ jobs:
             AetherLab_Feature_Tracker.xlsx
             AetherLab_Feature_Tracker.csv
             feature_test_results.json
+
+      - name: Upload visual baseline summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-baseline-summary
+          path: |
+            visual_regression/baseline/current/summary.json
+            visual_regression/baseline/current/summary.md
+            visual_regression/baseline/current/metrics.csv
+            visual_regression/baseline/current/*_contact.jpg
