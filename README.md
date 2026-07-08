@@ -101,12 +101,16 @@ On Windows, `start.bat` launches the app under a crash-restart watchdog.
 ## Development
 
 ```bash
-python test_features.py            # behavioural suite, 145 features (offscreen-safe)
+python test_features.py            # canonical behavioural suite, 165 features
 python build_feature_tracker.py    # regenerate the canonical feature tracker
+python tools/tracker_integrity_audit.py --check
+python tools/feature_surface_audit.py --check
+python -m pytest -q                # focused legacy regression suite
 ```
 
 The feature catalog lives in `AetherLab_Feature_Tracker.xlsx` (generated — edit
-`build_feature_tracker.py`). Design & architecture notes:
+`build_feature_tracker.py`). The CSV/XLSX, result JSON, tests, and defect log
+are guarded by the audit tools above. Design & architecture notes:
 `TOPIC_EXPLAINER_BRIEF.md`, `MANIM_PIPELINE_QUALITY_ANALYSIS.md`,
 `RENDER_RELIABILITY_AND_CLOUD.md`, `PHYSICS_SOURCES.md`. User docs:
 [`docs/QUICKSTART.md`](docs/QUICKSTART.md),

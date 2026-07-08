@@ -59,7 +59,9 @@ def _words(value: str) -> set[str]:
 
 
 def _literal(node: ast.AST) -> str | None:
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
 
 
 def _call_name(node: ast.Call) -> str:
@@ -181,7 +183,11 @@ def audit() -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit code surfaces against the feature tracker.")
     parser.add_argument("--json", action="store_true", help="Print the full JSON report.")
-    parser.add_argument("--check", action="store_true", help="Exit non-zero if any surface is uncovered.")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit non-zero if any surface is uncovered.",
+    )
     args = parser.parse_args()
 
     report = audit()
@@ -193,7 +199,10 @@ def main() -> int:
             f"by {report['feature_count']} tracker rows"
         )
         for item in report["uncovered"]:
-            print(f"UNCOVERED {item['kind']}: {item['name']} ({item['file']}:{item['line']})")
+            print(
+                f"UNCOVERED {item['kind']}: {item['name']} "
+                f"({item['file']}:{item['line']})"
+            )
     return 1 if args.check and report["uncovered_count"] else 0
 
 

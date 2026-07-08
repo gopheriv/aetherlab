@@ -67,12 +67,19 @@ def _test_ids() -> set[str]:
 
 
 def _expected_rows(module: Any) -> list[dict[str, str]]:
-    return [dict(zip(module.HEADERS, [str(v) for v in row], strict=True)) for row in module.FEATURES]
+    return [
+        dict(zip(module.HEADERS, [str(v) for v in row], strict=True))
+        for row in module.FEATURES
+    ]
 
 
 def _contiguous(ids: list[str]) -> list[str]:
     nums = sorted(int(fid[1:]) for fid in ids if re.fullmatch(r"F\d+", fid))
-    expected = {f"F{n:02d}" if n < 100 else f"F{n}" for n in range(nums[0], nums[-1] + 1)} if nums else set()
+    expected = (
+        {f"F{n:02d}" if n < 100 else f"F{n}" for n in range(nums[0], nums[-1] + 1)}
+        if nums
+        else set()
+    )
     return sorted(expected - set(ids), key=lambda x: int(x[1:]))
 
 
@@ -120,9 +127,17 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
     if allow_pending_result and missing_results == {allow_pending_result} and not extra_results:
         missing_results = set()
     if missing_results or extra_results:
-        issues.append(f"Tracker/results ID mismatch: tracker-result={sorted(missing_results)}, result-tracker={sorted(extra_results)}")
+        issues.append(
+            "Tracker/results ID mismatch: "
+            f"tracker-result={sorted(missing_results)}, "
+            f"result-tracker={sorted(extra_results)}"
+        )
     if csv_id_set != test_ids:
-        issues.append(f"Tracker/test ID mismatch: tracker-test={sorted(csv_id_set - test_ids)}, test-tracker={sorted(test_ids - csv_id_set)}")
+        issues.append(
+            "Tracker/test ID mismatch: "
+            f"tracker-test={sorted(csv_id_set - test_ids)}, "
+            f"test-tracker={sorted(test_ids - csv_id_set)}"
+        )
     for fid, result in results.items():
         if result.get("status") not in VALID_RESULTS:
             issues.append(f"{fid} invalid result status {result.get('status')!r}")
@@ -155,9 +170,15 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify tracker generator/CSV/XLSX/results/test parity.")
+    parser = argparse.ArgumentParser(
+        description="Verify tracker generator/CSV/XLSX/results/test parity."
+    )
     parser.add_argument("--json", action="store_true", help="Print the full JSON report.")
-    parser.add_argument("--check", action="store_true", help="Exit non-zero when integrity issues exist.")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit non-zero when integrity issues exist.",
+    )
     args = parser.parse_args()
 
     report = audit()

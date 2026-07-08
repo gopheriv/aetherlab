@@ -916,13 +916,27 @@ class S(Scene):
 def t_f102():
     # Truncation guard: a finish_reason=='length' reply raises rather than compiling junk.
     from aetherlab.services.scene_generator import SceneGenerator
-    class _Msg:  content = "some truncated code"
-    class _Choice:  finish_reason = "length"; message = _Msg()
-    class _Resp:  choices = [_Choice()]
+
+    class _Msg:
+        content = "some truncated code"
+
+    class _Choice:
+        finish_reason = "length"
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
     class _Completions:
-        async def create(self, **_):  return _Resp()
-    class _Chat:  completions = _Completions()
-    class _Client:  chat = _Chat()
+        async def create(self, **_):
+            return _Resp()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
     sg = SceneGenerator(_settings())
     sg._client = _Client()
     for method, args in (("repair", ("code", "err")), ("revise", ("code", "critique"))):
@@ -947,11 +961,18 @@ def t_f107():
     assert board is None, "storyboard must fail soft without a key"
 
     class _Msg:
-        def __init__(self, c): self.content = c
+        def __init__(self, c):
+            self.content = c
+
     class _Choice:
-        def __init__(self, c): self.finish_reason = "stop"; self.message = _Msg(c)
+        def __init__(self, c):
+            self.finish_reason = "stop"
+            self.message = _Msg(c)
+
     class _Resp:
-        def __init__(self, c): self.choices = [_Choice(c)]
+        def __init__(self, c):
+            self.choices = [_Choice(c)]
+
     calls = []
     class _Completions:
         async def create(self, **kw):
@@ -962,8 +983,12 @@ def t_f107():
                              '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
             return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
                          "    def construct(self):\n        self.wait(1)\n")
-    class _Chat: completions = _Completions()
-    class _Client: chat = _Chat()
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
     sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
     sg._client = _Client()
     code = asyncio.run(sg._generate_remote(
@@ -1000,7 +1025,8 @@ def t_f108():
     ).ManimRuntime.render_scene_with_repair)
     assert "critique_video" in src and ".revise(" in src and "max_revisions" in src
     assert "keeping previous cut" in src, "revisions must never downgrade a shipped render"
-    import pathlib, tempfile
+    import pathlib
+    import tempfile
     vids = sorted(
         pathlib.Path(tempfile.gettempdir()).glob("aetherlab/renders/media/videos/**/*.mp4"),
         key=lambda p: p.stat().st_mtime,
@@ -1253,7 +1279,8 @@ def t_f79():
     hp2 = HistoryPanel()
     hp2.init_persistence(db)  # reload
     assert hp2._list.count() == 1
-    hp.close(); hp2.close()
+    hp.close()
+    hp2.close()
     return "history persists + reloads"
 
 
@@ -1475,7 +1502,8 @@ def t_f100():
     from aetherlab.services.manim_runtime import sanitize_scene_name, _scene_name
     assert sanitize_scene_name("my-cool scene 1") == "MyCoolScene1"
     assert sanitize_scene_name("!!!") == "AetherLabScene"
-    a = _scene_name("X", "code A"); b = _scene_name("X", "code B")
+    a = _scene_name("X", "code A")
+    b = _scene_name("X", "code B")
     assert a != b and _scene_name("X", "code A") == a
     return "sanitize + stable per-code hashing"
 
@@ -1533,7 +1561,8 @@ def t_f111():
     # Hover snapping: cursor near the curve snaps to a sample with (t, x, y).
     from aetherlab.ui.qt_compat import QtCore, QtGui
     lc = _canvas()
-    pm = QtGui.QPixmap(lc.size()); lc.render(pm)  # populate pixel cache
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)  # populate pixel cache
     assert lc._pixel_cache, "paint must publish pixel cache for hover"
     idx, px, py, t_arr = lc._pixel_cache[0]
     import numpy as np
@@ -1551,7 +1580,8 @@ def t_f111():
 
 def t_f112():
     # All canvas colors flow from CANVAS_PALETTE (mirrors style.py tokens).
-    import inspect, re
+    import inspect
+    import re
     import aetherlab.ui.live_canvas as mod
     from aetherlab.ui.live_canvas import CANVAS_PALETTE
     assert CANVAS_PALETTE["primary"] == "#22D3EE"  # v2 bright cyan
@@ -1577,7 +1607,9 @@ def t_f113():
     st = CanvasState(title="1/t", x_range=(-3, 3), y_range=(-5, 5),
                      curves=[CurveSpec(name="1/t", x_fn=fx, y_fn=fy,
                                        t_range=(-3.0, 3.0), t_steps=601)])
-    lc = LiveCanvas(); lc.resize(800, 600); lc.set_state(st)
+    lc = LiveCanvas()
+    lc.resize(800, 600)
+    lc.set_state(st)
     lc._ensure_samples(st)
     key = lc._sample_key
     lc._apply_zoom(5.0, QtCore.QPointF(400, 300))
@@ -1586,7 +1618,8 @@ def t_f113():
     t, xs, ys = lc._samples[0]
     runs = _finite_runs(np.isfinite(xs) & np.isfinite(ys))
     assert len(runs) == 2, f"1/t must render as 2 branches, got {len(runs)}"
-    pm = QtGui.QPixmap(lc.size()); lc.render(pm)
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)
     assert not pm.isNull()
     st.params["k"] = 2.0
     lc._ensure_samples(st)
@@ -1657,7 +1690,8 @@ def t_f115():
 
 def t_f116():
     # PNG export writes a nonzero 2x file offscreen and emits the signal.
-    import os, tempfile
+    import os
+    import tempfile
     lc = _canvas()
     got = []
     lc.png_exported.connect(lambda p: got.append(p))
@@ -1675,7 +1709,8 @@ def t_f117():
     # Interactive legend: always present for named curves, click-toggles.
     from aetherlab.ui.qt_compat import QtGui
     lc = _canvas()  # single named curve — legend must still render
-    pm = QtGui.QPixmap(lc.size()); lc.render(pm)
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)
     assert lc._legend_hits, "legend hidden for a single named curve"
     rect, index = lc._legend_hits[0]
     assert lc._state.curves[index].visible
@@ -1683,7 +1718,8 @@ def t_f117():
     assert hit == index
     lc.toggle_curve_visibility(index)
     assert not lc._state.curves[index].visible
-    pm2 = QtGui.QPixmap(lc.size()); lc.render(pm2)  # muted style paints fine
+    pm2 = QtGui.QPixmap(lc.size())
+    lc.render(pm2)  # muted style paints fine
     lc.toggle_curve_visibility(index)
     assert lc._state.curves[index].visible
     return "legend always shown, hit-testable, toggles visibility"
@@ -1695,11 +1731,13 @@ def t_f118():
     from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state, FADE_IN_MS
     src = inspect.getsource(LiveCanvas._draw_param_chip)
     assert "params.items()" in src and "AlignRight" in src
-    lc = LiveCanvas(); lc.resize(800, 600)
+    lc = LiveCanvas()
+    lc.resize(800, 600)
     assert lc._fade_alpha == 1.0
     lc.set_state(build_canvas_state("t", {"damping": 0.2}))
     assert lc._fade_alpha < 1.0, "first curves must start faded"
-    lc._fade_anim.stop(); lc._fade_alpha = 1.0
+    lc._fade_anim.stop()
+    lc._fade_alpha = 1.0
     lc.set_state(build_canvas_state("t", {"damping": 0.4}))
     assert lc._fade_alpha == 1.0, "subsequent updates must not re-fade"
     assert FADE_IN_MS == 300
@@ -1834,7 +1872,8 @@ def t_f124():
     assert "_BookSpine" in src and "chunks" in src and "Re-indexing" in src
     spine = _BookSpine("#22D3EE")
     from aetherlab.ui.qt_compat import QtGui
-    pm = QtGui.QPixmap(spine.size()); spine.render(pm)  # paints without crash
+    pm = QtGui.QPixmap(spine.size())
+    spine.render(pm)  # paints without crash
     from aetherlab.ui.main_window import SettingsDialog
     from aetherlab.core.settings import load_settings
     d = SettingsDialog(load_settings())
@@ -1929,7 +1968,8 @@ def t_f127():
     assert web_card.graphicsEffect() is None  # high score → not dimmed
     dim_card = _RagHitCard("Weak", 12, 0.3, "…", "C:/lib/x.pdf", is_web=False)
     assert dim_card.graphicsEffect() is not None  # < 0.5 → dimmed
-    pm = QtGui.QPixmap(320, 120); web_card.render(pm)  # paints without crash
+    pm = QtGui.QPixmap(320, 120)
+    web_card.render(pm)  # paints without crash
 
     # ReferencePanel provenance line counts library vs web
     rp = ReferencePanel()
@@ -1940,11 +1980,15 @@ def t_f127():
     assert "1 library" in rp._backend_label.text() and "1 web" in rp._backend_label.text()
 
     # Blueprint backdrop paints; command-bar filament toggles the shell property
-    bd = BlueprintBackdrop(QtWidgets.QLabel("x")); bd.resize(400, 300)
-    pm2 = QtGui.QPixmap(bd.size()); bd.render(pm2)
+    bd = BlueprintBackdrop(QtWidgets.QLabel("x"))
+    bd.resize(400, 300)
+    pm2 = QtGui.QPixmap(bd.size())
+    bd.render(pm2)
     cb = CommandBar()
-    cb._set_shell_focused(True); assert cb._shell.property("focused") == "true"
-    cb._set_shell_focused(False); assert cb._shell.property("focused") == "false"
+    cb._set_shell_focused(True)
+    assert cb._shell.property("focused") == "true"
+    cb._set_shell_focused(False)
+    assert cb._shell.property("focused") == "false"
 
     # Settings dialog carries the web-references checkbox
     from aetherlab.ui.main_window import SettingsDialog
@@ -2361,7 +2405,8 @@ def t_f143():
         return SceneBundle(class_name="AetherLabScene", code="x", engine="manim-community", status="compiled")
     async def _render(scene, settings, quality="l", brief="", **kw):
         n["i"] += 1
-        scene.status = "rendered"; scene.video_path = str(clip)
+        scene.status = "rendered"
+        scene.video_path = str(clip)
         return scene
     lp.manim.generate_scene_async = _gen
     lp.manim.render_scene_with_repair = _render
@@ -2433,7 +2478,8 @@ def t_f145():
     qc = _QuestionCard(1, mcq)
     qc._answer_mcq(mcq.answer)
     assert "Correct" in qc._feedback.text()
-    lv.close(); qc.close()
+    lv.close()
+    qc.close()
     w = LessonWorker("simple pendulum", _settings())
     assert hasattr(w, "lesson_ready") and hasattr(w, "progress") and hasattr(w, "failure")
     # Main-window wiring: Learn button + lesson page + on_lesson_ready.
@@ -2579,7 +2625,8 @@ def t_f150():
                            engine="manim-community", status="compiled")
     async def _render(scene, settings, quality="l", brief="", **kw):
         calls["n"] += 1
-        scene.status = "rendered"; scene.video_path = ""
+        scene.status = "rendered"
+        scene.video_path = ""
         return scene
     lp.manim.generate_scene_async = _gen
     lp.manim.render_scene_with_repair = _render
@@ -2591,7 +2638,8 @@ def t_f150():
     # Worker exposes a cancel() that flips its event.
     w = LessonWorker("x", s, regenerate=True)
     assert hasattr(w, "cancel") and not w._cancel.is_set()
-    w.cancel(); assert w._cancel.is_set()
+    w.cancel()
+    assert w._cancel.is_set()
     return "Learn cancellable: cancel_check→cancelled bundle; worker.cancel() + regenerate (F150)"
 
 
@@ -3347,12 +3395,20 @@ def t_f163():
 
     # Injected into the codegen system prompt (captured via a stub client).
     class _Msg:
-        def __init__(self, c): self.content = c
+        def __init__(self, c):
+            self.content = c
+
     class _Choice:
-        def __init__(self, c): self.finish_reason = "stop"; self.message = _Msg(c)
+        def __init__(self, c):
+            self.finish_reason = "stop"
+            self.message = _Msg(c)
+
     class _Resp:
-        def __init__(self, c): self.choices = [_Choice(c)]
+        def __init__(self, c):
+            self.choices = [_Choice(c)]
+
     calls = []
+
     class _Completions:
         async def create(self, **kw):
             calls.append(kw)
@@ -3362,8 +3418,11 @@ def t_f163():
                              '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
             return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
                          "    def construct(self):\n        self.wait(1)\n")
-    class _Chat: completions = _Completions()
-    class _Client: chat = _Chat()
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
 
     sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
     sg._client = _Client()

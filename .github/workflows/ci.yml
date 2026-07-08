@@ -32,6 +32,26 @@ jobs:
       - name: Regenerate feature tracker
         run: python build_feature_tracker.py
 
+      - name: Verify tracker artifact integrity
+        run: python tools/tracker_integrity_audit.py --check
+
+      - name: Verify feature surface coverage
+        run: python tools/feature_surface_audit.py --check
+
+      - name: Run focused pytest regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Compile source tree
+        run: python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Ensure generated tracker artifacts are committed
+        run: git diff --exit-code -- AetherLab_Feature_Tracker.xlsx AetherLab_Feature_Tracker.csv feature_test_results.json
+
       - name: Upload tracker + results
         if: always()
         uses: actions/upload-artifact@v4
