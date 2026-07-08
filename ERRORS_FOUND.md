@@ -1,12 +1,14 @@
 # AetherLab — Phase 2 Error Log
 
-Testing method: `test_features.py` exercises all 161 catalogued features
+Testing method: `test_features.py` exercises all 168 catalogued features
 (headless logic, offscreen-Qt widget construction, and source assertions).
-**Automated result: 161/161 pass at the behavioural/happy-path level.**
+**Automated result: 168/168 pass at the behavioural/happy-path level.**
 
 Green happy-path tests do not prove the absence of defects, so this log records
 the logistical/UX errors found by close code review of paths the happy-path
-tests don't reach. Each is fixed in Phase 3 and re-verified in Phase 4.
+tests don't reach. Each is fixed in Phase 3 and re-verified in Phase 4. The
+canonical tracker's per-story `Phase-2 result` / `Phase-4 result` columns record
+the full user-story audit (161 PASS / 4 PARTIAL / 3 FAIL-fixed at Phase 2).
 
 | # | Severity | Feature | File | Defect |
 |---|----------|---------|------|--------|
