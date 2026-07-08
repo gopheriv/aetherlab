@@ -2079,10 +2079,53 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Phase-2/Phase-4 audit results, applied on top of the story tuples above so a
+# whole subsystem can be stamped in one place without editing each _story_tuple.
+# Value = (phase2_result, errors_found, phase4_result). Semantics:
+#   PASS   — the story was executed/hand-audited and behaves as specified.
+#   FAIL   — a defect was found while testing this story in Phase 2 (now fixed,
+#            documented in ERRORS_FOUND.md + DEFECTS; Phase-4 re-verifies PASS).
+#   BLOCKED— cannot be executed headlessly (needs a real GUI session or live
+#            GitHub render credentials); never stamped PASS without evidence.
+# "Errors found" lists the associated BUG ids (historical or Phase-2), or None.
+PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
+    # ── Batch 1: Launch / Settings / Input / Pipeline core (F01-F21) ────────
+    # Audited by reading __main__.py, ui/app.py, core/settings.py end-to-end and
+    # confirming each t_fNN asserts observable behaviour (real smoke subprocess,
+    # settings precedence round-trips, command-bar/stepper widget interaction,
+    # a real pipeline run). BUG-4/BUG-5 fixes re-verified in source.
+    "F01": ("PASS", "None", "PASS"),
+    "F02": ("PASS", "None", "PASS"),
+    "F03": ("PASS", "None", "PASS"),
+    "F04": ("PASS", "None", "PASS"),
+    "F05": ("PASS", "None", "PASS"),
+    "F06": ("PASS", "BUG-5", "PASS"),
+    "F07": ("PASS", "None", "PASS"),
+    "F08": ("PASS", "None", "PASS"),
+    "F09": ("PASS", "BUG-24", "PASS"),
+    "F10": ("PASS", "BUG-4", "PASS"),
+    "F11": ("PASS", "None", "PASS"),
+    "F12": ("PASS", "None", "PASS"),
+    "F13": ("PASS", "None", "PASS"),
+    "F14": ("PASS", "None", "PASS"),
+    "F15": ("PASS", "BUG-11", "PASS"),
+    "F16": ("PASS", "None", "PASS"),
+    "F17": ("PASS", "BUG-1", "PASS"),
+    "F18": ("PASS", "None", "PASS"),
+    "F19": ("PASS", "None", "PASS"),
+    "F20": ("PASS", "None", "PASS"),
+    "F21": ("PASS", "None", "PASS"),
+}
+
+
 def _story_fields(row: tuple[str, ...]) -> tuple[str, ...]:
     fid, category, feature, user_story, expected, source, legacy_method, _status, _notes = row[:9]
     if fid in STORY_OVERRIDES:
-        return STORY_OVERRIDES[fid]
+        base = STORY_OVERRIDES[fid]
+        if fid in PHASE_RESULTS:
+            p2, errs, p4 = PHASE_RESULTS[fid]
+            return base[:5] + (p2, errs, p4)
+        return base
     persona = _persona_for(category, feature, source)
     story = (
         f"US-{fid}: As {PERSONA_LABELS[persona]}, when I use {feature}, I expect the observable "
