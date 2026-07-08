@@ -20,7 +20,7 @@ Current branch: `codex/stabilize-current-branch`
 
 Recent baseline:
 
-- Feature harness: `python test_features.py` -> 167/167 passed.
+- Feature harness: `python test_features.py` -> 168/168 passed.
 - Tracker build: `python build_feature_tracker.py` regenerated CSV/XLSX.
 - Tracker audit: `python tools\tracker_integrity_audit.py --check` passed.
 - Surface audit: `python tools\feature_surface_audit.py --check` passed.
@@ -88,43 +88,52 @@ Key files:
 - `docs/COURSE_MODE.md`
 - `_QuestionCard` / `LessonView` / `MainWindow` quiz-progress wiring
 
-### Next Mission: Prompt Quality Lab
+### Completed: Prompt Quality Lab
 
-Build a repeatable prompt-evaluation lab for the rendering pipeline. AetherLab
-already has visual regression, candidate tournaments, exemplars, and VLM critic
-hooks, but it lacks a compact way to answer: "Did this prompt/exemplar change
-make generated lessons and scenes better?"
+Completed as F168. `tools/prompt_quality_lab.py` runs canonical scene/lesson
+prompts, reuses visual-regression metrics/contact sheets, records storyboard
+and critic metadata, writes JSON/Markdown/CSV reports under ignored `.analysis`
+runs, and compares against prior reports.
 
-Implement a command under `tools/` that runs a small canonical prompt set and
-writes a lightweight report with:
+Key files:
 
-- prompt id, prompt text, quality tier, and mode (solve/lesson);
-- storyboard metadata presence and act count;
-- render path status, duration, fps, blank/static metrics;
-- visual critic score/verdict/issues when a vision model is configured;
-- contact sheet path, not raw frame dumps;
-- before/after comparison against a saved report.
+- `tools/prompt_quality_lab.py`
+- `docs/PROMPT_QUALITY_LAB.md`
+- `test_features.py` F168
+
+Validation run:
+
+```powershell
+python tools\prompt_quality_lab.py --out .analysis\prompt-quality-lab\canonical-smoke
+```
+
+Result: 6 prompts, 0 failures, mean score 5.32.
+
+### Next Mission: Render Farm Dashboard
+
+Make cloud rendering observable inside AetherLab. Today the cloud backend can
+provision, dispatch, poll, download, and fall back, but users cannot see a
+stable job ledger: what queued, what ran, what failed, which artifact was
+downloaded, and why local fallback happened.
+
+Build a render-farm dashboard that records and displays:
+
+- job id, source scene/class, quality, fps, backend, and provider;
+- status timeline: queued, in_progress, completed, failed, cancelled,
+  action_required, artifact_downloaded, fallback_local;
+- run URL/artifact URL when safe to show;
+- sanitized log tail for failures;
+- rate-limit or token-scope messages;
+- local fallback reason and final local render path.
 
 Done means:
 
-- canonical prompts for pendulum, Kepler orbit, standing wave, Fourier series,
-  E&M field, and derivation/lesson mode;
-- JSON + Markdown report outputs under an ignored run directory;
-- docs explaining how to interpret the score table;
-- a tracker feature and regression tests for the report parser/comparison logic;
-- no raw videos or frame directories committed.
-
-### Candidate Later: Render Farm Dashboard
-
-Expose cloud-render jobs as a real dashboard: queued, running, failed, complete,
-artifact downloaded, fallback-to-local state, and log tail.
-
-Done means:
-
-- backend job status model;
-- UI list with actionable failed-job diagnostics;
-- rate-limit and timeout messages are human-readable;
-- stubs cover success, failure, cancellation, and fallback.
+- backend job-status event model with JSON persistence under the data dir;
+- UI page or panel reachable from the existing cloud/backend surfaces;
+- no secrets in persisted events or diagnostics;
+- stub tests for success, artifact download, failure log tail, cancellation,
+  token-scope failure, rate-limit retry, and local fallback;
+- docs explaining how to debug cloud renders from the dashboard.
 
 ### Candidate Later: UI Modularization
 

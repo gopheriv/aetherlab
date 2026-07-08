@@ -737,6 +737,10 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a student, AetherLab remembers my quiz answers and tells me what to study next.",
      "services/course_mode.CourseProgressStore persists quiz attempts to data_dir/course_progress.json keyed by lesson topic+audience, with per-question correctness, last choice, concept, and timestamp. LessonView question cards emit graded multiple-choice answers; MainWindow records them and updates a course status strip with score plus a recommended next topic. Wrong answers recommend the mapped objective; clean scores recommend a domain-appropriate follow-up. docs/COURSE_MODE.md documents the local-only scope and privacy boundary.",
      "services/course_mode.py / ui/widgets.py / ui/main_window.py / docs/COURSE_MODE.md", "headless", "Documented", ""),
+    ("F168", "Quality", "Prompt Quality Lab reports",
+     "As a maintainer improving prompts, I can measure whether scene and lesson generations got better across canonical physics tasks.",
+     "tools/prompt_quality_lab.py defines six canonical prompts (pendulum, Kepler orbit, standing wave, Fourier series, E&M field, and Kepler lesson mode), renders them through the real local pipeline, reuses visual_regression audit metrics/contact sheets, records storyboard presence/act count plus persisted critic score/verdict/issues, writes summary.json/summary.md/scores.csv under an ignored .analysis run directory, and compares against a previous report for score drops or duration collapse. docs/PROMPT_QUALITY_LAB.md documents safe provider mode and report interpretation.",
+     "tools/prompt_quality_lab.py / docs/PROMPT_QUALITY_LAB.md", "headless", "Documented", ""),
 ]
 # fmt: on
 

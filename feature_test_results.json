@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 167 features/166 results/167 tests aligned (F165)"
+    "note": "tracker integrity: 168 features/167 results/168 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -666,5 +666,9 @@
   "F167": {
     "status": "PASS",
     "note": "course progress persists quiz answers and updates lesson recommendation strip (F167)"
+  },
+  "F168": {
+    "status": "PASS",
+    "note": "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
   }
 }

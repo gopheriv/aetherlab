@@ -3485,8 +3485,8 @@ def t_f164():
 def t_f165():
     from tools.tracker_integrity_audit import audit
 
-    report = audit(allow_pending_result="F167")
-    assert report["feature_count"] >= 167, report
+    report = audit(allow_pending_result="F168")
+    assert report["feature_count"] >= 168, report
     assert report["result_count"] >= report["feature_count"] - 1, report
     assert report["test_count"] == report["feature_count"], report
     assert report["ok"], report["issues"]
@@ -3626,6 +3626,91 @@ def t_f167():
             probe.wait(5000)
     assert Path("docs/COURSE_MODE.md").read_text(encoding="utf-8")
     return "course progress persists quiz answers and updates lesson recommendation strip (F167)"
+
+
+def t_f168():
+    import json
+
+    from tools import prompt_quality_lab as lab
+
+    prompts = lab.load_prompt_set()
+    assert len(prompts) >= 6
+    assert {p["id"] for p in prompts} >= {"pendulum", "kepler_orbit", "lesson_kepler"}
+    assert any(p["mode"] == "lesson" for p in prompts)
+
+    custom = _TMP / "prompt_set.json"
+    custom.write_text(
+        json.dumps([{"id": "x", "mode": "solve", "prompt": "show x"}]),
+        encoding="utf-8",
+    )
+    assert lab.load_prompt_set(custom)[0]["id"] == "x"
+    bom = _TMP / "prompt_bom.json"
+    bom.write_text(
+        "\ufeff" + json.dumps([{"id": "bom", "mode": "solve", "prompt": "show bom"}]),
+        encoding="utf-8",
+    )
+    assert lab.load_prompt_set(bom)[0]["id"] == "bom"
+    dup = _TMP / "prompt_dup.json"
+    dup.write_text(
+        json.dumps([
+            {"id": "x", "mode": "solve", "prompt": "one"},
+            {"id": "x", "mode": "solve", "prompt": "two"},
+        ]),
+        encoding="utf-8",
+    )
+    try:
+        lab.load_prompt_set(dup)
+        raise AssertionError("duplicate prompt ids must fail")
+    except ValueError:
+        pass
+
+    story = lab.storyboard_summary({
+        "hero_frame": "orbit reveal",
+        "acts": [{"duration_s": 5}, {"duration_s": 7}, {"duration_s": 4}],
+    })
+    assert story == {
+        "present": True,
+        "act_count": 3,
+        "duration_s": 16.0,
+        "has_hero_frame": True,
+    }
+
+    good_case = {
+        "id": "pendulum",
+        "mode": "solve",
+        "status": "pass",
+        "storyboard": story,
+        "critic": {"score": 8.0},
+        "metrics": {"duration": 12.0, "fps": 30.0, "blank_ratio": 0.0, "static_ratio": 0.02},
+        "quality_failures": [],
+    }
+    bad_case = {
+        **good_case,
+        "metrics": {"duration": 1.0, "fps": 4.0, "blank_ratio": 0.4, "static_ratio": 0.5},
+        "quality_failures": ["duration below floor"],
+        "critic": {"score": 0.0},
+    }
+    assert lab.score_case(good_case) > lab.score_case(bad_case)
+    report = {
+        "schema": "aetherlab.prompt_quality_lab.v1",
+        "cases": [good_case],
+        "summary": lab.summarize_cases([good_case]),
+    }
+    before = _TMP / "prompt_quality_before"
+    before.mkdir()
+    (before / "summary.json").write_text(
+        json.dumps({"cases": [{**good_case, "score": 8.5}]}),
+        encoding="utf-8",
+    )
+    compare = lab.compare_lab_reports(before, {**report, "cases": [{**good_case, "score": 6.9}]})
+    assert compare and compare["regression_count"] == 1
+    out = _TMP / "prompt_quality_report"
+    lab.write_outputs(out, report)
+    assert (out / "summary.json").exists()
+    assert "Prompt Quality Lab" in (out / "summary.md").read_text(encoding="utf-8")
+    assert "score" in (out / "scores.csv").read_text(encoding="utf-8")
+    assert Path("docs/PROMPT_QUALITY_LAB.md").read_text(encoding="utf-8")
+    return "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
