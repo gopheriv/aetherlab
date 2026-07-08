@@ -295,8 +295,16 @@ class LessonPlan:
             prerequisites=[str(p) for p in data.get("prerequisites", [])],
             objectives=[str(o) for o in data.get("objectives", [])],
             misconception=str(data.get("misconception", "")),
-            chapters=[LessonChapter.from_json(c) for c in data.get("chapters", []) if isinstance(c, dict)],
-            questions=[LessonQuestion.from_json(q) for q in data.get("questions", []) if isinstance(q, dict)],
+            chapters=[
+                LessonChapter.from_json(c)
+                for c in data.get("chapters", [])
+                if isinstance(c, dict)
+            ],
+            questions=[
+                LessonQuestion.from_json(q)
+                for q in data.get("questions", [])
+                if isinstance(q, dict)
+            ],
             model_name=str(data.get("model_name", "cached")),
             cached=bool(data.get("cached", cached)),
         )
@@ -340,10 +348,22 @@ class LessonBundle:
         data = dict(payload)
         return cls(
             plan=LessonPlan.from_json(data.get("plan", {}), cached=cached),
-            chapter_scenes=[SceneBundle.from_json(s, cached=cached) for s in data.get("chapter_scenes", []) if isinstance(s, dict)],
+            chapter_scenes=[
+                SceneBundle.from_json(s, cached=cached)
+                for s in data.get("chapter_scenes", [])
+                if isinstance(s, dict)
+            ],
             video_path=str(data.get("video_path", "")),
             status=str(data.get("status", "planned")),
             cached=bool(data.get("cached", cached)),
-            chapter_offsets=[float(x) for x in data.get("chapter_offsets", []) if isinstance(x, (int, float))],
-            rendered_chapter_indexes=[int(x) for x in data.get("rendered_chapter_indexes", []) if isinstance(x, int)],
+            chapter_offsets=[
+                float(x)
+                for x in data.get("chapter_offsets", [])
+                if isinstance(x, (int, float))
+            ],
+            rendered_chapter_indexes=[
+                int(x)
+                for x in data.get("rendered_chapter_indexes", [])
+                if isinstance(x, int)
+            ],
         )

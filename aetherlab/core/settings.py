@@ -82,7 +82,11 @@ def load_app_config() -> dict[str, str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return {k: str(v) for k, v in payload.items() if isinstance(v, (str, int, float)) and str(v).strip()}
+    return {
+        k: str(v)
+        for k, v in payload.items()
+        if isinstance(v, (str, int, float)) and str(v).strip()
+    }
 
 
 def save_app_config(values: dict[str, str | None]) -> Path:
@@ -113,7 +117,11 @@ def load_settings() -> AppSettings:
     chroma_path = _path_from_env("AETHERLAB_CHROMA_PATH", _default_chroma_path())
     library_path = _path_from_env(
         "AETHERLAB_LIBRARY_DIR",
-        Path(app_cfg["library_path"]).expanduser() if app_cfg.get("library_path") else data_dir / "library",
+        (
+            Path(app_cfg["library_path"]).expanduser()
+            if app_cfg.get("library_path")
+            else data_dir / "library"
+        ),
     )
     # The ~/.qwen autoload is a developer-machine convenience: a student's app
     # must never silently inherit provider credentials from an unrelated tool.
@@ -144,7 +152,12 @@ def load_settings() -> AppSettings:
         base_url = base_url or OLLAMA_OPENAI_BASE_URL
         api_key = api_key or "ollama"
 
-    if env_model or _first_env("AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"):
+    if env_model or _first_env(
+        "AETHERLAB_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "GPT_API_KEY",
+        "DASHSCOPE_API_KEY",
+    ):
         source = "environment"
     elif preset == "ollama":
         source = "ollama-local"
@@ -170,7 +183,11 @@ def load_settings() -> AppSettings:
         openai_base_url=base_url,
         llm_model=llm_model,
         llm_timeout_seconds=float(_first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT") or "60"),
-        vision_model=_first_env("AETHERLAB_VISION_MODEL", "VISION_MODEL") or app_cfg.get("vision_model") or None,
+        vision_model=(
+            _first_env("AETHERLAB_VISION_MODEL", "VISION_MODEL")
+            or app_cfg.get("vision_model")
+            or None
+        ),
         web_references=_as_bool(
             os.getenv("AETHERLAB_WEB_REFS"), app_cfg.get("web_references"), default=True
         ),
@@ -181,14 +198,22 @@ def load_settings() -> AppSettings:
             app_cfg.get("narration_enabled"),
             default=False,
         ),
-        tts_voice=_first_env("AETHERLAB_TTS_VOICE", "TTS_VOICE") or app_cfg.get("tts_voice") or "en-US-AndrewMultilingualNeural",
+        tts_voice=(
+            _first_env("AETHERLAB_TTS_VOICE", "TTS_VOICE")
+            or app_cfg.get("tts_voice")
+            or "en-US-AndrewMultilingualNeural"
+        ),
         tts_rate=_first_env("AETHERLAB_TTS_RATE", "TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
         render_mode=_render_mode(
             os.getenv("AETHERLAB_RENDER_MODE")
             or app_cfg.get("render_mode")
             or ("auto" if cloud_enabled else None)
         ),
-        cloud_provider=os.getenv("AETHERLAB_CLOUD_PROVIDER") or app_cfg.get("cloud_provider") or "github_actions",
+        cloud_provider=(
+            os.getenv("AETHERLAB_CLOUD_PROVIDER")
+            or app_cfg.get("cloud_provider")
+            or "github_actions"
+        ),
         github_repo=(
             _first_env("AETHERLAB_RENDER_REPO", "CLOUD_RENDER_REPO")
             or app_cfg.get("github_repo")
@@ -213,9 +238,15 @@ def load_settings() -> AppSettings:
             or _first_mapping(legacy_env, "CLOUD_RENDER_BRANCH")
             or "renders"
         ),
-        github_oauth_client_id=os.getenv("AETHERLAB_GITHUB_CLIENT_ID") or app_cfg.get("github_oauth_client_id") or "",
+        github_oauth_client_id=(
+            os.getenv("AETHERLAB_GITHUB_CLIENT_ID")
+            or app_cfg.get("github_oauth_client_id")
+            or ""
+        ),
         cloud_render_threshold=_as_float(
-            os.getenv("AETHERLAB_CLOUD_RENDER_THRESHOLD"), app_cfg.get("cloud_render_threshold"), default=3.0
+            os.getenv("AETHERLAB_CLOUD_RENDER_THRESHOLD"),
+            app_cfg.get("cloud_render_threshold"),
+            default=3.0,
         ),
         cloud_poll_seconds=_as_int(
             os.getenv("AETHERLAB_CLOUD_POLL_SECONDS"),
@@ -372,7 +403,9 @@ def _render_mode(value: str | None) -> str:
 def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
     """Load Qwen/OpenAI-compatible provider settings without logging secrets."""
 
-    settings_path = path or Path(os.getenv("QWEN_SETTINGS_PATH", Path.home() / ".qwen" / "settings.json"))
+    settings_path = path or Path(
+        os.getenv("QWEN_SETTINGS_PATH", Path.home() / ".qwen" / "settings.json")
+    )
     if not settings_path.exists():
         return {}
 
