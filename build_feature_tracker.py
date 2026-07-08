@@ -2199,6 +2199,53 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F88": ("PASS", "None", "PASS"),
     "F89": ("PASS", "None", "PASS"),
     "F90": ("PASS", "None", "PASS"),
+    # ── Batch 4: UX / Edge cases / Render+Scene internals / Canvas v2 /
+    #    Design v2 / References / Providers / Math (F91-F130) ────────────────
+    # Substantive multi-assert behavioural tests throughout: defensive JSON
+    # (F97), numeric guards (F98), StateBus (F99), scene-name sanitization
+    # (F100), self-heal/repair wiring (F101), truncation guard (F102), critique
+    # loop (F108), canvas trail/hover/sample-cache (F110/111/113), multi-curve
+    # payloads (F114), provider gating (F128). F103 stays FAIL/BUG-28 (stamped
+    # inline). F92 (title bar) is construction-only but low-risk cosmetic.
+    "F91": ("PASS", "BUG-22", "PASS"),
+    "F92": ("PASS", "None", "PASS"),
+    "F93": ("PASS", "None", "PASS"),
+    "F94": ("PASS", "None", "PASS"),
+    "F95": ("PASS", "None", "PASS"),
+    "F96": ("PASS", "None", "PASS"),
+    "F97": ("PASS", "None", "PASS"),
+    "F98": ("PASS", "None", "PASS"),
+    "F99": ("PASS", "None", "PASS"),
+    "F100": ("PASS", "None", "PASS"),
+    "F101": ("PASS", "None", "PASS"),
+    "F102": ("PASS", "None", "PASS"),
+    "F104": ("PASS", "None", "PASS"),
+    "F105": ("PASS", "None", "PASS"),
+    "F106": ("PASS", "None", "PASS"),
+    "F107": ("PASS", "None", "PASS"),
+    "F108": ("PASS", "None", "PASS"),
+    "F109": ("PASS", "None", "PASS"),
+    "F110": ("PASS", "None", "PASS"),
+    "F111": ("PASS", "None", "PASS"),
+    "F112": ("PASS", "None", "PASS"),
+    "F113": ("PASS", "None", "PASS"),
+    "F114": ("PASS", "None", "PASS"),
+    "F115": ("PASS", "None", "PASS"),
+    "F116": ("PASS", "None", "PASS"),
+    "F117": ("PASS", "None", "PASS"),
+    "F118": ("PASS", "None", "PASS"),
+    "F119": ("PASS", "None", "PASS"),
+    "F120": ("PASS", "None", "PASS"),
+    "F121": ("PASS", "None", "PASS"),
+    "F122": ("PASS", "None", "PASS"),
+    "F123": ("PASS", "None", "PASS"),
+    "F124": ("PASS", "None", "PASS"),
+    "F125": ("PASS", "None", "PASS"),
+    "F126": ("PASS", "None", "PASS"),
+    "F127": ("PASS", "None", "PASS"),
+    "F128": ("PASS", "None", "PASS"),
+    "F129": ("PASS", "None", "PASS"),
+    "F130": ("PASS", "None", "PASS"),
 }
 
 
