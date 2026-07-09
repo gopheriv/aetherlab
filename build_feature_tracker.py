@@ -2429,7 +2429,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F171": ("PARTIAL", "None", "PARTIAL"),
     # ── Quality Flywheel Phase 3 (F172 losers teach, F173 winners teach) ────
     "F172": ("PASS", "None", "PASS"),
-    "F173": ("PASS", "None", "PASS"),
+    "F173": ("PASS", "BUG-31", "PASS"),
     # ── Quality Flywheel Phase 4 (F174 cheap-first escalation) ──────────────
     "F174": ("PASS", "None", "PASS"),
     # ── Quality Flywheel Phase 5 (F175 ledger, F176 dashboard panel) ────────
@@ -2581,6 +2581,7 @@ DEFECTS: dict[str, str] = {
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
     "F34": "BUG-23: solve cache accepted any existing video path, including zero-byte/corrupt MP4s; cached rendered scenes now require a playable video. BUG-25: UI worker now uses the same playable-video guard instead of Path.exists().",
     "F161": "BUG-29: the tournament rendered + critiqued each candidate as a draft, then discarded the winner's rendered draft (built `selected` with status='compiled') and handed it to render_scene_with_repair, which rendered the SAME draft again before promoting to HQ — a wasted render on every tournament solve, multiplied per lesson chapter and made default-on by F177. Now `selected` carries the winner's rendered draft (status/video_path) and render_scene_with_repair skips the draft render when the bundle is already rendered, promoting straight to the requested quality. Regression in t_f135. BUG-30: escalation keyed the second candidate batch off scored (rendered) not built (attempted), so a first candidate that built but failed to render could push total candidates to cap+1; now keyed off first_built so attempts never exceed the budget. Regression in t_f174.",
+    "F173": "BUG-31: exemplar promotion (and, through it, the F179 retrieval the flywheel serves) keyed off the winner's 480p DRAFT critic score — the score the tournament uses only to SELECT the winner — recorded before the HQ render. So the flywheel learned from and re-served scenes judged at draft quality, not the 1080p the user sees: a scene great at 480p but weak at HQ could be promoted, and one that improved at HQ rejected. Fixed by recording the exemplar AFTER render_scene_with_repair, from the FINAL bundle whose critique loop re-scored the promoted HQ render (and any aesthetic revision). Selection still uses the cheap draft score; promotion/retrieval now use the HQ score. Regression in t_f173.",
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
 }

@@ -349,10 +349,6 @@ class ManimRuntime:
             self._record_aesthetic_pitfalls(
                 [issue for c in scored if c is not winner for issue in c.issues], s
             )
-            # Winners teach: stash a high-scoring, critic-approved winner as an
-            # exemplar CANDIDATE for later human review + promotion. Never edits
-            # the curated exemplar source automatically (supply-chain safety).
-            self._record_exemplar_candidate(winner, solver, s)
             # Observe: record the tournament (per-candidate scores + winner) in
             # the render-farm ledger so the dashboard can show why this scene won.
             self._record_tournament_ledger(scored, winner, s, quality)
@@ -379,9 +375,17 @@ class ManimRuntime:
                 critique_issues=list(winner.issues),
                 critique_breakdown=dict(winner.breakdown),
             )
-            return await self.render_scene_with_repair(
+            final = await self.render_scene_with_repair(
                 selected, s, quality=quality, brief=brief or request.prompt, progress=progress
             )
+            # Winners teach — from the FINAL, HQ-critiqued result, not the 480p
+            # draft score used only for tournament SELECTION. The critique loop in
+            # render_scene_with_repair re-scores the promoted HQ render (and any
+            # aesthetic revision), so exemplar promotion + retrieval (F173/F179)
+            # learn from the quality the user actually sees. Never edits the
+            # curated exemplar source automatically (supply-chain safety).
+            self._record_exemplar_candidate(final, solver, s)
+            return final
         except Exception as exc:  # noqa: BLE001 - tournament must never break solve
             log.info("Scene tournament failed (%s); falling back to single scene path.", exc)
             scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
@@ -401,9 +405,14 @@ class ManimRuntime:
             log.info("Could not record aesthetic pitfalls (%s).", exc)
 
     def _record_exemplar_candidate(
-        self, winner: "SceneCandidate", solver: SolverResult, settings: "AppSettings"
+        self, scene: SceneBundle, solver: SolverResult, settings: "AppSettings"
     ) -> None:
-        """Stash a critic-approved, high-scoring winner as an exemplar candidate."""
+        """Stash a critic-approved, high-scoring scene as an exemplar candidate.
+
+        Keyed off the FINAL scene's HQ critique (``quality_score``/
+        ``critique_verdict``), so promotion reflects what the user sees — not the
+        480p draft score the tournament used only to pick the winner.
+        """
         try:
             from aetherlab.services.scene_exemplars import ExemplarCandidateStore
             from aetherlab.services.scene_templates import detect_domain
@@ -411,9 +420,9 @@ class ManimRuntime:
             domain = detect_domain(list(solver.keywords or []), dict(solver.variables or {}))
             ExemplarCandidateStore(settings.data_dir / "exemplar_candidates.json").record(
                 domain=domain,
-                code=winner.scene.code,
-                score=float(winner.score),
-                verdict=str(winner.verdict),
+                code=scene.code,
+                score=float(scene.quality_score),
+                verdict=str(scene.critique_verdict),
                 query_text=" ".join(str(k) for k in (solver.keywords or [])),
             )
         except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal

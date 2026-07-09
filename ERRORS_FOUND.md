@@ -111,6 +111,12 @@ multiplying into many simultaneous local renders) was addressed as a new
 capability rather than a defect fix — see feature **F178** (global local-render
 concurrency bound), not a BUG row.
 
+## Ninth review pass (flywheel learns from the right signal)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-31 | Correctness / wrong learning signal | F173 exemplar promotion → F179 retrieval | `services/manim_runtime.py` | The tournament renders + critiques candidates as 480p **drafts**, uses those draft scores to SELECT the winner (correct — cheap), then re-renders the winner at the requested (e.g. 1080p) quality and re-critiques it in `render_scene_with_repair`. But exemplar promotion recorded the winner's **draft** score *before* that HQ render — so the flywheel's "winners teach" store (and the F179 semantic retrieval built on it) learned from and re-served scenes judged at draft quality, not the quality the user actually sees. A scene that looks good at 480p but weak at 1080p could be promoted and re-injected into future prompts; one that improves at HQ could be rejected. Fixed by recording the exemplar **after** `render_scene_with_repair` returns, from the FINAL bundle whose critique loop re-scored the promoted HQ render (and any aesthetic revision). Selection still uses the cheap draft score; promotion + retrieval now use the HQ score. Tests missed it because `t_f173` exercised the store directly and `t_f161` stubbed `render_scene_with_repair`, so no test made the draft and HQ scores diverge. Regression added to `t_f173`: a weak-draft/strong-HQ winner IS promoted and a strong-draft/weak-HQ winner is NOT. |
+
 ## Notes on non-issues considered and dismissed
 - `SimulationPanel.show_loading` is defined but unused — the shell drives the
   running state via `RunningView`; `hide_loading` is still used. Harmless dead

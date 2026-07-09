@@ -656,8 +656,8 @@
     "note": "feature-surface audit covers 66/66 current surfaces (F164)"
   },
   "F165": {
-    "status": "FAIL",
-    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F179'], result-tracker=[]\"]"
+    "status": "PASS",
+    "note": "tracker integrity: 179 features/179 stories/179 results/179 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -689,7 +689,7 @@
   },
   "F173": {
     "status": "PASS",
-    "note": "exemplar promotion: high-scoring winners stashed for human-reviewed promotion (F173)"
+    "note": "exemplar promotion keys off the final HQ critique, not the draft score (F173)"
   },
   "F174": {
     "status": "PASS",

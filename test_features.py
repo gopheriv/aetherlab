@@ -4026,7 +4026,48 @@ def t_f173():
     assert 'scene_exemplars.py' in tool_src  # it references the target for humans
     assert ".write_text(" not in tool_src and "open(" not in tool_src, "promote tool must not write files"
     assert promote_exemplar.main(["--list"]) == 0  # runs without crashing
-    return "exemplar promotion: high-scoring winners stashed for human-reviewed promotion (F173)"
+
+    # BUG-31: promotion keys off the FINAL HQ critique, not the 480p draft score
+    # the tournament used only to pick the winner.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+
+    def _promote_count(draft: float, hq_score: float, hq_verdict: str, dd: Path) -> int:
+        s = _replace(_settings(), data_dir=dd, scene_candidates=2, openai_api_key="k", vision_model="v")
+        rt = ManimRuntime(s)
+
+        async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+            return [SceneCandidate(index=start_index + i,
+                                   scene=SceneBundle("AetherLabScene", "winner-code", "e", "rendered", video_path="/x.mp4"),
+                                   storyboard={"acts": [{"beats": ["a"]}]}) for i in range(count or 0)]
+
+        async def _fs(cands, settings, progress):
+            for c in cands:
+                c.score, c.verdict = draft, ("ship" if draft >= 7 else "revise")
+            return cands
+
+        async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+            return _replace(scene, quality_score=hq_score, critique_verdict=hq_verdict)
+
+        rt._build_scene_candidates = _fb          # type: ignore[assignment]
+        rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+        rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+        solver = SolverResult(summary="", derivation_steps=[], keywords=["orbit"], variables={}, model_name="t")
+        _asyncio.run(rt.generate_render_tournament(
+            ProblemRequest(prompt="x"), solver, RagResult(keywords=[], hits=[], backend="none"), s))
+        return len(ExemplarCandidateStore(dd / "exemplar_candidates.json").list())
+
+    da, db = _TMP / "rekey_a", _TMP / "rekey_b"
+    da.mkdir(exist_ok=True)
+    db.mkdir(exist_ok=True)
+    # A weak draft (7.0) that renders to a strong HQ (9.0 ship) IS promoted.
+    assert _promote_count(7.0, 9.0, "ship", da) == 1, "HQ ship must promote even when the draft scored below the bar"
+    # A strong draft (9.0 ship) that renders to a weak HQ (6.0) is NOT promoted.
+    assert _promote_count(9.0, 6.0, "ship", db) == 0, "a low HQ score must not promote despite a high draft score"
+    return "exemplar promotion keys off the final HQ critique, not the draft score (F173)"
 
 
 def t_f174():
