@@ -2476,7 +2476,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F179": ("PASS", "None", "PASS"),
     # ── "Prove It" mission — measure the flywheel (F180 A/B, F181 ledger report,
     #    F182 learned keyless proxy) ──────────────────────────────────────────
-    "F180": ("PASS", "None", "PASS"),
+    "F180": ("PASS", "BUG-32", "PASS"),
     "F181": ("PASS", "None", "PASS"),
     "F182": ("PASS", "None", "PASS"),
 }
@@ -2622,6 +2622,7 @@ DEFECTS: dict[str, str] = {
     "F173": "BUG-31: exemplar promotion (and, through it, the F179 retrieval the flywheel serves) keyed off the winner's 480p DRAFT critic score — the score the tournament uses only to SELECT the winner — recorded before the HQ render. So the flywheel learned from and re-served scenes judged at draft quality, not the 1080p the user sees: a scene great at 480p but weak at HQ could be promoted, and one that improved at HQ rejected. Fixed by recording the exemplar AFTER render_scene_with_repair, from the FINAL bundle whose critique loop re-scored the promoted HQ render (and any aesthetic revision). Selection still uses the cheap draft score; promotion/retrieval now use the HQ score. Regression in t_f173.",
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
+    "F180": "BUG-32: the A/B verdict said 'did NOT help' whenever more prompts regressed than improved (`or losses > wins`), even with a POSITIVE mean lift — a self-contradicting conclusion (`did NOT help (mean +2.00, 1 win / 2 loss)`) for the flywheel's core measurement. Now the negative verdict requires a negative mean (`mean_lift < -eps and losses >= wins`) and sign/count disagreement routes to an explicit 'Mixed result' verdict. Regression in t_f180.",
 }
 
 

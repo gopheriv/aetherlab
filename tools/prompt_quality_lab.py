@@ -399,14 +399,18 @@ def _ab_verdict(n: int, mean_lift: float, wins: int, losses: int, extra: int) ->
             f"({wins} win / {losses} loss) at {extra} extra render(s). Worth committing "
             f"a provider baseline."
         )
-    if mean_lift < -_AB_EPS or losses > wins:
+    if mean_lift < -_AB_EPS and losses >= wins:
         return (
             f"Tournament did NOT help (mean {mean_lift:+}, {wins} win / {losses} loss). "
             f"Investigate the escalation threshold / critic rubric with ledger_report."
         )
+    # Sign and per-prompt counts disagree (e.g. a positive mean driven by a few big
+    # wins while more prompts slightly regressed) — never call that a failure; a
+    # positive mean must never read as "did NOT help" (BUG-32). Send the reader to
+    # the per-prompt deltas rather than force a verdict the numbers don't support.
     return (
-        f"Marginal: mean {mean_lift:+} across {n} prompts ({wins} win / {losses} loss) "
-        f"at {extra} extra render(s) — within render noise."
+        f"Mixed result: mean {mean_lift:+} across {n} prompts ({wins} win / {losses} loss) "
+        f"at {extra} extra render(s) — inspect the per-prompt deltas before deciding."
     )
 
 

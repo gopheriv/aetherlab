@@ -4470,6 +4470,11 @@ def t_f180():
     assert "identical" in same["verdict"].lower(), same["verdict"]
     worse = lab.pair_ab_reports(_rep({"a": 4.0, "b": 4.0}), _rep({"a": 8.0, "b": 8.0}))
     assert "did NOT help" in worse["verdict"], worse["verdict"]
+    # BUG-32: a POSITIVE mean lift where more prompts individually regressed must
+    # NOT be labelled "did NOT help" (it once read "did NOT help (mean +2.00)").
+    mixed = lab.pair_ab_reports(_rep({"a": 9.0, "b": 5.0, "c": 5.0}), _rep({"a": 1.0, "b": 6.0, "c": 6.0}))
+    assert mixed["mean_lift"] > 0 and mixed["losses"] > mixed["wins"], mixed
+    assert "did NOT help" not in mixed["verdict"] and "Mixed" in mixed["verdict"], mixed["verdict"]
 
     # Markdown renders the comparison table without raising.
     md = lab.render_ab_markdown(lift)
