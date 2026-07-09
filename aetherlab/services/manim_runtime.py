@@ -414,6 +414,7 @@ class ManimRuntime:
                 code=winner.scene.code,
                 score=float(winner.score),
                 verdict=str(winner.verdict),
+                query_text=" ".join(str(k) for k in (solver.keywords or [])),
             )
         except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
             log.info("Could not record exemplar candidate (%s).", exc)

@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "FAIL",
-    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F178'], result-tracker=[]\"]"
+    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F179'], result-tracker=[]\"]"
   },
   "F166": {
     "status": "PASS",
@@ -710,5 +710,9 @@
   "F178": {
     "status": "PASS",
     "note": "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
+  },
+  "F179": {
+    "status": "PASS",
+    "note": "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
   }
 }

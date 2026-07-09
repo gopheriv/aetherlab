@@ -785,6 +785,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user rendering lessons with the tournament on, I expect AetherLab not to thrash my machine with unbounded simultaneous local renders.",
      "render_backend defines a process-wide LOCAL_RENDER_LIMIT (default max(1, min(4, cpu//2)); override via AETHERLAB_LOCAL_RENDER_LIMIT) and a threading (loop-agnostic) semaphore _LOCAL_RENDER_SEM acquired inside LocalRenderBackend.render's worker thread. Lessons render chapters concurrently (lesson_pipeline max_concurrent) and each chapter's tournament renders candidates concurrently (scene_candidate_concurrency), so the nesting would otherwise multiply into many CPU-bound Manim subprocesses at once — thrashing the machine and risking render timeouts. The bound caps total concurrent LOCAL renders globally; cloud renders are I/O-bound and intentionally not bounded here.",
      "services/render_backend.py", "headless", "Documented", ""),
+    ("F179", "Quality", "Semantic exemplar retrieval (embeddings)",
+     "As a user, I expect AetherLab to reuse a past proven-good scene when I ask about a semantically-similar problem — even if the wording differs.",
+     "services/embeddings.py is a fail-soft, offline local text-embedding leaf that reuses ChromaDB's bundled all-MiniLM model (already a [rag] dependency; no new hard dep) to turn text into unit vectors where cosine similarity == semantic similarity; it degrades to unavailable (None) so callers keep their non-semantic fallback and numpy is the only hard requirement. ExemplarCandidateStore.record now embeds the winning scene's query_text and retrieve() returns the stored winner whose embedding is cosine-nearest above RETRIEVE_MIN_SIM; exemplar_block(data_dir=...) appends that retrieved winner as a second few-shot example so the model imitates a scene that already scored highly on a similar problem (keyword matching, e.g. detect_domain, cannot connect 'escape velocity' to a stored 'kepler orbit' winner — embeddings can). This makes the flywheel's F173 'winners teach' channel a LIVE retrieval source, not just a manual-promotion queue. Fully fail-soft: no model or empty store leaves generation exactly as before, and the deterministic keyless template path is untouched.",
+     "services/embeddings.py / services/scene_exemplars.py / services/scene_generator.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2186,6 +2190,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "The bound holds across separate event loops; exceeding the limit is impossible; cloud fan-out stays wide (I/O-bound); an env override adjusts it.",
         "harness",
     ),
+    "F179": _story_tuple(
+        "US-F179: As P3 Educator with a critic, when I ask about a problem similar to one AetherLab rendered well before, I expect that proven scene to guide this generation even if I phrased it differently. Preconditions: the F173 winner store may hold past winners. Steps: 1. Record a winning scene with its problem text. 2. Retrieve it with a semantically-similar (differently-worded) query. 3. Confirm an unrelated query retrieves nothing and no embedder degrades cleanly.",
+        "P3",
+        "`services/embeddings` (offline all-MiniLM via Chroma, fail-soft) embeds text to unit vectors; `ExemplarCandidateStore.record` stores the winner's embedding and `retrieve()` returns the cosine-nearest winner above RETRIEVE_MIN_SIM; `exemplar_block(data_dir=)` injects it as a second few-shot example. Implementation reference: aetherlab/services/embeddings.py:1 / aetherlab/services/scene_exemplars.py:246.",
+        "No embedder / empty store / unrelated query all yield no retrieval and leave generation exactly as before; the deterministic keyless template path never changes; no new hard dependency is added.",
+        "harness",
+    ),
 }
 
 
@@ -2428,6 +2439,8 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F177": ("PASS", "None", "PASS"),
     # ── Flywheel efficiency pass (F178 global local-render bound) ───────────
     "F178": ("PASS", "None", "PASS"),
+    # ── ML §1: embeddings — semantic exemplar retrieval (F179) ──────────────
+    "F179": ("PASS", "None", "PASS"),
 }
 
 

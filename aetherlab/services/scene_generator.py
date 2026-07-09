@@ -484,7 +484,7 @@ class SceneGenerator:
         # the budget trim below); fail-soft — no match yields no exemplar.
         from aetherlab.services.scene_exemplars import exemplar_block
 
-        exemplar = exemplar_block(solver.keywords, solver.variables)
+        exemplar = exemplar_block(solver.keywords, solver.variables, data_dir=self.settings.data_dir)
         if exemplar:
             system += "\n\n" + exemplar
 

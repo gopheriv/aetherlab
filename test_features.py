@@ -4342,6 +4342,59 @@ def t_f178():
     return "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
 
 
+def t_f179():
+    # ML §1 — embeddings: semantic exemplar retrieval. The flywheel's F173 winner
+    # store becomes a live few-shot source: a proven-good past scene is re-served
+    # to a semantically-similar future problem (keyword matching can't).
+    from unittest import mock
+
+    from aetherlab.services import embeddings as E
+    from aetherlab.services.scene_exemplars import (
+        RETRIEVE_MIN_SIM, ExemplarCandidateStore, exemplar_block,
+    )
+
+    # Fail-soft primitives never raise on missing inputs.
+    assert E.nearest(None, None) == (-1, -1.0)
+    assert E.cosine(None, None) == 0.0
+
+    if E.available():
+        v = E.embed(["small-angle pendulum period", "mass on a spring oscillating", "electric dipole field lines"])
+        assert v is not None and v.shape[0] == 3 and v.shape[1] >= 128
+        assert abs(float((v[0] * v[0]).sum()) - 1.0) < 1e-3, "embeddings must be unit vectors"
+        # An SHM pair is closer than SHM vs E&M — real semantic structure.
+        assert E.cosine(v[0], v[1]) > E.cosine(v[0], v[2])
+
+    code = ("from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n"
+            "        self.play(Create(Ellipse()))\n        self.wait(1)\n")
+    data_dir = _TMP / "f179_dir"
+    data_dir.mkdir(exist_ok=True)
+    store = ExemplarCandidateStore(data_dir / "exemplar_candidates.json")  # canonical name exemplar_block reads
+    assert store.record(domain="orbit", code=code, score=9.2, verdict="ship",
+                        query_text="kepler elliptical orbit planet sun gravitation")
+
+    if E.available():
+        entry = store.list()[0]
+        assert isinstance(entry.get("embedding"), list) and len(entry["embedding"]) >= 128
+        # Semantically-similar problem retrieves the stored winner (keyword miss).
+        hit = store.retrieve("escape velocity from a planet's gravity")
+        assert hit and hit["domain"] == "orbit" and hit["similarity"] >= RETRIEVE_MIN_SIM
+        # An unrelated problem stays below the bar → no injection.
+        assert store.retrieve("fourier series of a square wave") is None
+        # exemplar_block appends the retrieved winner as a second few-shot example.
+        block = exemplar_block(["kepler", "orbit"], {}, data_dir=data_dir)
+        assert "Reference exemplar" in block and "Proven exemplar" in block
+
+    # Backward compatible: no data_dir → curated exemplar only, no retrieval.
+    assert "Proven exemplar" not in exemplar_block(["kepler", "orbit"], {})
+
+    # Fail-soft: with the embedder disabled, retrieval yields nothing and the
+    # curated exemplar path is unchanged — the keyless/no-model path is untouched.
+    with mock.patch.object(E, "embed_one", return_value=None):
+        assert store.retrieve("anything at all") is None
+        assert "Proven exemplar" not in exemplar_block(["kepler"], {}, data_dir=data_dir)
+    return "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

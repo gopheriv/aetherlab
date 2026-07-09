@@ -214,21 +214,41 @@ def exemplar_for(
 def exemplar_block(
     keywords: Iterable[str] | None,
     variables: Mapping[str, float] | None,
+    *,
+    data_dir: Path | None = None,
 ) -> str:
-    """Formatted few-shot block for the codegen prompt (\"\" when no match)."""
+    """Formatted few-shot block(s) for the codegen prompt (\"\" when no match).
+
+    Always tries the curated domain exemplar. When ``data_dir`` is given, it also
+    retrieves the most semantically-similar past *winner* (the flywheel's F173
+    store) and appends it as a second, proven-good example — so the model
+    imitates a scene that already scored highly on a similar problem. Fail-soft:
+    no embedder / empty store simply omits the retrieved example.
+    """
+    parts: list[str] = []
     match = exemplar_for(keywords, variables)
-    if not match:
-        return ""
-    domain, code = match
-    return (
-        f"## Reference exemplar — a well-directed {domain} scene\n"
-        "Study its STRUCTURE and its correct Manim-CE API usage: three beats "
-        "(establish the object → evolve the motion → reveal the hero idea), a "
-        "labelled hero moment, and motion that keeps going into the final frame. "
-        "Do NOT copy it verbatim — adapt the technique to THIS problem's physics "
-        "and variables.\n"
-        f"```python\n{code}```\n"
-    )
+    if match:
+        domain, code = match
+        parts.append(
+            f"## Reference exemplar — a well-directed {domain} scene\n"
+            "Study its STRUCTURE and its correct Manim-CE API usage: three beats "
+            "(establish the object → evolve the motion → reveal the hero idea), a "
+            "labelled hero moment, and motion that keeps going into the final frame. "
+            "Do NOT copy it verbatim — adapt the technique to THIS problem's physics "
+            "and variables.\n"
+            f"```python\n{code}```\n"
+        )
+    if data_dir is not None:
+        query = " ".join(str(k) for k in (keywords or []))
+        hit = ExemplarCandidateStore(Path(data_dir) / "exemplar_candidates.json").retrieve(query)
+        if hit and str(hit.get("code", "")).strip():
+            parts.append(
+                "## Proven exemplar — a past render that scored highly on a similar "
+                f"problem (critic {hit.get('score')}). Adapt its technique to THIS "
+                "problem's physics; do NOT copy it verbatim.\n"
+                f"```python\n{hit['code']}```\n"
+            )
+    return "\n".join(parts)
 
 
 # ── Exemplar promotion (the flywheel's "winners teach" channel) ──────────────
@@ -241,6 +261,10 @@ def exemplar_block(
 
 PROMOTE_MIN_SCORE = 8.5  # a winner must clear this VISION score to be a candidate
 _MAX_CANDIDATES = 24
+# Minimum cosine similarity to retrieve a stored winner as a few-shot example.
+# Calibrated to all-MiniLM's scale for short physics phrasings (same-topic pairs
+# land ~0.4-0.6, unrelated ~0.2), so this admits genuinely-similar problems only.
+RETRIEVE_MIN_SIM = 0.4
 
 
 class ExemplarCandidateStore:
@@ -263,24 +287,35 @@ class ExemplarCandidateStore:
             log.debug("exemplar-candidate store unreadable: %s", exc)
             return []
 
-    def record(self, *, domain: str, code: str, score: float, verdict: str) -> bool:
+    def record(
+        self, *, domain: str, code: str, score: float, verdict: str, query_text: str = ""
+    ) -> bool:
         """Stash a winner iff the VISION critic approved it above the bar.
 
         Returns True when stored. Static-proxy (``skipped``) and merely-"revise"
         winners are rejected — only a genuine ``ship`` verdict at a high score is
         exemplar-worthy. Deduplicates identical code, newest-first, capped.
+
+        ``query_text`` (the winning scene's problem/keywords) is embedded so a
+        future semantically-similar prompt can retrieve this proven-good scene as
+        a few-shot example. Fail-soft: no embedder just means no vector stored.
         """
         if verdict != "ship" or float(score) < PROMOTE_MIN_SCORE or not str(code).strip():
             return False
         if not self.path:
             return False
         try:
+            from aetherlab.services import embeddings as _emb
+
+            vec = _emb.embed_one(query_text) if query_text else None
             items = [c for c in self._load() if c.get("code") != code]
             items.insert(0, {
                 "domain": str(domain or "unknown"),
                 "code": str(code),
                 "score": round(float(score), 3),
                 "verdict": str(verdict),
+                "query_text": str(query_text or ""),
+                "embedding": [float(x) for x in vec] if vec is not None else None,
                 "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
             })
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,6 +324,37 @@ class ExemplarCandidateStore:
         except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
             log.debug("could not record exemplar candidate: %s", exc)
             return False
+
+    def retrieve(self, query_text: str, *, min_sim: float = RETRIEVE_MIN_SIM) -> dict | None:
+        """Return the stored winner most semantically similar to ``query_text``.
+
+        Only entries with a stored embedding and cosine ``>= min_sim`` qualify;
+        returns ``None`` (fail-soft) when the embedder is unavailable, nothing is
+        stored, or nothing clears the bar — so callers keep their curated
+        exemplar. This is the flywheel's "winners teach" channel made live:
+        proven-good scenes are re-served to similar future problems.
+        """
+        if not query_text:
+            return None
+        try:
+            from aetherlab.services import embeddings as _emb
+
+            q = _emb.embed_one(query_text)
+            if q is None:
+                return None
+            candidates = [c for c in self._load() if isinstance(c.get("embedding"), list)]
+            if not candidates:
+                return None
+            matrix = [c["embedding"] for c in candidates]
+            idx, sim = _emb.nearest(q, matrix)
+            if idx < 0 or sim < min_sim:
+                return None
+            hit = dict(candidates[idx])
+            hit["similarity"] = round(float(sim), 3)
+            return hit
+        except Exception as exc:  # noqa: BLE001 — retrieval is a bonus, never fatal
+            log.debug("exemplar retrieval failed: %s", exc)
+            return None
 
     def list(self) -> list[dict]:
         return self._load()
