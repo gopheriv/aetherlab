@@ -2382,7 +2382,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F158": ("PASS", "None", "PASS"),
     "F159": ("PASS", "None", "PASS"),
     "F160": ("PASS", "BUG-16", "PASS"),
-    "F161": ("PASS", "None", "PASS"),
+    "F161": ("PASS", "BUG-29", "PASS"),
     "F162": ("PASS", "None", "PASS"),
     "F163": ("PASS", "None", "PASS"),
     "F164": ("PASS", "None", "PASS"),
@@ -2554,6 +2554,7 @@ DEFECTS: dict[str, str] = {
     "F154": "BUG-15: exact job_id polling prevents attaching to unrelated runs. BUG-17: bundled workflow is provisioned before dispatch/test. BUG-18: removed setup-python cache:pip failure. BUG-20: artifact 302 downloads drop the Bearer header on the signed URL.",
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
     "F34": "BUG-23: solve cache accepted any existing video path, including zero-byte/corrupt MP4s; cached rendered scenes now require a playable video. BUG-25: UI worker now uses the same playable-video guard instead of Path.exists().",
+    "F161": "BUG-29: the tournament rendered + critiqued each candidate as a draft, then discarded the winner's rendered draft (built `selected` with status='compiled') and handed it to render_scene_with_repair, which rendered the SAME draft again before promoting to HQ — a wasted render on every tournament solve, multiplied per lesson chapter and made default-on by F177. Now `selected` carries the winner's rendered draft (status/video_path) and render_scene_with_repair skips the draft render when the bundle is already rendered, promoting straight to the requested quality. Regression in t_f135.",
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
 }

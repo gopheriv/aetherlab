@@ -537,7 +537,7 @@
   },
   "F135": {
     "status": "PASS",
-    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success (F135)"
+    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success; winner reuse (F135)"
   },
   "F136": {
     "status": "PASS",

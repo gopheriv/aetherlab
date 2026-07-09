@@ -2206,7 +2206,38 @@ def t_f135():
     assert 'scene_bundle.video_path = ""' in rs, "failed renders must not keep stale paths"
     rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
     assert "draft_quality" in rr and "partial success" in rr and "keeping draft" in rr
-    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success (F135)"
+
+    # BUG-29: a pre-rendered draft (e.g. the tournament winner) is NOT re-rendered
+    # at draft quality — the repair path reuses it and promotes straight to HQ.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import SceneBundle
+    rt = ManimRuntime(_settings())
+    calls: list[str] = []
+
+    async def _fake_render_once(scene, settings, quality, progress=None, variant=""):
+        calls.append(quality)
+        return _replace(scene, status="rendered", video_path=str(_TMP / f"r_{quality}.mp4"))
+
+    rt._render_once = _fake_render_once  # type: ignore[assignment]
+    drafted = _TMP / "prewinner.mp4"
+    drafted.write_bytes(b"\x00" * 64)
+    pre = SceneBundle("S", "code", "manim", "rendered", video_path=str(drafted))
+
+    calls.clear()
+    out = _asyncio.run(rt.render_scene_with_repair(_replace(pre), _settings(), quality="l"))
+    assert calls == [], f"pre-rendered draft must not re-render at draft quality: {calls}"
+    assert out.video_path == str(drafted), "the winner's own draft must be reused as the output"
+
+    calls.clear()
+    _asyncio.run(rt.render_scene_with_repair(_replace(pre), _settings(), quality="h"))
+    assert calls == ["h"], f"pre-rendered draft must promote straight to HQ (no re-draft): {calls}"
+
+    calls.clear()
+    _asyncio.run(rt.render_scene_with_repair(SceneBundle("S", "code", "manim", "compiled"), _settings(), quality="l"))
+    assert calls == ["l"], f"a fresh compiled scene must still render its draft: {calls}"
+    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success; winner reuse (F135)"
 
 
 def t_f136():

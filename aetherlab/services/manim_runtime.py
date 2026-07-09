@@ -355,7 +355,13 @@ class ManimRuntime:
                 class_name=winner.scene.class_name,
                 code=winner.scene.code,
                 engine=winner.scene.engine,
-                status="compiled",
+                # Carry the winner's already-rendered draft through so the
+                # repair path reuses it instead of rendering the same draft a
+                # second time (BUG-29). render_scene_with_repair promotes it to
+                # the requested quality from here.
+                status=winner.scene.status,
+                video_path=winner.scene.video_path,
+                failure_kind=winner.scene.failure_kind,
                 diagnostics=list(winner.scene.diagnostics) + [
                     (
                         f"Tournament winner: candidate #{winner.index + 1}, best of "
@@ -746,7 +752,19 @@ class ManimRuntime:
         """
         s = settings or self._settings
         draft_quality = "l"  # validate/repair cheaply here; promote to `quality`
-        scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
+        # BUG-29: skip the draft render when the bundle already carries a valid
+        # one (the tournament renders + critiques the winner as a draft before
+        # handing it here). Re-rendering the same code at the same quality was a
+        # wasted render on every tournament solve — and every lesson chapter —
+        # once the tournament defaulted on (F177). A fresh compiled scene has no
+        # video_path and renders normally.
+        already_drafted = bool(
+            scene_bundle.status == "rendered"
+            and scene_bundle.video_path
+            and Path(scene_bundle.video_path).exists()
+        )
+        if not already_drafted:
+            scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
 
         learner = None
         if s is not None:
