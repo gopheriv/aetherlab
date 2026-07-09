@@ -656,8 +656,8 @@
     "note": "feature-surface audit covers 66/66 current surfaces (F164)"
   },
   "F165": {
-    "status": "PASS",
-    "note": "tracker integrity: 177 features/177 stories/177 results/177 tests aligned (F165)"
+    "status": "FAIL",
+    "note": "AssertionError: [\"Tracker/results ID mismatch: tracker-result=['F178'], result-tracker=[]\"]"
   },
   "F166": {
     "status": "PASS",
@@ -706,5 +706,9 @@
   "F177": {
     "status": "PASS",
     "note": "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+  },
+  "F178": {
+    "status": "PASS",
+    "note": "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
   }
 }

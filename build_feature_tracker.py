@@ -781,6 +781,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user with a vision critic configured, I get the multi-candidate quality loop automatically — no extra clicks — while keyless/offline stays exactly as fast.",
      "core/settings.auto_tournament (bool, default True; env AETHERLAB_AUTO_TOURNAMENT + app-config, round-trips through the Settings dialog). manim_runtime.effective_candidate_cap() returns the effective cap: an explicit scene_candidates>1 wins; else, when a vision critic (api key + vision model) is configured and auto_tournament is on, it defaults to AUTO_TOURNAMENT_CAP (3); else 1. scene_tournament_enabled() now gates on a critic AND effective_candidate_cap>1, so configured users get the tournament by default and keyless/offline resolves to a single render, exactly as fast. Phase-4 escalation keeps the typical configured cost at one render. The Settings toggle 'Multi-candidate quality (auto): render extra takes only when the first is weak' opts out. Phase 6 (final) of docs/QUALITY_FLYWHEEL_MISSION.md.",
      "core/settings.py / services/manim_runtime.py / ui/main_window.py", "headless", "Documented", ""),
+    ("F178", "Quality", "Global local-render concurrency bound",
+     "As a user rendering lessons with the tournament on, I expect AetherLab not to thrash my machine with unbounded simultaneous local renders.",
+     "render_backend defines a process-wide LOCAL_RENDER_LIMIT (default max(1, min(4, cpu//2)); override via AETHERLAB_LOCAL_RENDER_LIMIT) and a threading (loop-agnostic) semaphore _LOCAL_RENDER_SEM acquired inside LocalRenderBackend.render's worker thread. Lessons render chapters concurrently (lesson_pipeline max_concurrent) and each chapter's tournament renders candidates concurrently (scene_candidate_concurrency), so the nesting would otherwise multiply into many CPU-bound Manim subprocesses at once — thrashing the machine and risking render timeouts. The bound caps total concurrent LOCAL renders globally; cloud renders are I/O-bound and intentionally not bounded here.",
+     "services/render_backend.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2175,6 +2179,13 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "No vision critic -> single render, never slower; the toggle and env override cleanly disable auto-on; Phase-4 escalation bounds the configured cost.",
         "harness",
     ),
+    "F178": _story_tuple(
+        "US-F178: As P4 Power user, cloud rendering, when I render a lesson locally with the tournament on, I expect a global cap on simultaneous local renders so my machine does not thrash. Preconditions: multiple renders may be dispatched concurrently. Steps: 1. Dispatch more concurrent local renders than the limit. 2. Confirm no more than the limit run at once. 3. Confirm cloud renders are not bounded by it.",
+        "P4",
+        "`LOCAL_RENDER_LIMIT` + a threading semaphore acquired inside `LocalRenderBackend.render`'s worker thread cap concurrent local Manim subprocesses globally across lesson-chapter and tournament-candidate nesting; the bound is loop-agnostic and env-overridable, and cloud renders are excluded. Implementation reference: aetherlab/services/render_backend.py:188.",
+        "The bound holds across separate event loops; exceeding the limit is impossible; cloud fan-out stays wide (I/O-bound); an env override adjusts it.",
+        "harness",
+    ),
 }
 
 
@@ -2382,7 +2393,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F158": ("PASS", "None", "PASS"),
     "F159": ("PASS", "None", "PASS"),
     "F160": ("PASS", "BUG-16", "PASS"),
-    "F161": ("PASS", "BUG-29", "PASS"),
+    "F161": ("PASS", "BUG-29; BUG-30", "PASS"),
     "F162": ("PASS", "None", "PASS"),
     "F163": ("PASS", "None", "PASS"),
     "F164": ("PASS", "None", "PASS"),
@@ -2415,6 +2426,8 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F176": ("PASS", "None", "PASS"),
     # ── Quality Flywheel Phase 6 — final: default-on for configured critics ─
     "F177": ("PASS", "None", "PASS"),
+    # ── Flywheel efficiency pass (F178 global local-render bound) ───────────
+    "F178": ("PASS", "None", "PASS"),
 }
 
 
@@ -2554,7 +2567,7 @@ DEFECTS: dict[str, str] = {
     "F154": "BUG-15: exact job_id polling prevents attaching to unrelated runs. BUG-17: bundled workflow is provisioned before dispatch/test. BUG-18: removed setup-python cache:pip failure. BUG-20: artifact 302 downloads drop the Bearer header on the signed URL.",
     "F160": "BUG-16: visual critique score/verdict/issues were not persisted, so cached low-quality renders could be pinned; SceneBundle now stores them and min_quality_score can reject low-score cache.",
     "F34": "BUG-23: solve cache accepted any existing video path, including zero-byte/corrupt MP4s; cached rendered scenes now require a playable video. BUG-25: UI worker now uses the same playable-video guard instead of Path.exists().",
-    "F161": "BUG-29: the tournament rendered + critiqued each candidate as a draft, then discarded the winner's rendered draft (built `selected` with status='compiled') and handed it to render_scene_with_repair, which rendered the SAME draft again before promoting to HQ — a wasted render on every tournament solve, multiplied per lesson chapter and made default-on by F177. Now `selected` carries the winner's rendered draft (status/video_path) and render_scene_with_repair skips the draft render when the bundle is already rendered, promoting straight to the requested quality. Regression in t_f135.",
+    "F161": "BUG-29: the tournament rendered + critiqued each candidate as a draft, then discarded the winner's rendered draft (built `selected` with status='compiled') and handed it to render_scene_with_repair, which rendered the SAME draft again before promoting to HQ — a wasted render on every tournament solve, multiplied per lesson chapter and made default-on by F177. Now `selected` carries the winner's rendered draft (status/video_path) and render_scene_with_repair skips the draft render when the bundle is already rendered, promoting straight to the requested quality. Regression in t_f135. BUG-30: escalation keyed the second candidate batch off scored (rendered) not built (attempted), so a first candidate that built but failed to render could push total candidates to cap+1; now keyed off first_built so attempts never exceed the budget. Regression in t_f174.",
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
 }

@@ -14,9 +14,11 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -185,6 +187,22 @@ class RenderBackend(Protocol):
         """
 
 
+# Global bound on concurrent LOCAL Manim renders (F178). Lessons render chapters
+# concurrently and each chapter's tournament renders candidates concurrently, so
+# without a shared cap the nesting multiplies (e.g. 2 chapters x 2 candidates) into
+# many simultaneous CPU-bound subprocesses that thrash the machine and can push a
+# render past its timeout. Threading (not asyncio) so the bound holds across the
+# app's many separate event loops. Cloud renders are I/O-bound and NOT bounded here.
+def _default_local_render_limit() -> int:
+    return max(1, min(4, (os.cpu_count() or 4) // 2 or 1))
+
+
+LOCAL_RENDER_LIMIT: int = max(
+    1, int(os.getenv("AETHERLAB_LOCAL_RENDER_LIMIT") or _default_local_render_limit())
+)
+_LOCAL_RENDER_SEM = threading.Semaphore(LOCAL_RENDER_LIMIT)
+
+
 class LocalRenderBackend:
     name = "local"
 
@@ -210,7 +228,13 @@ class LocalRenderBackend:
             progress("Rendering locally")
         from aetherlab.services.manim_runtime import ManimRuntime
 
-        return await asyncio.to_thread(ManimRuntime(settings).render_scene, scene, settings, quality)
+        def _bounded_render() -> SceneBundle:
+            # Acquired inside the worker thread so the global cap holds across
+            # concurrent lesson chapters and tournament candidates.
+            with _LOCAL_RENDER_SEM:
+                return ManimRuntime(settings).render_scene(scene, settings, quality)
+
+        return await asyncio.to_thread(_bounded_render)
 
 
 class CloudRenderBackend:

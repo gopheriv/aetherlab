@@ -320,7 +320,12 @@ class ManimRuntime:
             scored = await self._render_and_score_candidates(first_built, s, progress)
             budget = candidate_budget(scored[0].storyboard, cap) if scored else cap
             best_so_far = max((c.score for c in scored), default=-1.0)
-            if (not scored or best_so_far < ESCALATE_BELOW_SCORE) and budget > len(scored):
+            # Escalate on the count BUILT (attempts), not scored (rendered): if
+            # the first candidate built but failed to render, `scored` is empty
+            # while `budget` falls back to the cap, and keying the second batch
+            # off `scored` would build up to cap+1 candidates — over budget
+            # (BUG-30). Keying off `first_built` caps total attempts at `budget`.
+            if (not scored or best_so_far < ESCALATE_BELOW_SCORE) and budget > len(first_built):
                 if progress:
                     progress(
                         f"First render scored {best_so_far:.1f}; escalating to "
@@ -328,7 +333,7 @@ class ManimRuntime:
                     )
                 more = await self._build_scene_candidates(
                     request, solver, rag, s, aspect, progress,
-                    count=budget - len(scored), start_index=len(first_built),
+                    count=budget - len(first_built), start_index=len(first_built),
                 )
                 if more:
                     scored += await self._render_and_score_candidates(more, s, progress)

@@ -4094,6 +4094,37 @@ def t_f174():
     # A weak first render on an EASY scene does NOT escalate (budget is 1).
     weak_easy = _tournament(EASY, {0: 5.0})
     assert weak_easy == [(1, 0)], f"weak+easy must stay single-candidate: {weak_easy}"
+
+    # BUG-30: if the first candidate builds but FAILS to render (scored empty),
+    # escalation must not exceed the budget/cap total attempts.
+    from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
+    s = replace(_settings(), scene_candidates=4, openai_api_key="k", vision_model="v")
+    rt = ManimRuntime(s)
+    built: list[int] = []
+
+    async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+        built.append(count or 0)
+        return [SceneCandidate(index=start_index + i, scene=SceneBundle("S", "c", "e", "compiled"), storyboard=HARD)
+                for i in range(count or 0)]
+
+    async def _fs(cands, settings, progress):
+        if cands and cands[0].index == 0:  # first candidate "fails to render"
+            return []
+        for c in cands:
+            c.score = 5.0
+            c.verdict = "revise"
+        return cands
+
+    async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+        return scene
+
+    rt._build_scene_candidates = _fb          # type: ignore[assignment]
+    rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+    rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+    req = ProblemRequest(prompt="x")
+    solver = SolverResult(summary="", derivation_steps=[], keywords=[], variables={}, model_name="t")
+    _asyncio.run(rt.generate_render_tournament(req, solver, RagResult(keywords=[], hits=[], backend="none"), s))
+    assert sum(built) <= 4, f"escalation exceeded the cap of 4: built {sum(built)} ({built})"
     return "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
 
 
@@ -4258,6 +4289,57 @@ def t_f177():
     finally:
         dialog.close()
     return "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+
+
+def t_f178():
+    # Global local-render concurrency bound: lessons x tournaments must not spawn
+    # unbounded simultaneous local Manim subprocesses.
+    import asyncio as _asyncio
+    import threading
+    import time as _time
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services import render_backend as rb
+    import aetherlab.services.manim_runtime as mr
+
+    assert rb.LOCAL_RENDER_LIMIT >= 1
+    assert rb._default_local_render_limit() >= 1
+
+    live = {"cur": 0, "max": 0}
+    lock = threading.Lock()
+
+    class _FakeRuntime:
+        def __init__(self, settings):
+            pass
+
+        def render_scene(self, scene, settings, quality):
+            with lock:
+                live["cur"] += 1
+                live["max"] = max(live["max"], live["cur"])
+            _time.sleep(0.08)
+            with lock:
+                live["cur"] -= 1
+            return _replace(scene, status="rendered", video_path="/x.mp4")
+
+    old_sem, real_rt = rb._LOCAL_RENDER_SEM, mr.ManimRuntime
+    rb._LOCAL_RENDER_SEM = threading.Semaphore(2)  # bound to 2 for the test
+    mr.ManimRuntime = _FakeRuntime
+    try:
+        async def _run():
+            backend = rb.LocalRenderBackend()
+            scenes = [SceneBundle("S", "c", "manim", "compiled") for _ in range(6)]
+            return await _asyncio.gather(
+                *(backend.render(s, quality="l", settings=_settings(), timeout=60) for s in scenes)
+            )
+        results = _asyncio.run(_run())
+    finally:
+        rb._LOCAL_RENDER_SEM, mr.ManimRuntime = old_sem, real_rt
+
+    assert all(r.status == "rendered" for r in results), "all six must still render"
+    assert live["max"] <= 2, f"local render concurrency exceeded the bound: {live['max']}"
+    assert live["max"] >= 2, f"the bound should be saturated (parallelised up to 2), got {live['max']}"
+    return "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
