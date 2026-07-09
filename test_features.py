@@ -4436,6 +4436,213 @@ def t_f179():
     return "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
 
 
+def t_f180():
+    # "Prove It" Phase A: the tournament A/B harness. The paired lift math must be
+    # exact and deterministic — no renders, no provider key (that is Phase D).
+    import inspect
+
+    from tools import prompt_quality_lab as lab
+
+    def _rep(scores, extra=0):
+        return {"cases": [{"id": k, "status": "pass", "score": v} for k, v in scores.items()],
+                "extra_renders": extra}
+
+    on = _rep({"a": 8.0, "b": 6.0, "c": 5.0}, extra=4)
+    off = _rep({"a": 6.0, "b": 6.02, "c": 7.0})
+    pairing = lab.pair_ab_reports(on, off)
+    assert pairing["n"] == 3
+    assert pairing["mean_on"] == round((8.0 + 6.0 + 5.0) / 3, 3)
+    assert pairing["mean_off"] == round((6.0 + 6.02 + 7.0) / 3, 3)
+    assert pairing["mean_lift"] == round(pairing["mean_on"] - pairing["mean_off"], 3)
+    # a: +2 win; b: -0.02 tie (within the noise band); c: -2 loss.
+    assert (pairing["wins"], pairing["ties"], pairing["losses"]) == (1, 1, 1), pairing
+    assert pairing["extra_renders"] == 4
+    by = {p["id"]: p for p in pairing["per_prompt"]}
+    assert by["a"]["delta"] == 2.0 and by["a"]["on"] == 8.0 and by["a"]["off"] == 6.0
+
+    # Only the intersection of prompt ids is compared (robust to a dropped case).
+    assert lab.pair_ab_reports(_rep({"a": 9.0}), _rep({"b": 1.0}))["n"] == 0
+
+    # The verdict is a readable, honest sentence for each regime.
+    lift = lab.pair_ab_reports(_rep({"a": 9.0, "b": 9.0}), _rep({"a": 5.0, "b": 5.0}))
+    assert "LIFTS" in lift["verdict"], lift["verdict"]
+    same = lab.pair_ab_reports(_rep({"a": 5.0}), _rep({"a": 5.0}))
+    assert "identical" in same["verdict"].lower(), same["verdict"]
+    worse = lab.pair_ab_reports(_rep({"a": 4.0, "b": 4.0}), _rep({"a": 8.0, "b": 8.0}))
+    assert "did NOT help" in worse["verdict"], worse["verdict"]
+
+    # Markdown renders the comparison table without raising.
+    md = lab.render_ab_markdown(lift)
+    assert "Tournament A/B" in md and "| a |" in md
+
+    # The CLI wires --ab into main; arms are isolated and toggle the tournament env.
+    main_src = inspect.getsource(lab.main)
+    assert "--ab" in main_src and "run_ab" in main_src
+    ab_src = inspect.getsource(lab.run_ab)
+    assert "ab_" in ab_src and "extra_renders" in ab_src
+    assert "AETHERLAB_AUTO_TOURNAMENT" in inspect.getsource(lab._isolate_arm_env)
+    return "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+
+
+def t_f181():
+    # "Prove It" Phase B: mine the render ledger for offline signal. The aggregation
+    # is a pure function tested on synthetic jobs; then the real tournament wiring is
+    # exercised end-to-end (difficulty/budget + the winner's HQ score are recorded).
+    from tools.ledger_report import _pearson, load_jobs, summarize_ledger
+
+    # Pearson is exact on a clean linear relation and None when undefined.
+    assert _pearson([1, 2, 3], [2, 4, 6]) == 1.0
+    assert _pearson([1, 2, 3], [6, 4, 2]) == -1.0
+    assert _pearson([1, 1, 1], [1, 2, 3]) is None  # zero variance
+    assert _pearson([1.0], [2.0]) is None           # n < 2
+
+    def _tourney(jid, diff, cands, winner, hq):
+        return {"job_id": f"tournament-{jid}", "status": "rendered", "difficulty": diff,
+                "winner_index": winner, "winner_hq_score": hq,
+                "candidates": [{"index": i, "score": s, "verdict": ("ship" if s >= 7 else "revise"),
+                                "breakdown": {"legibility": 2.0, "composition": 1.0, "palette": 1.5,
+                                              "structure": s / 5.0, "substance": 1.0}}
+                               for i, s in enumerate(cands)]}
+
+    jobs = [
+        _tourney("a", 0.8, [5.0, 8.6], 1, 8.4),   # escalated: margin 3.6; draft 8.6 -> HQ 8.4
+        _tourney("b", 0.2, [7.0, 7.1], 1, 6.0),   # escalated near-tie: margin 0.1; 7.1 -> HQ 6.0
+        _tourney("c", 0.5, [9.0], 0, 9.2),        # single-candidate; keyed 9.0 -> HQ 9.2
+        {"job_id": "cloud-x", "status": "fallback_local", "candidates": []},
+        {"job_id": "cloud-y", "status": "failed", "candidates": []},
+    ]
+    s = summarize_ledger(jobs)
+
+    assert s["totals"]["tournaments"] == 3 and s["totals"]["escalated"] == 2
+    assert s["totals"]["fallbacks"] == 1 and s["totals"]["failures"] == 1
+    assert s["totals"]["escalation_rate"] == round(2 / 3, 3)
+
+    # Winner margin: two fan-outs (3.6 and 0.1); the 0.1 is a tie (barely moved).
+    assert s["winner_margin"]["n"] == 2
+    assert s["winner_margin"]["max"] == 3.6 and s["winner_margin"]["min"] == 0.1
+    assert s["winner_margin"]["tie_count"] == 1
+
+    # Draft->HQ: three keyed winners; correlation defined, means computed exactly.
+    assert s["draft_vs_hq"]["n"] == 3 and s["draft_vs_hq"]["pearson_r"] is not None
+    assert s["draft_vs_hq"]["mean_draft"] == round((8.6 + 7.1 + 9.0) / 3, 3)
+    assert s["draft_vs_hq"]["mean_hq"] == round((8.4 + 6.0 + 9.2) / 3, 3)
+
+    # Spend by difficulty places 0.8 in 'hard' and 0.2 in 'easy'.
+    assert "hard" in s["spend_by_difficulty"] and "easy" in s["spend_by_difficulty"]
+    assert s["spend_by_difficulty"]["hard"]["mean_candidates"] == 2.0
+    assert s["weakest_axis"] in {"legibility", "composition", "palette", "structure", "substance"}
+    assert s["verdict_mix"].get("ship", 0) >= 1
+
+    # Fully fail-soft: a missing/corrupt ledger yields an empty, non-crashing report.
+    assert load_jobs(_TMP / "no_ledger.json") == []
+    assert summarize_ledger([])["totals"]["jobs"] == 0
+
+    # End-to-end: a weak-draft escalating tournament records difficulty/budget and,
+    # after the (stubbed) HQ repair, the winner's HQ score against the same job.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_ledger import RenderJobLedger
+
+    dd = _TMP / "f181_led"
+    dd.mkdir(exist_ok=True)
+    st = _replace(_settings(), data_dir=dd, scene_candidates=2, openai_api_key="k", vision_model="v")
+    rt = ManimRuntime(st)
+
+    async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+        return [SceneCandidate(index=start_index + i,
+                               scene=SceneBundle("AetherLabScene", f"code{start_index + i}", "e",
+                                                 "rendered", video_path="/x.mp4"),
+                               storyboard={"acts": [{"beats": ["a", "b", "c"], "duration_s": 8}
+                                                    for _ in range(4)]})
+                for i in range(count or 0)]
+
+    async def _fs(cands, settings, progress):
+        for c in cands:
+            c.score, c.verdict = 5.0, "revise"   # weak draft -> forces escalation
+        return cands
+
+    async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+        return _replace(scene, quality_score=8.7, critique_verdict="ship")
+
+    rt._build_scene_candidates = _fb          # type: ignore[assignment]
+    rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+    rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+    solver = SolverResult(summary="", derivation_steps=[], keywords=["orbit"], variables={}, model_name="t")
+    _asyncio.run(rt.generate_render_tournament(
+        ProblemRequest(prompt="x"), solver, RagResult(keywords=[], hits=[], backend="none"), st))
+    job = RenderJobLedger(dd / "render_ledger.json").list()[0]
+    assert job["winner_hq_score"] == 8.7 and job["winner_hq_verdict"] == "ship"
+    assert job["budget"] >= 2 and job["difficulty"] > 0.0
+    return "ledger report mines spend, winner margin, and the draft->HQ pair (F181)"
+
+
+def t_f182():
+    # "Prove It" Phase C: the learned keyless quality proxy. It must (1) be a no-op
+    # when no model ships (so the --gate baseline cannot move), (2) apply learned
+    # weights when present, and (3) recover known weights from ledger data.
+    from unittest import mock
+
+    from aetherlab.services import scene_critic as sc
+    from aetherlab.services.scene_critic import CRITIC_AXES, static_quality_estimate
+    from tools.train_quality_proxy import AXES, collect_pairs, fit_quality_proxy
+
+    assert tuple(AXES) == tuple(CRITIC_AXES)
+
+    # 1) No model -> keyless score is exactly the equal-weight sum (gate-safe).
+    assert sc._load_quality_proxy(_TMP / "no_model.json") is None
+    code = ("from manim import *\nclass S(Scene):\n    def construct(self):\n"
+            "        for i in range(5):\n            self.play(Create(Dot()), run_time=2)\n        self.wait(2)\n")
+    est = static_quality_estimate(code)
+    assert est.breakdown_source == "static"
+    assert abs(est.score - round(sum(est.breakdown.values()), 3)) < 1e-6, "no model -> equal-weight sum"
+
+    # 2) _proxy_score applies weights + intercept and clamps to 0-10.
+    assert sc._proxy_score({a: 2.0 for a in CRITIC_AXES},
+                           {"weights": {a: 1.0 for a in CRITIC_AXES}, "intercept": 0.0}) == 10.0
+    assert sc._proxy_score({a: 1.0 for a in CRITIC_AXES},
+                           {"weights": {a: 0.0 for a in CRITIC_AXES}, "intercept": 4.2}) == 4.2
+
+    # 3) The trainer recovers known weights from clean synthetic ledger data.
+    import random
+    rng = random.Random(0)
+    true_w = {"legibility": 1.5, "composition": 0.5, "palette": 0.2, "structure": 1.0, "substance": 1.3}
+    true_b = 0.4
+    jobs = []
+    for k in range(60):
+        bd = {a: round(rng.uniform(0.0, 2.0), 3) for a in CRITIC_AXES}
+        hq = true_b + sum(true_w[a] * bd[a] for a in CRITIC_AXES)
+        jobs.append({"job_id": f"tournament-{k}", "winner_index": 0, "winner_hq_score": hq,
+                     "candidates": [{"index": 0, "score": hq, "verdict": "ship", "breakdown": bd}]})
+    pairs = collect_pairs(jobs)
+    assert len(pairs) == 60
+    fit = fit_quality_proxy(pairs, lam=1e-8)
+    assert fit["r2"] > 0.999, fit["r2"]
+    for a in CRITIC_AXES:
+        assert abs(fit["weights"][a] - true_w[a]) < 0.02, (a, fit["weights"][a])
+    assert abs(fit["intercept"] - true_b) < 0.05
+    # collect_pairs ignores keyless/unscored jobs (no HQ score).
+    assert collect_pairs([{"winner_index": 0, "winner_hq_score": 0.0,
+                           "candidates": [{"index": 0, "breakdown": {a: 1.0 for a in CRITIC_AXES}}]}]) == []
+
+    # 4) With a model present, static_quality_estimate uses it — via a patched loader
+    #    so no global cache/env leaks into other tests' keyless path.
+    loaded = sc._load_quality_proxy(None)  # default path (absent in repo) -> None
+    assert loaded is None
+    model = {"weights": {a: 0.0 for a in CRITIC_AXES}, "intercept": 3.0}
+    with mock.patch.object(sc, "_load_quality_proxy", return_value=model):
+        assert static_quality_estimate(code).score == 3.0
+
+    # The trainer writes only a reviewable JSON model, never source code: its one
+    # and only write is the model json (committed after human review).
+    tool_src = Path("tools/train_quality_proxy.py").read_text(encoding="utf-8")
+    assert "quality_proxy_model.json" in tool_src
+    assert tool_src.count(".write_text(") == 1 and ".write_text(json.dumps(model" in tool_src
+    return "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

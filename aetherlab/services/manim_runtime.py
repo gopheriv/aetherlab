@@ -318,7 +318,9 @@ class ManimRuntime:
                 request, solver, rag, s, aspect, progress, count=1, start_index=0
             )
             scored = await self._render_and_score_candidates(first_built, s, progress)
-            budget = candidate_budget(scored[0].storyboard, cap) if scored else cap
+            storyboard0 = scored[0].storyboard if scored else None
+            budget = candidate_budget(storyboard0, cap) if scored else cap
+            difficulty = storyboard_difficulty(storyboard0) if scored else 0.0
             best_so_far = max((c.score for c in scored), default=-1.0)
             # Escalate on the count BUILT (attempts), not scored (rendered): if
             # the first candidate built but failed to render, `scored` is empty
@@ -350,8 +352,11 @@ class ManimRuntime:
                 [issue for c in scored if c is not winner for issue in c.issues], s
             )
             # Observe: record the tournament (per-candidate scores + winner) in
-            # the render-farm ledger so the dashboard can show why this scene won.
-            self._record_tournament_ledger(scored, winner, s, quality)
+            # the render-farm ledger so the dashboard can show why this scene won,
+            # and so the ledger report (F181) can mine spend + the draft->HQ pair.
+            job_id = self._record_tournament_ledger(
+                scored, winner, s, quality, difficulty=difficulty, budget=budget
+            )
             selected = SceneBundle(
                 class_name=winner.scene.class_name,
                 code=winner.scene.code,
@@ -385,6 +390,10 @@ class ManimRuntime:
             # learn from the quality the user actually sees. Never edits the
             # curated exemplar source automatically (supply-chain safety).
             self._record_exemplar_candidate(final, solver, s)
+            # Close the draft->HQ loop in the ledger: record the winner's FINAL HQ
+            # critic score against the same job the draft scores were logged under,
+            # so the ledger report can correlate the cheap proxy with what shipped.
+            self._record_tournament_hq(job_id, final, s)
             return final
         except Exception as exc:  # noqa: BLE001 - tournament must never break solve
             log.info("Scene tournament failed (%s); falling back to single scene path.", exc)
@@ -430,9 +439,14 @@ class ManimRuntime:
 
     def _record_tournament_ledger(
         self, scored: list["SceneCandidate"], winner: "SceneCandidate",
-        settings: "AppSettings", quality: str,
-    ) -> None:
-        """Record the tournament (candidates + winner + backend) in the ledger."""
+        settings: "AppSettings", quality: str, *,
+        difficulty: float = 0.0, budget: int = 0,
+    ) -> str:
+        """Record the tournament (candidates + winner + backend) in the ledger.
+
+        Returns the ledger job id (or "" on failure) so the caller can record the
+        winner's HQ score against the same job once the repair loop re-critiques it.
+        """
         try:
             import hashlib
 
@@ -448,14 +462,38 @@ class ManimRuntime:
                 job_id=job_id, scene_class=winner.scene.class_name, quality=quality,
                 backend=backend, provider=str(getattr(settings, "cloud_provider", "")),
             )
+            ledger.tournament(job_id, difficulty=difficulty, budget=budget)
             ledger.candidates(job_id, [
                 {"index": c.index, "score": c.score, "verdict": c.verdict, "breakdown": c.breakdown}
                 for c in scored
             ])
             ledger.winner(job_id, winner.index)
             ledger.finish(job_id, "rendered")
+            return job_id
         except Exception as exc:  # noqa: BLE001 — observability must never break a render
             log.info("Could not record tournament ledger (%s).", exc)
+            return ""
+
+    def _record_tournament_hq(
+        self, job_id: str, final: SceneBundle, settings: "AppSettings"
+    ) -> None:
+        """Record the winner's FINAL HQ critic score against its tournament job.
+
+        No-ops when ``job_id`` is empty (the ledger record failed) so a broken
+        ledger never blocks a solve. Fail-soft like every flywheel leaf.
+        """
+        if not job_id:
+            return
+        try:
+            from aetherlab.services.render_ledger import RenderJobLedger
+
+            RenderJobLedger(settings.data_dir / "render_ledger.json").hq_result(
+                job_id,
+                score=float(final.quality_score or 0.0),
+                verdict=str(final.critique_verdict or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 — observability must never break a render
+            log.info("Could not record tournament HQ result (%s).", exc)
 
     async def _build_scene_candidates(
         self,

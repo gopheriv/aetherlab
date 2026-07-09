@@ -615,3 +615,57 @@ The committed golden-set baseline stayed at 5.22 throughout (the keyless path
 never enters the tournament), so `--gate` protected the offline floor at every
 step. A provider-backed baseline (`--allow-provider`) can be committed later to
 also ratchet the quality keyed users see.
+
+### Follow-on: efficiency + ML (F178, F179)
+
+| Feature | What it delivered |
+|---|---|
+| F178 | Global (process-wide) local-render concurrency bound so lesson-chapter × tournament-candidate nesting can't thrash the machine |
+| F179 | Semantic exemplar retrieval — a proven past winner is re-served to a semantically-similar new problem via offline local embeddings (no new hard dep) |
+
+---
+
+## Mission: "Prove It" — measure the flywheel (F180–F182)
+
+Every phase above held the **keyless** floor (`--gate` 5.22) but none proved the
+tournament actually *lifts* quality for **keyed** users. This mission builds that
+measurement — and mines the data the loop had been silently accumulating — so
+"we think it helps" becomes a number. It is fail-soft and mostly offline; the one
+keyed step (Phase D) is a runbook you execute.
+
+| Phase | Feature | What it delivered |
+|---|---|---|
+| A · Measure | F180 | `prompt_quality_lab --ab` runs the golden set tournament-ON vs OFF in **isolated** per-arm data dirs; `pair_ab_reports()` reports per-prompt lift, win/tie/loss, and extra-render cost with an honest verdict. |
+| B · Observe more | F181 | The ledger now records difficulty/budget and the winner's **HQ** score (the draft→HQ pair); `tools/ledger_report.py` mines escalation rate, **winner margin** over the runner-up, the **draft→HQ correlation** (the BUG-31 question, now measured), spend by difficulty, and the weakest axis. |
+| C · Learn | F182 | `tools/train_quality_proxy.py` ridge-fits per-axis weights from the ledger's (draft breakdown → HQ score) pairs into a reviewable JSON model; `scene_critic` applies it when present, else the historical equal-weight sum — so the keyless `--gate` floor is byte-identical until a reviewed model ships. |
+
+**The measurement mechanism is done and green; the *number* is Phase D.** Because
+draft and HQ renders share composition/structure and differ mainly in resolution,
+the two scores likely correlate — so the *magnitude* of the lift is still an open
+empirical question. The harness now exists to answer it.
+
+### Phase D runbook (needs a provider + vision key)
+
+```bash
+# 1. Measure the lift (renders the golden set twice; ~16 min):
+python tools/prompt_quality_lab.py --ab --allow-provider
+#    -> reads .analysis/prompt-quality-lab/ab_summary.md for the verdict.
+
+# 2. Commit a keyed baseline so quality can ratchet for keyed users too:
+python tools/prompt_quality_lab.py --allow-provider --out .analysis/keyed
+cp .analysis/keyed/summary.json tools/prompt_quality_provider_baseline.json  # review, then commit
+
+# 3. Inspect what the loop has learned, and (optionally) train the proxy:
+python tools/ledger_report.py                    # spend, winner margin, draft->HQ correlation
+python tools/train_quality_proxy.py --dry-run    # fit + report R^2 without writing
+#    If the fit is trustworthy, drop --dry-run, REVIEW tools/quality_proxy_model.json, then commit it.
+```
+
+If the A/B lift is **positive**, the flywheel is validated — commit the keyed
+baseline. If it is **flat or negative**, that is the finding: open a tuning bug
+(escalation threshold / candidate cap / critic rubric) backed by the
+`ledger_report` draft→HQ correlation and winner-margin numbers.
+
+**Non-negotiables held:** fail-soft everywhere; no new hard dep (numpy only);
+keyless never slower and byte-identical without a committed model; `--gate` 5.22,
+strict visual regression 7/7, integrity 182/182/182, surface 66/66 all green.

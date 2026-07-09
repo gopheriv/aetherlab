@@ -86,6 +86,14 @@ class JobRecord:
     timeline: list[dict] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)  # {index, score, verdict, breakdown?}
     winner_index: int | None = None
+    # Tournament economics + the draft->HQ pair the ledger report mines (F181):
+    # the winner is SELECTED on its cheap 480p draft score (stored in candidates),
+    # then re-critiqued at HQ in the repair loop — winner_hq_score is that final
+    # score, so the report can measure whether the cheap proxy predicts reality.
+    difficulty: float = 0.0
+    budget: int = 0
+    winner_hq_score: float = 0.0
+    winner_hq_verdict: str = ""
     log_tail: str = ""
     fallback_reason: str = ""
     run_url: str = ""
@@ -174,6 +182,21 @@ class RenderJobLedger:
 
     def winner(self, job_id: str, index: int) -> None:
         self._mutate(job_id, lambda r: r.update({"winner_index": int(index)}))
+
+    def tournament(self, job_id: str, *, difficulty: float = 0.0, budget: int = 0) -> None:
+        """Record the difficulty/budget that governed a tournament's fan-out."""
+        def _apply(r: dict) -> None:
+            r["difficulty"] = round(float(difficulty or 0.0), 3)
+            r["budget"] = int(budget or 0)
+        self._mutate(job_id, _apply)
+
+    def hq_result(self, job_id: str, *, score: float, verdict: str = "") -> None:
+        """Record the winner's FINAL HQ critic score/verdict — the other half of
+        the draft->HQ pair (the draft half is candidates[winner_index].score)."""
+        def _apply(r: dict) -> None:
+            r["winner_hq_score"] = round(float(score or 0.0), 3)
+            r["winner_hq_verdict"] = str(verdict or "")
+        self._mutate(job_id, _apply)
 
     def failure(self, job_id: str, log_tail: str, *, kind: str = "") -> None:
         def _apply(r: dict) -> None:

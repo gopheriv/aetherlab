@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -303,6 +304,70 @@ async def critique_video(
         return Critique(verdict="skipped")
 
 
+# ── Learned keyless quality proxy (Quality Flywheel "Prove It", F182) ────────
+# The static proxy below scores a scene by SUMMING its five axis estimates — an
+# equal-weight guess at how a critic would score it. When a model trained on real
+# tournament data (draft axis breakdown -> shipped HQ score, mined from the render
+# ledger by tools/train_quality_proxy.py) is present, we instead apply its learned
+# per-axis weights so the keyless ranking better predicts real critic quality.
+#
+# The model file is NEVER auto-written into the app: the trainer produces it and it
+# is committed only after human review (supply-chain safety, like curated exemplars).
+# Absent a model, behaviour is byte-identical to the equal-weight sum — so the
+# keyless --gate floor is provably unchanged until a reviewed model ships.
+_QUALITY_PROXY_CACHE: dict | None = None
+
+
+def _quality_proxy_path() -> Path:
+    override = os.getenv("AETHERLAB_QUALITY_PROXY")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "tools" / "quality_proxy_model.json"
+
+
+def _load_quality_proxy(path: Path | None = None) -> dict | None:
+    """Load learned proxy weights, or None when absent/invalid (fail-soft).
+
+    An explicit ``path`` bypasses the process cache (tests use it); the default
+    path is cached so per-candidate scoring never re-reads the file.
+    """
+    global _QUALITY_PROXY_CACHE
+    explicit = path is not None
+    if not explicit and _QUALITY_PROXY_CACHE is not None:
+        return _QUALITY_PROXY_CACHE or None
+    model: dict = {}
+    try:
+        p = path or _quality_proxy_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            weights = data.get("weights") if isinstance(data, dict) else None
+            if isinstance(weights, dict) and all(
+                a in weights
+                and isinstance(weights[a], (int, float))
+                and not isinstance(weights[a], bool)
+                for a in CRITIC_AXES
+            ):
+                model = {
+                    "weights": {a: float(weights[a]) for a in CRITIC_AXES},
+                    "intercept": float(data.get("intercept", 0.0) or 0.0),
+                }
+    except Exception as exc:  # noqa: BLE001 — a proxy must never break a render
+        log.info("Quality proxy model unavailable (%s); using equal-weight sum.", exc)
+        model = {}
+    if not explicit:
+        _QUALITY_PROXY_CACHE = model
+    return model or None
+
+
+def _proxy_score(breakdown: dict[str, float], model: dict) -> float:
+    """Apply learned per-axis weights to a breakdown, clamped to 0-10."""
+    weights = model["weights"]
+    total = float(model.get("intercept", 0.0) or 0.0)
+    for axis in CRITIC_AXES:
+        total += float(weights[axis]) * float(breakdown.get(axis, 0.0) or 0.0)
+    return round(max(0.0, min(10.0, total)), 3)
+
+
 def static_quality_estimate(
     code: str, metrics: dict | None = None
 ) -> Critique:
@@ -358,7 +423,11 @@ def static_quality_estimate(
         log.info("Static quality estimate failed (%s); returning neutral proxy.", exc)
 
     breakdown = {a: round(max(0.0, min(_AXIS_MAX, v)), 3) for a, v in axes.items()}
-    score = round(sum(breakdown.values()), 3)
+    # Prefer a reviewed, ledger-trained weighting when one is present; otherwise the
+    # historical equal-weight sum (so the keyless score is unchanged until a model
+    # ships). Either way the per-axis breakdown and "static" source are the same.
+    model = _load_quality_proxy()
+    score = _proxy_score(breakdown, model) if model else round(sum(breakdown.values()), 3)
     return Critique(
         verdict="skipped",
         score=score,

@@ -789,6 +789,18 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user, I expect AetherLab to reuse a past proven-good scene when I ask about a semantically-similar problem — even if the wording differs.",
      "services/embeddings.py is a fail-soft, offline local text-embedding leaf that reuses ChromaDB's bundled all-MiniLM model (already a [rag] dependency; no new hard dep) to turn text into unit vectors where cosine similarity == semantic similarity; it degrades to unavailable (None) so callers keep their non-semantic fallback and numpy is the only hard requirement. ExemplarCandidateStore.record now embeds the winning scene's query_text and retrieve() returns the stored winner whose embedding is cosine-nearest above RETRIEVE_MIN_SIM; exemplar_block(data_dir=...) appends that retrieved winner as a second few-shot example so the model imitates a scene that already scored highly on a similar problem (keyword matching, e.g. detect_domain, cannot connect 'escape velocity' to a stored 'kepler orbit' winner — embeddings can). This makes the flywheel's F173 'winners teach' channel a LIVE retrieval source, not just a manual-promotion queue. Fully fail-soft: no model or empty store leaves generation exactly as before, and the deterministic keyless template path is untouched.",
      "services/embeddings.py / services/scene_exemplars.py / services/scene_generator.py", "headless", "Documented", ""),
+    ("F180", "Quality", "Tournament A/B quality harness",
+     "As a maintainer, I can measure whether the multi-candidate tournament actually produces better scenes, not merely that it never regresses the keyless floor.",
+     "tools/prompt_quality_lab.py --ab runs the 12-prompt golden set twice - tournament forced ON (AETHERLAB_AUTO_TOURNAMENT=1) and OFF (=0) - in ISOLATED per-arm data dirs so the ON arm's learned exemplars/pitfalls never leak into the OFF arm and bias the comparison. pair_ab_reports() is a pure function that pairs the two runs by prompt id into a lift summary: per-prompt score delta, mean lift, win/tie/loss counts (a 0.05 noise band), and the extra render cost read from the ON arm's ledger (candidates past the first). _ab_verdict() emits an honest plain-language conclusion for each regime, including that keyless arms are identical by construction (single-shot renders never enter the tournament), so a real lift number needs --allow-provider. ab_summary.json/.md are written and secrets are never persisted. This is the measurement the whole flywheel's payoff claim rests on. Phase A of the 'Prove It' mission.",
+     "tools/prompt_quality_lab.py", "headless", "Documented", ""),
+    ("F181", "Quality", "Render-ledger flywheel report",
+     "As a maintainer, I can mine the render ledger the tournament has been silently accumulating to see if the fan-out is worth its cost and whether the cheap draft score predicts the shipped HQ quality.",
+     "The tournament now records, per solve, the storyboard difficulty and candidate budget that governed the fan-out and - after the repair loop re-critiques the winner at HQ - the winner's FINAL HQ score (render_ledger gains difficulty/budget/winner_hq_score/winner_hq_verdict; manim_runtime records them via _record_tournament_hq against the same job the draft scores were logged under). tools/ledger_report.py (read-only, stdlib-only, fail-soft) aggregates: escalation rate, candidate histogram, winner MARGIN over the runner-up (is the fan-out worth it, or do winners barely edge the losers?), the draft-to-HQ Pearson correlation and mean bias (does the 480p proxy predict the 1080p critic - the BUG-31 concern, now measured), spend by difficulty bucket, the weakest rubric axis (a losers-teach target), and fallback/failure rates. summarize_ledger() is a pure function and a missing/corrupt ledger yields an empty report, never a crash. Phase B of the 'Prove It' mission.",
+     "services/render_ledger.py / services/manim_runtime.py / tools/ledger_report.py", "headless", "Documented", ""),
+    ("F182", "Quality", "Learned keyless quality proxy",
+     "As a keyless/offline user, I get scene ranking calibrated by real keyed outcomes, with no new dependency and no change at all until a reviewed model ships.",
+     "The keyless static proxy (scene_critic.static_quality_estimate) historically scored a scene by SUMMING its five axis estimates (equal weight). tools/train_quality_proxy.py mines the render ledger's (winner draft axis breakdown -> winner HQ critic score) pairs and fits a numpy ridge regression (the project's one hard math dep) to learn per-axis weights, writing them to a reviewable tools/quality_proxy_model.json. scene_critic._load_quality_proxy() picks that model up (cached, fail-soft) and _proxy_score() applies the learned weights + intercept (clamped 0-10) instead of the equal-weight sum. Crucially the model is DATA, not code, committed only after human review (supply-chain safety, like curated exemplars): absent a model file the keyless score is byte-identical to the old sum, so the committed --gate baseline cannot move underneath anyone. collect_pairs()/fit_quality_proxy() are pure and deterministically unit-tested (they recover known weights at R^2 ~= 1). Phase C of the 'Prove It' mission.",
+     "services/scene_critic.py / tools/train_quality_proxy.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -2197,6 +2209,27 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "No embedder / empty store / unrelated query all yield no retrieval and leave generation exactly as before; the deterministic keyless template path never changes; no new hard dependency is added.",
         "harness",
     ),
+    "F180": _story_tuple(
+        "US-F180: As P3 Educator with a vision critic, when I want to know whether the quality tournament earns its render cost, I expect one command that renders the golden set with the tournament on and off and reports the score lift and the extra renders. Preconditions: a vision critic may be configured (keyless the two arms are identical by design). Steps: 1. Pair two lab reports by prompt id. 2. Confirm the per-prompt deltas, mean lift, win/tie/loss, and extra-render cost. 3. Confirm the verdict is honest across the lift / no-difference / regression regimes.",
+        "P3",
+        "`prompt_quality_lab --ab` runs the golden set twice (tournament ON vs OFF) in isolated per-arm data dirs so learned state cannot leak between arms; `pair_ab_reports()` is a pure function returning per-prompt deltas, mean lift, win/tie/loss (0.05 noise band), and the ON-arm extra-render cost; `_ab_verdict()` states an honest conclusion and notes keyless arms are identical by construction. Implementation reference: tools/prompt_quality_lab.py:1.",
+        "Keyless the two arms are identical (single-shot never enters the tournament) and the verdict says so; only the prompt ids present in both arms are compared; secrets are never persisted; a real lift number needs --allow-provider (Phase D).",
+        "harness",
+    ),
+    "F181": _story_tuple(
+        "US-F181: As P3 Educator with a critic, when the tournament has been running, I expect to mine its render ledger to learn whether the fan-out is worth its cost and whether the cheap draft score predicts the shipped HQ quality. Preconditions: a render ledger may hold past tournament jobs. Steps: 1. Aggregate synthetic jobs into escalation rate, winner margin, and the draft-to-HQ correlation. 2. Confirm a missing ledger yields an empty report, not a crash. 3. Confirm a real escalating tournament records difficulty/budget and the winner's HQ score.",
+        "P3",
+        "`services/render_ledger` gains difficulty/budget/winner_hq_score/winner_hq_verdict; `manim_runtime._record_tournament_hq` logs the winner's final HQ score against the same job as its draft scores; `tools/ledger_report.summarize_ledger()` (pure, stdlib-only, fail-soft) reports escalation rate, winner margin over the runner-up, the draft-to-HQ Pearson correlation and bias, spend by difficulty, the weakest axis, and fallback/failure rates. Implementation reference: tools/ledger_report.py:1 / aetherlab/services/render_ledger.py:1 / aetherlab/services/manim_runtime.py:1.",
+        "A missing or corrupt ledger yields an empty report and never raises; keyless renders record no draft-to-HQ pairs and the report says so; the observability is read-only and never blocks a render.",
+        "harness",
+    ),
+    "F182": _story_tuple(
+        "US-F182: As P1 Student with no key, when a reviewed model trained on real tournament outcomes is present, I expect my keyless scene ranking to use those learned axis weights; and when none is present, I expect exactly the old behaviour. Preconditions: a trained model file may or may not exist. Steps: 1. Confirm no model leaves the score equal to the equal-weight sum. 2. Confirm the trainer recovers known weights from ledger data. 3. Confirm a present model changes the score and nothing leaks globally.",
+        "P1",
+        "`tools/train_quality_proxy` mines the ledger's (winner draft axis breakdown -> winner HQ score) pairs and ridge-fits per-axis weights to a reviewable JSON model; `scene_critic._load_quality_proxy()`/`_proxy_score()` apply it when present, else the historical equal-weight sum, so the keyless --gate baseline is unchanged until a reviewed model ships. Implementation reference: aetherlab/services/scene_critic.py:1 / tools/train_quality_proxy.py:1.",
+        "No model file -> the keyless score is byte-identical to the equal-weight sum (the --gate floor cannot move); the model is data committed only after human review; the trainer refuses to write from too few samples and never edits source.",
+        "harness",
+    ),
 }
 
 
@@ -2441,6 +2474,11 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F178": ("PASS", "None", "PASS"),
     # ── ML §1: embeddings — semantic exemplar retrieval (F179) ──────────────
     "F179": ("PASS", "None", "PASS"),
+    # ── "Prove It" mission — measure the flywheel (F180 A/B, F181 ledger report,
+    #    F182 learned keyless proxy) ──────────────────────────────────────────
+    "F180": ("PASS", "None", "PASS"),
+    "F181": ("PASS", "None", "PASS"),
+    "F182": ("PASS", "None", "PASS"),
 }
 
 

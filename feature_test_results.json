@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 179 features/179 stories/179 results/179 tests aligned (F165)"
+    "note": "tracker integrity: 182 features/182 stories/182 results/182 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -714,5 +714,17 @@
   "F179": {
     "status": "PASS",
     "note": "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
+  },
+  "F180": {
+    "status": "PASS",
+    "note": "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+  },
+  "F181": {
+    "status": "PASS",
+    "note": "ledger report mines spend, winner margin, and the draft->HQ pair (F181)"
+  },
+  "F182": {
+    "status": "PASS",
+    "note": "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)"
   }
 }

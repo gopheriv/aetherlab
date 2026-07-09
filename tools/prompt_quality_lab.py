@@ -156,16 +156,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use configured LLM/vision providers. Reports still never write secrets.",
     )
+    parser.add_argument(
+        "--ab",
+        action="store_true",
+        help="Run the golden set twice (tournament ON vs OFF) and report the "
+        "per-prompt score lift, win/tie/loss, and extra render cost. Meaningful "
+        "only with --allow-provider (keyless renders never enter the tournament).",
+    )
     args = parser.parse_args(argv)
 
     prompt_set = load_prompt_set(args.prompts)
     if args.limit:
         prompt_set = prompt_set[: max(0, args.limit)]
     args.out.mkdir(parents=True, exist_ok=True)
-    if not args.allow_provider:
+    if not args.allow_provider and not args.ab:
         harden_environment(args.out)
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+
+    if args.ab:
+        return run_ab(prompt_set, args.out, allow_provider=args.allow_provider)
 
     started = datetime.now(timezone.utc)
     report = asyncio.run(run_prompt_lab(prompt_set, args.out, allow_provider=args.allow_provider))
@@ -287,6 +297,172 @@ async def run_prompt_lab(
         "cases": cases,
         "summary": summarize_cases(cases),
     }
+
+
+# ── A/B: tournament ON vs OFF (Quality Flywheel "Prove It", F180) ────────────
+# The flywheel's payoff claim is "the tournament produces better scenes." The
+# gate only proves the keyless floor never regresses; it cannot prove a lift. The
+# A/B harness runs the golden set twice with the tournament forced on and off, in
+# ISOLATED data dirs (so the ON arm's learned exemplars/pitfalls never leak into
+# the OFF arm), and reports the paired score lift and its render cost. Keyless it
+# is a no-op comparison by construction — the report says so rather than pretend.
+_AB_EPS = 0.05  # per-prompt score noise band: |delta| <= this counts as a tie
+
+
+def _isolate_arm_env(arm_dir: Path, *, tournament: bool, allow_provider: bool) -> None:
+    """Point every state path at an arm-private data dir and set the tournament
+    toggle, so the two arms cannot cross-contaminate each other's learning."""
+    data_dir = arm_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if not allow_provider:
+        for key in SECRET_ENV_KEYS:
+            os.environ.pop(key, None)
+        os.environ["AETHERLAB_RENDER_MODE"] = "local"
+        os.environ["AETHERLAB_WEB_REFS"] = "0"
+        os.environ["AETHERLAB_NARRATION"] = "0"
+        os.environ["CLOUD_RENDER_ENABLED"] = "0"
+    os.environ["AETHERLAB_DATA_DIR"] = str(data_dir)
+    os.environ["AETHERLAB_CACHE_PATH"] = str(data_dir / "cache.sqlite3")
+    os.environ["AETHERLAB_CHROMA_PATH"] = str(data_dir / "chroma")
+    os.environ["AETHERLAB_LIBRARY_DIR"] = str(data_dir / "library")
+    os.environ["AETHERLAB_AUTO_TOURNAMENT"] = "1" if tournament else "0"
+
+
+def _count_extra_renders(arm_dir: Path) -> int:
+    """Renders the tournament spent beyond one-per-prompt, read from the arm's
+    own ledger (each tournament's candidates past the first are the extra cost)."""
+    try:
+        from tools.ledger_report import load_jobs
+
+        jobs = load_jobs(arm_dir / "data" / "render_ledger.json")
+        return sum(max(0, len(j.get("candidates") or []) - 1) for j in jobs if j.get("candidates"))
+    except Exception:  # noqa: BLE001 — a cost estimate must never fail the run
+        return 0
+
+
+def pair_ab_reports(on: dict[str, Any], off: dict[str, Any]) -> dict[str, Any]:
+    """Pair two lab reports (tournament on/off) into a lift summary.
+
+    Pure function — no I/O — so the paired math is unit tested without rendering
+    or a provider key. ``on``/``off`` are the dicts ``run_prompt_lab`` returns
+    (optionally carrying an ``extra_renders`` cost field on the ON arm).
+    """
+    on_cases = {c["id"]: c for c in on.get("cases", []) if isinstance(c, dict) and "id" in c}
+    off_cases = {c["id"]: c for c in off.get("cases", []) if isinstance(c, dict) and "id" in c}
+    ids = [i for i in on_cases if i in off_cases]  # on-arm order, intersection only
+
+    per_prompt: list[dict[str, Any]] = []
+    wins = ties = losses = 0
+    for i in ids:
+        on_s = float(on_cases[i].get("score", 0.0) or 0.0)
+        off_s = float(off_cases[i].get("score", 0.0) or 0.0)
+        delta = round(on_s - off_s, 3)
+        if delta > _AB_EPS:
+            wins += 1
+        elif delta < -_AB_EPS:
+            losses += 1
+        else:
+            ties += 1
+        per_prompt.append({"id": i, "on": on_s, "off": off_s, "delta": delta})
+
+    mean_on = round(sum(p["on"] for p in per_prompt) / len(ids), 3) if ids else 0.0
+    mean_off = round(sum(p["off"] for p in per_prompt) / len(ids), 3) if ids else 0.0
+    mean_lift = round(mean_on - mean_off, 3)
+    extra = int(on.get("extra_renders", 0) or 0)
+    return {
+        "schema": "aetherlab.prompt_quality_ab.v1",
+        "n": len(ids),
+        "mean_on": mean_on,
+        "mean_off": mean_off,
+        "mean_lift": mean_lift,
+        "wins": wins,
+        "ties": ties,
+        "losses": losses,
+        "extra_renders": extra,
+        "per_prompt": per_prompt,
+        "verdict": _ab_verdict(len(ids), mean_lift, wins, losses, extra),
+    }
+
+
+def _ab_verdict(n: int, mean_lift: float, wins: int, losses: int, extra: int) -> str:
+    if n == 0:
+        return "No comparable prompts across the two arms."
+    if abs(mean_lift) <= _AB_EPS and wins == 0 and losses == 0:
+        return (
+            "No measurable difference: the arms are identical. This is expected "
+            "keyless: single-shot renders never enter the tournament. Re-run with "
+            "--allow-provider (a vision critic) to measure a real lift."
+        )
+    if mean_lift > _AB_EPS and wins >= losses:
+        return (
+            f"Tournament LIFTS mean score by {mean_lift:+} across {n} prompts "
+            f"({wins} win / {losses} loss) at {extra} extra render(s). Worth committing "
+            f"a provider baseline."
+        )
+    if mean_lift < -_AB_EPS or losses > wins:
+        return (
+            f"Tournament did NOT help (mean {mean_lift:+}, {wins} win / {losses} loss). "
+            f"Investigate the escalation threshold / critic rubric with ledger_report."
+        )
+    return (
+        f"Marginal: mean {mean_lift:+} across {n} prompts ({wins} win / {losses} loss) "
+        f"at {extra} extra render(s) — within render noise."
+    )
+
+
+def run_ab(prompt_set: list[dict[str, Any]], out_dir: Path, *, allow_provider: bool) -> int:
+    """Run both arms, write the paired report, and print the verdict."""
+    arms: dict[str, dict[str, Any]] = {}
+    for arm, on in (("on", True), ("off", False)):
+        arm_dir = out_dir / f"ab_{arm}"
+        arm_dir.mkdir(parents=True, exist_ok=True)
+        _isolate_arm_env(arm_dir, tournament=on, allow_provider=allow_provider)
+        print(f"== A/B arm: tournament {'ON' if on else 'OFF'} ==", flush=True)
+        started = datetime.now(timezone.utc)
+        report = asyncio.run(run_prompt_lab(prompt_set, arm_dir, allow_provider=allow_provider))
+        report["started_at"] = started.isoformat(timespec="seconds")
+        report["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        report["auto_tournament"] = on
+        report["extra_renders"] = _count_extra_renders(arm_dir)
+        write_outputs(arm_dir, report)
+        arms[arm] = report
+
+    pairing = pair_ab_reports(arms["on"], arms["off"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "ab_summary.json").write_text(
+        json.dumps(pairing, indent=2), encoding="utf-8", newline="\n"
+    )
+    (out_dir / "ab_summary.md").write_text(render_ab_markdown(pairing), encoding="utf-8", newline="\n")
+    print(
+        f"A/B: tournament ON mean {pairing['mean_on']:.2f} vs OFF {pairing['mean_off']:.2f} "
+        f"(lift {pairing['mean_lift']:+.2f}); {pairing['wins']}W/{pairing['ties']}T/{pairing['losses']}L; "
+        f"+{pairing['extra_renders']} render(s)"
+    )
+    print(pairing["verdict"])
+    render_failed = any(
+        c.get("status") == "fail" for report in arms.values() for c in report.get("cases", [])
+    )
+    return 1 if render_failed else 0
+
+
+def render_ab_markdown(pairing: dict[str, Any]) -> str:
+    lines = [
+        "# AetherLab Prompt Quality — Tournament A/B",
+        "",
+        f"- Prompts compared: {pairing['n']}",
+        f"- Mean score: ON {pairing['mean_on']} vs OFF {pairing['mean_off']} "
+        f"(**lift {pairing['mean_lift']:+}**)",
+        f"- Win / tie / loss: {pairing['wins']} / {pairing['ties']} / {pairing['losses']}",
+        f"- Extra renders (tournament cost): {pairing['extra_renders']}",
+        "",
+        f"**Verdict:** {pairing['verdict']}",
+        "",
+        "| Prompt | ON | OFF | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    for p in pairing["per_prompt"]:
+        lines.append(f"| {p['id']} | {p['on']} | {p['off']} | {p['delta']:+} |")
+    return "\n".join(lines) + "\n"
 
 
 async def run_one_prompt(
