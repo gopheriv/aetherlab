@@ -503,7 +503,7 @@ FEATURES: list[tuple[str, ...]] = [
      "services/scene_generator.py / core/models.py / manim_runtime.py", "headless", "Documented", ""),
     ("F108", "Render", "Perceptual critique loop (VLM watches the video)",
      "As a user with a vision model configured, rendered videos are actually *watched* and revised until they pass a quality rubric.",
-     "scene_critic samples frames uniformly (PyAV — Manim's own backend — with ffmpeg-CLI fallback), sends them + the storyboard/brief to settings.vision_model (AETHERLAB_VISION_MODEL/VISION_MODEL / app-config), and returns ship/revise + score + issues against a 5-point rubric. render_scene_with_repair loops SceneGenerator.revise() up to settings.visual_critic_max_passes (AETHERLAB_VISUAL_CRITIC_MAX_PASSES/VISUAL_CRITIC_MAX_PASSES, default 2) and samples settings.visual_critic_keyframes (AETHERLAB_VISUAL_CRITIC_KEYFRAMES/VISUAL_CRITIC_KEYFRAMES, default 6). A revision is adopted only if it still renders. No vision model → skipped.",
+     "scene_critic samples frames uniformly (PyAV — Manim's own backend — with ffmpeg-CLI fallback), sends them + the storyboard/brief to settings.vision_model, and returns ship/revise + score + issues. Model JSON gets a conservative balanced-object/string-only recovery pass for prose, raw LaTeX backslashes, and control characters before fail-soft skip. render_scene_with_repair loops SceneGenerator.revise() up to the configured pass limit and adopts a revision only if it still renders. No vision model → skipped.",
      "services/scene_critic.py / scene_generator.py / manim_runtime.py / core/settings.py", "headless", "Documented", ""),
     ("F109", "Canvas", "Cursor-anchored smooth zoom",
      "As a user, zooming keeps the data point under my cursor pinned under the cursor, with a smooth glide instead of jumps.",
@@ -2377,7 +2377,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F105": ("PASS", "None", "PASS"),
     "F106": ("PASS", "None", "PASS"),
     "F107": ("PASS", "None", "PASS"),
-    "F108": ("PASS", "None", "PASS"),
+    "F108": ("PASS", "BUG-35", "PASS"),
     "F109": ("PASS", "None", "PASS"),
     "F110": ("PASS", "None", "PASS"),
     "F111": ("PASS", "None", "PASS"),
@@ -2624,6 +2624,7 @@ DEFECTS: dict[str, str] = {
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
     "F180": "BUG-32: the A/B verdict said 'did NOT help' whenever more prompts regressed than improved (`or losses > wins`), even with a POSITIVE mean lift — a self-contradicting conclusion (`did NOT help (mean +2.00, 1 win / 2 loss)`) for the flywheel's core measurement. Now the negative verdict requires a negative mean (`mean_lift < -eps and losses >= wins`) and sign/count disagreement routes to an explicit 'Mixed result' verdict. Regression in t_f180.",
     "F133": "BUG-33: all six external-tool subprocess call sites (Manim render, pdflatex, GIF ffmpeg, ffmpeg/ffprobe frame sampling, gh auth) captured output with text=True but no encoding, so Python decoded child bytes with the host LOCALE codec. On a non-UTF-8 Windows console (cp1251/Cyrillic) Manim's UTF-8 output containing a byte undefined in that codec raised UnicodeDecodeError in subprocess's reader thread, failing an otherwise-successful render — seen as a visual revision that 'did not render', silently capping scene quality. Fixed by adding encoding='utf-8', errors='replace' to all six calls. Regression in t_f133.",
+    "F108": "BUG-35: vision critique parsed model text with strict json.loads; a raw LaTeX backslash such as \\omega raised Invalid \\escape and skipped critique, while \\theta silently decoded as a tab. Model responses now use a conservative JSON-object extractor and string-only repair for raw LaTeX/backslashes/control characters, shared by critique, solver, storyboard, lesson planning, and fact checking. Regression in t_f108.",
 }
 
 

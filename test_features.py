@@ -1060,10 +1060,16 @@ def t_f108():
     # frame extraction works on a real render when one exists.
     from dataclasses import replace
     from aetherlab.core.models import SceneBundle
+    from aetherlab.services.model_json import load_model_json
     from aetherlab.services.scene_critic import Critique, _sample_indices, critique_video, extract_frames
     no_vlm = replace(_settings(), vision_model=None)
     crit = asyncio.run(critique_video("missing.mp4", "brief", no_vlm))
     assert crit.verdict == "skipped" and not crit.should_revise
+    # BUG-35: raw LaTeX in model JSON must neither raise Invalid \escape nor
+    # silently turn \theta into a tab escape.
+    raw = r'''preface {"verdict":"revise","score":4,"issues":["Move \omega and \theta away from {edge}"],"strengths":[]} trailing'''
+    repaired = load_model_json(raw)
+    assert repaired["issues"] == [r"Move \omega and \theta away from {edge}"], repaired
     assert Critique(verdict="revise").should_revise
     # storyboard round-trips through the scene cache
     sb = SceneBundle.from_json(SceneBundle(

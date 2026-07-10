@@ -14,7 +14,6 @@ never see a broken lesson because grounding was unavailable.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -103,10 +102,10 @@ async def _check_chapter(chapter, hits, settings: "AppSettings") -> None:
         temperature=0.0,
         max_tokens=1024,
     )
+    from aetherlab.services.model_json import load_model_json
+
     raw = response.choices[0].message.content or ""
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    payload = json.loads(match.group(0) if match else raw)
+    payload = load_model_json(raw)
     supported = bool(payload.get("supported", True))
     note = str(payload.get("note", "")).strip()
     correction = str(payload.get("correction", "")).strip()

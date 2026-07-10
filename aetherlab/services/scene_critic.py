@@ -282,10 +282,10 @@ async def critique_video(
             temperature=0.2,
             max_tokens=2048,
         )
+        from aetherlab.services.model_json import load_model_json
+
         raw = response.choices[0].message.content or ""
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        payload = json.loads(match.group(0) if match else raw)
+        payload = load_model_json(raw)
         verdict = str(payload.get("verdict", "ship")).lower()
         score = float(payload.get("score", 0.0) or 0.0)
         breakdown, source = _coerce_breakdown(payload.get("breakdown"), score)

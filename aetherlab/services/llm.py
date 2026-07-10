@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from collections import Counter
 
@@ -160,16 +159,9 @@ class AsyncLLMCoordinator:
         )
 
     def _parse_json(self, content: str) -> dict[str, object]:
-        # Reasoning models (e.g. MiniMax-M3) may wrap output in <think> blocks
-        # whose prose can contain stray braces - drop them before extraction.
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            raise
+        from aetherlab.services.model_json import load_model_json
+
+        return load_model_json(content)
 
     def _fallback(self, request: ProblemRequest, *, note: str) -> SolverResult:
         keywords = extract_keywords(request.prompt)

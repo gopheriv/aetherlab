@@ -13,7 +13,6 @@ services/llm.extract_keywords/FALLBACK_EQUATIONS (the keyless template).
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -138,10 +137,10 @@ async def _plan_remote(
     choice = response.choices[0]
     if choice.finish_reason == "length":
         raise ValueError("Lesson plan reply truncated at the token limit.")
+    from aetherlab.services.model_json import load_model_json
+
     content = choice.message.content or ""
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    match = re.search(r"\{.*\}", content, re.DOTALL)
-    payload = json.loads(match.group(0) if match else content)
+    payload = load_model_json(content)
     if not isinstance(payload, dict) or "chapters" not in payload:
         return None
     payload.setdefault("topic", topic)

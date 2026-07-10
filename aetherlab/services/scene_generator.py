@@ -354,7 +354,7 @@ class SceneGenerator:
         single-call cinematic generation, so storyboarding can only ever add
         quality, never subtract reliability.
         """
-        import json as _json
+        from aetherlab.services.model_json import load_model_json
 
         vars_text = "\n".join(
             f"  {name} = {value}" for name, value in sorted(solver.variables.items())
@@ -386,9 +386,7 @@ class SceneGenerator:
                 max_tokens=4096,
             )
             content = response.choices[0].message.content or ""
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            board = _json.loads(match.group(0) if match else content)
+            board = load_model_json(content)
             if not isinstance(board, dict) or "acts" not in board:
                 return None
             self._last_storyboard = board
