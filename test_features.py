@@ -2173,7 +2173,18 @@ def t_f133():
         if "creationflags=" in pathlib.Path(f).read_text(encoding="utf-8"):
             offenders.append(f)
     assert not offenders, f"raw creationflags remain in: {offenders}"
-    return "xplat kwargs win↔posix; zero raw creationflags in call sites (F133)"
+    # BUG-33: every text-capturing external-tool call must decode as UTF-8 with a
+    # lossy fallback. Without it a non-UTF-8 host locale (e.g. cp1251) raises
+    # UnicodeDecodeError in subprocess's reader thread and fails the render.
+    undecoded = []
+    for f in ("aetherlab/services/manim_runtime.py", "aetherlab/services/scene_critic.py",
+              "aetherlab/services/pdf.py", "aetherlab/services/render_backend.py",
+              "aetherlab/ui/main_window.py"):
+        src = pathlib.Path(f).read_text(encoding="utf-8")
+        if src.count('errors="replace"') < src.count("text=True"):
+            undecoded.append(f)
+    assert not undecoded, f"text=True subprocess calls missing UTF-8/errors=replace in: {undecoded}"
+    return "xplat kwargs win↔posix; zero raw creationflags; UTF-8 tool output (F133)"
 
 
 def t_f134():

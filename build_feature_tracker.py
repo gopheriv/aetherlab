@@ -2410,7 +2410,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # F148/F166/F167 already stamped inline. DEFECTS-linked bugs noted.
     "F131": ("PASS", "None", "PASS"),
     "F132": ("PASS", "None", "PASS"),
-    "F133": ("PASS", "None", "PASS"),
+    "F133": ("PASS", "BUG-33", "PASS"),
     "F134": ("PASS", "None", "PASS"),
     "F135": ("PASS", "None", "PASS"),
     "F136": ("PASS", "None", "PASS"),
@@ -2623,6 +2623,7 @@ DEFECTS: dict[str, str] = {
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
     "F180": "BUG-32: the A/B verdict said 'did NOT help' whenever more prompts regressed than improved (`or losses > wins`), even with a POSITIVE mean lift — a self-contradicting conclusion (`did NOT help (mean +2.00, 1 win / 2 loss)`) for the flywheel's core measurement. Now the negative verdict requires a negative mean (`mean_lift < -eps and losses >= wins`) and sign/count disagreement routes to an explicit 'Mixed result' verdict. Regression in t_f180.",
+    "F133": "BUG-33: all six external-tool subprocess call sites (Manim render, pdflatex, GIF ffmpeg, ffmpeg/ffprobe frame sampling, gh auth) captured output with text=True but no encoding, so Python decoded child bytes with the host LOCALE codec. On a non-UTF-8 Windows console (cp1251/Cyrillic) Manim's UTF-8 output containing a byte undefined in that codec raised UnicodeDecodeError in subprocess's reader thread, failing an otherwise-successful render — seen as a visual revision that 'did not render', silently capping scene quality. Fixed by adding encoding='utf-8', errors='replace' to all six calls. Regression in t_f133.",
 }
 
 

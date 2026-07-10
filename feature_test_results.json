@@ -529,7 +529,7 @@
   },
   "F133": {
     "status": "PASS",
-    "note": "xplat kwargs win\u2194posix; zero raw creationflags in call sites (F133)"
+    "note": "xplat kwargs win\u2194posix; zero raw creationflags; UTF-8 tool output (F133)"
   },
   "F134": {
     "status": "PASS",

@@ -206,7 +206,7 @@ def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
                     "-frames:v", "1", "-vf", "scale=640:-1",
                     str(out_dir / f"frame_{i:02d}.png"),
                 ],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
                 **subprocess_kwargs(),
             )
         return sorted(out_dir.glob("frame_*.png"))[:count]
@@ -222,7 +222,7 @@ def _probe_duration(video: Path) -> float:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "csv=p=0", str(video)],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
             **subprocess_kwargs(),
         )
         return max(float(result.stdout.strip()), 0.5)

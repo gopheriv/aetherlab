@@ -1074,7 +1074,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "-vf", "fps=15,scale=480:-1:flags=lanczos",
                     "-loop", "0", str(path),
                 ],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
                 **subprocess_kwargs(),
             )
             if result.returncode == 0 and Path(path).exists():

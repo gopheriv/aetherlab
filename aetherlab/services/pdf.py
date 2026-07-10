@@ -140,6 +140,8 @@ def compile_latex_to_pdf(tex_path: Path) -> Path | None:
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
             **subprocess_kwargs(),
         )

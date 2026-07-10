@@ -730,6 +730,12 @@ class ManimRuntime:
                 ],
                 capture_output=True,
                 text=True,
+                # Decode Manim's output as UTF-8 regardless of the host locale.
+                # A non-UTF-8 Windows console codec (e.g. cp1251) otherwise raises
+                # UnicodeDecodeError in subprocess's reader thread on any byte it
+                # can't map, failing an otherwise-successful render (BUG-33).
+                encoding="utf-8",
+                errors="replace",
                 timeout=render_timeout,
                 cwd=str(run_dir),
                 **subprocess_kwargs(below_normal=tier["below_normal"]),

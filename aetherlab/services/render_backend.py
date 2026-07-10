@@ -599,6 +599,8 @@ def _github_cli_token() -> str:
             [exe, "auth", "token"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             **subprocess_kwargs(),
         )
