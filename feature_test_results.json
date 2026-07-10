@@ -69,7 +69,7 @@
   },
   "F18": {
     "status": "PASS",
-    "note": "cancel flag \u2192 _check_cancelled raises"
+    "note": "cancel stays honest and stops active render process promptly (BUG-49/56)"
   },
   "F19": {
     "status": "PASS",
@@ -81,7 +81,7 @@
   },
   "F21": {
     "status": "PASS",
-    "note": "closeEvent cancels + waits 5s"
+    "note": "close defers until pipeline and library QThreads finish (BUG-48/54)"
   },
   "F22": {
     "status": "PASS",
@@ -121,7 +121,7 @@
   },
   "F31": {
     "status": "PASS",
-    "note": "independent stage storage + targeted clears + column whitelist"
+    "note": "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)"
   },
   "F32": {
     "status": "PASS",
@@ -181,11 +181,11 @@
   },
   "F46": {
     "status": "PASS",
-    "note": "incremental/full reindex via background worker"
+    "note": "index/download workers join app close barrier; cancel remains pending (BUG-54)"
   },
   "F47": {
     "status": "PASS",
-    "note": "starter dialog: 3 default-selected book(s)"
+    "note": "starter dialog + cancel-safe completion: 3 defaults (BUG-54)"
   },
   "F48": {
     "status": "PASS",
@@ -221,7 +221,7 @@
   },
   "F56": {
     "status": "PASS",
-    "note": "timeout_map + timeout/error statuses"
+    "note": "quality timeout statuses + whole process-tree termination (BUG-55)"
   },
   "F57": {
     "status": "PASS",
@@ -313,7 +313,7 @@
   },
   "F79": {
     "status": "PASS",
-    "note": "history persists + reloads"
+    "note": "history persists; corrupt DB quarantined and rebuilt (BUG-52)"
   },
   "F80": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returns None or an existing PDF"
+    "note": "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)"
   },
   "F87": {
     "status": "PASS",
@@ -349,11 +349,11 @@
   },
   "F88": {
     "status": "PASS",
-    "note": "save video copies MP4"
+    "note": "video copy is backgrounded, cancellable, and atomic (BUG-57)"
   },
   "F89": {
     "status": "PASS",
-    "note": "gif export via ffmpeg w/ error handling"
+    "note": "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)"
   },
   "F90": {
     "status": "PASS",
@@ -497,7 +497,7 @@
   },
   "F125": {
     "status": "PASS",
-    "note": "web provider fail-soft; RagHit origin/label back-compat; toggle honored"
+    "note": "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)"
   },
   "F126": {
     "status": "PASS",
@@ -513,7 +513,7 @@
   },
   "F129": {
     "status": "PASS",
-    "note": "providers module + preset UI + CTA (0 local models) (F129)"
+    "note": "provider test is backgrounded + preset UI + CTA (0 local models) (BUG-53)"
   },
   "F130": {
     "status": "PASS",
@@ -597,7 +597,7 @@
   },
   "F150": {
     "status": "PASS",
-    "note": "Learn cancellable: cancel_check\u2192cancelled bundle; worker.cancel() + regenerate (F150)"
+    "note": "Learn cancellation reaches active chapter render and returns partial bundle (BUG-56)"
   },
   "F151": {
     "status": "PASS",
@@ -625,7 +625,7 @@
   },
   "F157": {
     "status": "PASS",
-    "note": "settings cloud controls + scene backend chip (F157)"
+    "note": "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)"
   },
   "F158": {
     "status": "PASS",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -509,7 +510,22 @@ class HistoryPanel(QtWidgets.QWidget):
         """Set up SQLite persistence and load saved entries (#5)."""
         self._db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        import sqlite3
+        try:
+            rows = self._load_history_rows(db_path)
+        except sqlite3.DatabaseError as exc:
+            from aetherlab.core.sqlite_recovery import (
+                is_sqlite_corruption,
+                quarantine_sqlite,
+            )
+
+            if not is_sqlite_corruption(exc):
+                raise
+            quarantine_sqlite(db_path)
+            rows = self._load_history_rows(db_path)
+        for prompt, cache_key, scene_status, num_refs, created_at in reversed(rows):
+            self._add_entry_ui(prompt, cache_key, scene_status, num_refs, created_at)
+
+    def _load_history_rows(self, db_path: Path) -> list[tuple]:
         conn = sqlite3.connect(str(db_path))
         try:
             conn.execute(self._HISTORY_TABLE_SQL)
@@ -521,15 +537,13 @@ class HistoryPanel(QtWidgets.QWidget):
             ).fetchall()
         finally:
             conn.close()
-        for prompt, cache_key, scene_status, num_refs, created_at in reversed(rows):
-            self._add_entry_ui(prompt, cache_key, scene_status, num_refs, created_at)
+        return rows
 
     def add_entry(self, prompt: str, cache_key: str, scene_status: str, num_refs: int) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self._add_entry_ui(prompt, cache_key, scene_status, num_refs, ts)
         # Persist to SQLite
         if self._db_path:
-            import sqlite3
             conn = sqlite3.connect(str(self._db_path))
             try:
                 conn.execute(self._HISTORY_TABLE_SQL)
@@ -593,7 +607,6 @@ class HistoryPanel(QtWidgets.QWidget):
         self._entries.clear()
         self._count_label.setText("0 entries")
         if self._db_path:
-            import sqlite3
             conn = sqlite3.connect(str(self._db_path))
             try:
                 conn.execute("DELETE FROM history")
@@ -2779,9 +2792,21 @@ class LibraryPanel(QtWidgets.QWidget):
     def _on_downloads_done(self, ok: int, bad: int) -> None:
         from aetherlab.services.starter_library import write_attribution
 
+        cancelled = bool(
+            self._downloader and self._downloader.isInterruptionRequested()
+        )
         if ok:
             write_attribution(Path(self._settings.library_path))
         self.refresh()
+        if cancelled:
+            self._progress_strip.hide()
+            self._reindex_btn.setEnabled(True)
+            self._reindex_btn.setText("Re-index")
+            self.status_message.emit(
+                f"Starter download cancelled; {ok} completed book"
+                f"{'s were' if ok != 1 else ' was'} kept."
+            )
+            return
         if ok == 0:
             self._progress_strip.hide()
             self.status_message.emit(
@@ -2831,10 +2856,15 @@ class LibraryPanel(QtWidgets.QWidget):
         )
 
     def _on_ingested(self, count: int) -> None:
+        cancelled = bool(self._worker and self._worker.isInterruptionRequested())
         self._reindex_btn.setEnabled(True)
         self._reindex_btn.setText("Re-index")
         self._progress_strip.hide()
-        if count:
+        if cancelled:
+            self.status_message.emit(
+                "Indexing cancelled; completed progress was saved."
+            )
+        elif count:
             self.status_message.emit(f"Indexed {count:,} chunks into ChromaDB.")
         else:
             self.status_message.emit("Library index is already up to date.")
@@ -2846,18 +2876,36 @@ class LibraryPanel(QtWidgets.QWidget):
         self._progress_strip.hide()
         self.status_message.emit(f"Indexing failed: {message}")
 
-    def _cancel_work(self) -> None:
+    def active_workers(self) -> tuple[QtCore.QThread, ...]:
+        """Return live library threads for the application shutdown barrier."""
+        return tuple(
+            worker
+            for worker in (self._downloader, self._worker)
+            if worker is not None and worker.isRunning()
+        )
+
+    def request_background_cancel(self, *, update_ui: bool = False) -> None:
+        """Request cooperative cancellation without claiming work has stopped."""
+        cancelling = False
         if self._downloader and self._downloader.isRunning():
             self._downloader.requestInterruption()
-            self.status_message.emit("Cancelling download…")
+            cancelling = True
+            if update_ui:
+                self.status_message.emit("Cancelling download…")
         if self._worker and self._worker.isRunning():
             self._worker.requestInterruption()
-            self.status_message.emit(
-                "Cancelling indexing — progress is saved and resumes on Re-index."
-            )
-        self._progress_strip.hide()
-        self._reindex_btn.setEnabled(True)
-        self._reindex_btn.setText("Re-index")
+            cancelling = True
+            if update_ui:
+                self.status_message.emit(
+                    "Cancelling indexing — progress is saved and resumes on Re-index."
+                )
+        if update_ui and cancelling:
+            self._progress_strip.show()
+            self._progress_label.setText("Cancelling background work…")
+            self._reindex_btn.setEnabled(False)
+
+    def _cancel_work(self) -> None:
+        self.request_background_cancel(update_ui=True)
 
     # ── add folder ──
 

@@ -511,7 +511,7 @@ def test_pdf_export_dir():
     import inspect
     from aetherlab.ui.main_window import MainWindow
     src = inspect.getsource(MainWindow._export_pdf)
-    assert "mkdir" in src, "Should create temp directory"
+    assert "TemporaryDirectory" in src, "Should create an isolated temp directory"
     print(f"    PDF export creates temp directory")
 run_check("FIX-C8", "PDF export creates temp directory", test_pdf_export_dir)
 
@@ -519,7 +519,7 @@ run_check("FIX-C8", "PDF export creates temp directory", test_pdf_export_dir)
 def test_cancel_overlay():
     import inspect
     from aetherlab.ui.main_window import MainWindow
-    src = inspect.getsource(MainWindow._cancel_pipeline)
+    src = inspect.getsource(MainWindow._on_worker_finished)
     assert "hide_loading" in src, "Should hide loading overlay on cancel"
     print(f"    Cancel pipeline hides loading overlay")
 run_check("FIX-C9", "Cancel hides loading overlay", test_cancel_overlay)

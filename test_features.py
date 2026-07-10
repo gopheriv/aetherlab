@@ -431,6 +431,9 @@ def t_f17():
 
 
 def t_f18():
+    import time
+
+    from aetherlab.core.proc import ProcessCancelledError, run_process_tree
     from aetherlab.ui.workers import PipelineWorker, _PipelineCancelled
     from aetherlab.core.models import ProblemRequest
     w = PipelineWorker(ProblemRequest(prompt="x"), _settings())
@@ -441,7 +444,30 @@ def t_f18():
     except _PipelineCancelled:
         raised = True
     assert raised
-    return "cancel flag → _check_cancelled raises"
+    from aetherlab.ui.main_window import MainWindow
+
+    cancel_src = inspect.getsource(MainWindow._cancel_pipeline)
+    finished_src = inspect.getsource(MainWindow._on_worker_finished)
+    assert "set_busy(False)" not in cancel_src
+    assert "cancel_button.setEnabled(False)" in cancel_src
+    assert "cancel_button.setEnabled(True)" in finished_src
+    assert '"Run cancelled by user."' in finished_src
+
+    render_src = inspect.getsource(PipelineWorker._run_async)
+    assert "cancel_check=lambda: self._cancelled" in render_src
+    before = time.monotonic()
+    try:
+        run_process_tree(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            timeout=10,
+            cancel_check=lambda: True,
+            capture_output=True,
+        )
+        raise AssertionError("cancellable process ignored cancel_check")
+    except ProcessCancelledError:
+        pass
+    assert time.monotonic() - before < 2.0
+    return "cancel stays honest and stops active render process promptly (BUG-49/56)"
 
 
 def t_f19():
@@ -457,9 +483,70 @@ def t_f20():
 
 
 def t_f21():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.closeEvent)
-    assert "cancel()" in src and "wait(5000)" in src
-    return "closeEvent cancels + waits 5s"
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.qt_compat import QtGui
+
+    class Signal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+    class LingeringWorker:
+        def __init__(self):
+            self.running = True
+            self.cancelled = False
+            self.finished = Signal()
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            self.cancelled = True
+
+        def requestInterruption(self):
+            self.cancelled = True
+
+        def wait(self, timeout):
+            assert timeout == 5000
+            return False
+
+    window = MainWindow(_settings())
+    probe = getattr(window, "_ollama_probe", None)
+    if probe and probe.isRunning():
+        probe.wait(5000)
+    window._ollama_probe = None
+    lingering = LingeringWorker()
+    library_lingering = LingeringWorker()
+
+    class LibraryWorkers:
+        def request_background_cancel(self):
+            library_lingering.requestInterruption()
+
+        def active_workers(self):
+            return (library_lingering,) if library_lingering.running else ()
+
+    window.worker = lingering
+    window.library_panel = LibraryWorkers()
+    event = QtGui.QCloseEvent()
+    window.closeEvent(event)
+    assert lingering.cancelled and library_lingering.cancelled and not event.isAccepted()
+    assert window._close_pending and lingering.finished.callbacks
+    assert library_lingering.finished.callbacks
+    # Once the worker reports finished, the callback schedules a safe retry.
+    lingering.running = False
+    lingering.finished.callbacks[0]()
+    assert window._close_pending, "one finished callback must not bypass another live worker"
+    library_lingering.running = False
+    library_lingering.finished.callbacks[0]()
+    QtWidgets.QApplication.processEvents()
+    window.worker = None
+    window.close()
+
+    src = inspect.getsource(MainWindow.closeEvent)
+    assert "event.ignore()" in src and "_close_when_idle" in src and "terminate(" not in src
+    return "close defers until pipeline and library QThreads finish (BUG-48/54)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -592,7 +679,17 @@ def t_f31():
         raise AssertionError("column not whitelisted")
     except ValueError:
         pass
-    return "independent stage storage + targeted clears + column whitelist"
+    # BUG-50: an invalid SQLite file is preserved for diagnosis and replaced by
+    # an empty usable cache, rather than aborting every solve at construction.
+    corrupt_path = _TMP / "corrupt-session.sqlite3"
+    corrupt_bytes = b"this is not a sqlite database\x00\xff"
+    corrupt_path.write_bytes(corrupt_bytes)
+    recovered_cache = SessionCache(corrupt_path)
+    quarantined = list(_TMP.glob("corrupt-session.sqlite3.corrupt-*"))
+    assert len(quarantined) == 1 and quarantined[0].read_bytes() == corrupt_bytes
+    recovered_key = recovered_cache.ensure_request(ProblemRequest(prompt="after corruption"))
+    assert recovered_cache.get(recovered_key) is not None
+    return "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)"
 
 
 def t_f32():
@@ -624,7 +721,7 @@ def t_f33():
     # field, not a crash that discards the independently valid solver result.
     cache = SessionCache(_TMP / "malformed_rows.sqlite3")
     key = cache.ensure_request(ProblemRequest(prompt="malformed cache row"))
-    with cache._connect() as connection:
+    with cache._transaction() as connection:
         connection.execute(
             "UPDATE sessions SET parameters_json=?, solver_json=?, rag_json=?, scene_json=? "
             "WHERE key=?",
@@ -786,20 +883,47 @@ def t_f45():
 
 def t_f46():
     from aetherlab.ui.widgets import LibraryPanel
+
     src = inspect.getsource(LibraryPanel._reindex_clicked)
     assert "ControlModifier" in src
     src2 = inspect.getsource(LibraryPanel._start_ingest)
     assert "_IngestWorker" in src2
-    return "incremental/full reindex via background worker"
+
+    class Worker:
+        def __init__(self):
+            self.interrupted = False
+
+        def isRunning(self):
+            return True
+
+        def requestInterruption(self):
+            self.interrupted = True
+
+    panel = LibraryPanel()
+    panel._worker = Worker()
+    panel._downloader = Worker()
+    assert len(panel.active_workers()) == 2
+    panel.request_background_cancel()
+    assert panel._worker.interrupted and panel._downloader.interrupted
+    cancel_src = inspect.getsource(LibraryPanel._cancel_work)
+    assert "request_background_cancel(update_ui=True)" in cancel_src
+    panel._worker = None
+    panel._downloader = None
+    panel.close()
+    return "index/download workers join app close barrier; cancel remains pending (BUG-54)"
 
 
 def t_f47():
-    from aetherlab.ui.widgets import StarterLibraryDialog
+    from aetherlab.ui.widgets import LibraryPanel, StarterLibraryDialog
+
     d = StarterLibraryDialog()
     books = d.selected_books()
     assert len(books) >= 1  # defaults checked
     d.close()
-    return f"starter dialog: {len(books)} default-selected book(s)"
+    done_src = inspect.getsource(LibraryPanel._on_downloads_done)
+    assert "isInterruptionRequested" in done_src
+    assert done_src.index("if cancelled:") < done_src.index("_start_ingest(reset=False)")
+    return f"starter dialog + cancel-safe completion: {len(books)} defaults (BUG-54)"
 
 
 def t_f48():
@@ -898,10 +1022,43 @@ def t_f55():
 
 
 def t_f56():
+    import subprocess
+    import time
+
+    from aetherlab.core.proc import run_process_tree, subprocess_kwargs
+
     src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime.render_scene)
     assert '"l": 240' in src and '"h": 600' in src
     assert "render-timeout" in src and "render-error" in src
-    return "timeout_map + timeout/error statuses"
+    assert "run_process_tree" in src
+
+    # BUG-55: a timeout must kill the grandchild too, not just the immediate
+    # Python parent. The delayed marker makes an orphan observable cross-platform.
+    marker = _TMP / "orphan-grandchild.txt"
+    child = (
+        "import time; from pathlib import Path; time.sleep(0.8); "
+        f"Path({str(marker)!r}).write_text('orphan', encoding='utf-8')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(10)"
+    )
+    try:
+        run_process_tree(
+            [sys.executable, "-c", parent],
+            timeout=0.2,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_kwargs(),
+        )
+        raise AssertionError("process-tree timeout did not fire")
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(1.0)
+    assert not marker.exists(), "timed-out grandchild survived and wrote its marker"
+    return "quality timeout statuses + whole process-tree termination (BUG-55)"
 
 
 def t_f57():
@@ -1538,9 +1695,19 @@ def t_f79():
     hp2 = HistoryPanel()
     hp2.init_persistence(db)  # reload
     assert hp2._list.count() == 1
+    corrupt_db = _TMP / "history-corrupt.sqlite3"
+    corrupt_bytes = b"not history sqlite\x00\xff"
+    corrupt_db.write_bytes(corrupt_bytes)
+    hp3 = HistoryPanel()
+    hp3.init_persistence(corrupt_db)
+    quarantined = list(_TMP.glob("history-corrupt.sqlite3.corrupt-*"))
+    assert len(quarantined) == 1 and quarantined[0].read_bytes() == corrupt_bytes
+    hp3.add_entry("recovered", "new", "compiled", 0)
+    assert hp3._list.count() == 1
     hp.close()
     hp2.close()
-    return "history persists + reloads"
+    hp3.close()
+    return "history persists; corrupt DB quarantined and rebuilt (BUG-52)"
 
 
 def t_f80():
@@ -1607,10 +1774,15 @@ def t_f85():
 
 def t_f86():
     from aetherlab.services.pdf import compile_latex_to_pdf
+    from aetherlab.ui.main_window import MainWindow
+
     # pdflatex likely absent — must return None, not raise
     r = compile_latex_to_pdf(_TMP / "d.tex")
     assert r is None or r.exists()
-    return "compile_latex_to_pdf returns None or an existing PDF"
+    src = inspect.getsource(MainWindow._export_pdf)
+    assert "_start_export_task" in src and 'with_suffix(".tex")' in src
+    assert "LaTeX saved instead" in src and "cancel_check=cancel.is_set" in src
+    return "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)"
 
 
 def t_f87():
@@ -1622,15 +1794,35 @@ def t_f87():
 
 
 def t_f88():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow._save_video)
-    assert "copy2" in src and "video_path" in src
-    return "save video copies MP4"
+    from aetherlab.core.atomic_file import atomic_copy_file
+    from aetherlab.core.proc import ProcessCancelledError
+    from aetherlab.ui.main_window import MainWindow
+
+    source = _TMP / "atomic-video-source.mp4"
+    destination = _TMP / "atomic-video-destination.mp4"
+    source.write_bytes(b"new-video" * 200_000)
+    destination.write_bytes(b"prior-good-video")
+    try:
+        atomic_copy_file(source, destination, cancel_check=lambda: True)
+        raise AssertionError("cancelled copy unexpectedly completed")
+    except ProcessCancelledError:
+        pass
+    assert destination.read_bytes() == b"prior-good-video"
+    assert not list(_TMP.glob(".atomic-video-destination.*.tmp.mp4"))
+    atomic_copy_file(source, destination)
+    assert destination.read_bytes() == source.read_bytes()
+    src = inspect.getsource(MainWindow._save_video)
+    assert "_start_export_task" in src and "atomic_copy_file" in src
+    return "video copy is backgrounded, cancellable, and atomic (BUG-57)"
 
 
 def t_f89():
     src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow._export_gif)
     assert "ffmpeg" in src and "FileNotFoundError" in src and "TimeoutExpired" in src
-    return "gif export via ffmpeg w/ error handling"
+    assert "_start_export_task" in src and "run_process_tree" in src
+    assert "unique_staging_path" in src and "os.replace" in src
+    assert "subprocess.run" not in src
+    return "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2156,6 +2348,7 @@ def t_f124():
 
 def t_f125():
     # Web reference provider: offline-safe, correct shape; model back-compat.
+    import aetherlab.services.web_references as webrefs
     from aetherlab.services.web_references import WikipediaReferenceProvider, fetch_web_references
     from aetherlab.core.models import RagHit, RagResult
     # A broken endpoint must return [] (never raise) — offline-safety contract.
@@ -2163,6 +2356,29 @@ def t_f125():
     broken.api = "https://invalid.aetherlab.example/w/api.php"
     assert broken.search(["oscillator"], 3) == []
     assert WikipediaReferenceProvider().search([], 3) == []  # no keywords → []
+    # BUG-47: MediaWiki can return an error/warning object with HTTP 200. Any
+    # valid JSON of the wrong shape must remain fail-soft after the fetch.
+    original_get = webrefs._http_get_json
+    try:
+        for malformed in ([], None, {"error": {"code": "ratelimited"}},
+                          {"query": []}, {"query": {"pages": []}}):
+            webrefs._http_get_json = lambda *_args, value=malformed, **_kwargs: value
+            assert WikipediaReferenceProvider().search(["oscillator"], 3) == []
+        webrefs._http_get_json = lambda *_args, **_kwargs: {
+            "query": {"pages": {
+                "bad": 7,
+                "ok": {
+                    "index": "not-a-number",
+                    "title": "Harmonic oscillator",
+                    "extract": "A mass oscillates about equilibrium.",
+                    "fullurl": "https://en.wikipedia.org/wiki/Harmonic_oscillator",
+                },
+            }}
+        }
+        shaped = WikipediaReferenceProvider().search(["oscillator"], 3)
+        assert len(shaped) == 1 and shaped[0].source_label == "Harmonic oscillator"
+    finally:
+        webrefs._http_get_json = original_get
     # RagHit gains origin/source_label with safe defaults; old dicts still load.
     h = RagHit("C:/lib/x.pdf", 3, 2.0, "e")
     assert h.origin == "library" and not h.is_web and h.source_name == "x.pdf"
@@ -2177,7 +2393,7 @@ def t_f125():
     from aetherlab.core.settings import load_settings
     from dataclasses import replace
     assert fetch_web_references(["x"], replace(load_settings(), web_references=False)) == []
-    return "web provider fail-soft; RagHit origin/label back-compat; toggle honored"
+    return "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)"
 
 
 def t_f126():
@@ -2291,16 +2507,51 @@ def t_f128():
 
 def t_f129():
     # Ollama discovery + Settings preset UI + EmptyState one-click CTA.
+    import threading
+    import time
+    from dataclasses import replace
+
+    import aetherlab.services.providers as providers
     from aetherlab.services.providers import detect_ollama, test_connection
+
     models = detect_ollama(timeout=1.0)  # absence is a normal state
     assert isinstance(models, list)
-    from dataclasses import replace
     ok, msg = test_connection(replace(_settings(), openai_api_key=None))
     assert not ok and "key" in msg.lower()
     from aetherlab.ui.main_window import SettingsDialog
+
     d = SettingsDialog(_settings())
     assert d._preset_combo.count() == 3 and hasattr(d, "_test_btn")
     assert d.get_settings()["provider_preset"] in ("custom", "ollama", "none")
+
+    started = threading.Event()
+    release = threading.Event()
+    original_test_connection = providers.test_connection
+
+    def blocking_test(_probe):
+        started.set()
+        assert release.wait(2.0)
+        return True, "Connected without blocking the GUI"
+
+    providers.test_connection = blocking_test
+    try:
+        before = time.perf_counter()
+        d._test_connection()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and started.wait(0.5)
+        assert not d._test_btn.isEnabled()
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while d._provider_task and d._provider_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert d._provider_task and not d._provider_task.is_running
+        assert d._test_btn.isEnabled()
+        assert "without blocking" in d._test_result.text()
+    finally:
+        release.set()
+        providers.test_connection = original_test_connection
     d.close()
     from aetherlab.ui.widgets import EmptyStateView
     ev = EmptyStateView()
@@ -2309,7 +2560,7 @@ def t_f129():
     ev.set_status(True, "m", 0)
     assert not ev._ollama_btn.isVisibleTo(ev)
     ev.close()
-    return f"providers module + preset UI + CTA ({len(models)} local models) (F129)"
+    return f"provider test is backgrounded + preset UI + CTA ({len(models)} local models) (BUG-53)"
 
 
 def t_f130():
@@ -3034,7 +3285,35 @@ def t_f150():
     assert hasattr(w, "cancel") and not w._cancel.is_set()
     w.cancel()
     assert w._cancel.is_set()
-    return "Learn cancellable: cancel_check→cancelled bundle; worker.cancel() + regenerate (F150)"
+
+    # BUG-56: cancellation requested after a chapter starts reaches the active
+    # render instead of waiting for the full Manim timeout/current chapter.
+    import threading
+
+    from aetherlab.core.proc import ProcessCancelledError
+
+    mid_render_cancel = threading.Event()
+
+    async def _cancel_during_render(scene, settings, quality="l", brief="", **kw):
+        calls["n"] += 1
+        check_cancel = kw.get("cancel_check")
+        assert callable(check_cancel)
+        mid_render_cancel.set()
+        if check_cancel():
+            raise ProcessCancelledError("cancelled active lesson render")
+        return scene
+
+    lp.manim.render_scene_with_repair = _cancel_during_render
+    bundle2 = asyncio.run(
+        lp.run(
+            "Kepler orbit",
+            regenerate=True,
+            max_concurrent=1,
+            cancel_check=mid_render_cancel.is_set,
+        )
+    )
+    assert bundle2.status == "cancelled" and calls["n"] >= 1
+    return "Learn cancellation reaches active chapter render and returns partial bundle (BUG-56)"
 
 
 def t_f151():
@@ -3392,15 +3671,85 @@ def t_f156():
 
 def t_f157():
     # Settings dialog exposes cloud controls; Scene panel shows backend chip.
+    import threading
+    import time
     from dataclasses import replace
+
+    import aetherlab.services.render_backend as render_backend
     from aetherlab.core.models import SceneBundle
     from aetherlab.ui.main_window import SettingsDialog
     from aetherlab.ui.widgets import SimulationPanel
+
     s = replace(_settings(), render_mode="auto", github_repo="owner/render",
-                github_token="ghp_" + "x" * 24)
+                github_token="ghp_" + "x" * 24,
+                github_oauth_client_id="test-device-client")
     d = SettingsDialog(s)
     vals = d.get_settings()
     assert vals["render_mode"] == "auto" and vals["github_repo"] == "owner/render"
+
+    cloud_started = threading.Event()
+    cloud_release = threading.Event()
+    original_available = render_backend.CloudRenderBackend.available
+
+    def blocking_available(_backend):
+        cloud_started.set()
+        assert cloud_release.wait(2.0)
+        return False, "Cloud unavailable in regression"
+
+    render_backend.CloudRenderBackend.available = blocking_available
+    try:
+        before = time.perf_counter()
+        d._test_cloud_render()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and cloud_started.wait(0.5)
+        assert not d._cloud_test_btn.isEnabled()
+        cloud_release.set()
+        deadline = time.monotonic() + 2.0
+        while d._cloud_task and d._cloud_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert d._cloud_test_btn.isEnabled()
+        assert "regression" in d._cloud_result.text()
+    finally:
+        cloud_release.set()
+        render_backend.CloudRenderBackend.available = original_available
+
+    device_started = threading.Event()
+    device_release = threading.Event()
+    original_device_code = render_backend.request_github_device_code
+
+    def blocking_device_code(_client_id):
+        device_started.set()
+        assert device_release.wait(2.0)
+        return {}
+
+    render_backend.request_github_device_code = blocking_device_code
+    try:
+        before = time.perf_counter()
+        d._get_github_token()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and device_started.wait(0.5)
+        assert not d._get_token_btn.isEnabled()
+        device_release.set()
+        deadline = time.monotonic() + 2.0
+        while d._github_task and d._github_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert d._get_token_btn.isEnabled()
+        assert "failed" in d._cloud_result.text().lower()
+    finally:
+        device_release.set()
+        render_backend.request_github_device_code = original_device_code
+
+    connection_src = inspect.getsource(SettingsDialog._test_connection)
+    cloud_src = inspect.getsource(SettingsDialog._test_cloud_render)
+    github_src = inspect.getsource(SettingsDialog._get_github_token)
+    assert "BackgroundTask" in connection_src and "processEvents" not in connection_src
+    assert "BackgroundTask" in cloud_src and "processEvents" not in cloud_src
+    assert "cancel.wait(interval)" in github_src and 'error == "slow_down"' in github_src
+    assert "interval + 5" in github_src and "time.sleep" not in github_src
     d.close()
     panel = SimulationPanel()
     scene = SceneBundle("AetherLabScene", "code", "manim-community", "rendered",
@@ -3409,7 +3758,7 @@ def t_f157():
     panel.set_scene_bundle(scene)
     assert panel._backend_chip.text() == "Cloud"
     panel.close()
-    return "settings cloud controls + scene backend chip (F157)"
+    return "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)"
 
 
 def t_f158():
@@ -4013,10 +4362,33 @@ def t_f166():
         assert "Export bundle" in labels
     finally:
         lv.close()
+    import threading
+    import time
+
+    started = threading.Event()
+    release = threading.Event()
     mw = MainWindow(_settings())
     try:
         assert hasattr(mw, "_export_lesson_bundle")
+        assert "_start_export_task" in inspect.getsource(mw._export_lesson_bundle)
+
+        def blocking_export(_cancel, _progress):
+            started.set()
+            assert release.wait(2.0)
+            return "Export completed in background"
+
+        before = time.perf_counter()
+        assert mw._start_export_task("Exporting lesson bundle…", blocking_export)
+        assert time.perf_counter() - before < 0.2 and started.wait(0.5)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while mw._export_task and mw._export_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert "completed in background" in mw.statusBar().currentMessage()
     finally:
+        release.set()
         mw.close()
         probe = getattr(mw, "_ollama_probe", None)
         if probe and probe.isRunning():

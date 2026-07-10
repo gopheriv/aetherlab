@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import traceback
-from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle
+from aetherlab.core.models import (
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+)
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
@@ -130,6 +135,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                     quality=self.render_quality,
                     brief=self.request.prompt,
                     progress=lambda msg: self.status.emit(str(msg)),
+                    cancel_check=lambda: self._cancelled,
                 )
             else:
                 scene = await manim.generate_scene_async(self.request, solver, rag, self.settings)
@@ -164,6 +170,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 scene, self.settings, quality=self.render_quality,
                 brief=self.request.prompt,
                 progress=lambda msg: self.status.emit(str(msg)),
+                cancel_check=lambda: self._cancelled,
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
@@ -204,7 +211,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         if self.settings.library_path.exists():
             try:
                 ingestor = LibraryIngestor(self.settings)
-                count = ingestor.ingest()
+                count = ingestor.ingest(should_cancel=lambda: self._cancelled)
                 if count > 0:
                     self.status.emit(f"Ingested {count} chunks into ChromaDB.")
                     self.progress.emit(33, f"Ingested {count} chunks into ChromaDB")
