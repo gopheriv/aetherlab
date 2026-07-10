@@ -181,6 +181,7 @@ class RenderBackend(Protocol):
         timeout: int,
         progress: Callable[[str], None] | None = None,
         variant: str = "",
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         """Render one compiled SceneBundle to a video or failure SceneBundle.
 
@@ -237,6 +238,7 @@ class LocalRenderBackend:
         timeout: int,
         progress: Callable[[str], None] | None = None,
         variant: str = "",  # accepted for interface parity; local renders are already isolated per-process
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         if progress:
             progress("Rendering locally")
@@ -245,8 +247,20 @@ class LocalRenderBackend:
         def _bounded_render() -> SceneBundle:
             # Acquired inside the worker thread so the global cap holds across
             # concurrent lesson chapters and tournament candidates.
-            with _LOCAL_RENDER_SEM:
-                return ManimRuntime(settings).render_scene(scene, settings, quality)
+            from aetherlab.core.proc import ProcessCancelledError
+
+            while not _LOCAL_RENDER_SEM.acquire(timeout=0.1):
+                if cancel_check is not None and cancel_check():
+                    raise ProcessCancelledError("Render cancelled while queued")
+            try:
+                cancel_kwargs = (
+                    {"cancel_check": cancel_check} if cancel_check is not None else {}
+                )
+                return ManimRuntime(settings).render_scene(
+                    scene, settings, quality, **cancel_kwargs
+                )
+            finally:
+                _LOCAL_RENDER_SEM.release()
 
         return await asyncio.to_thread(_bounded_render)
 
@@ -278,7 +292,15 @@ class CloudRenderBackend:
         timeout: int,
         progress: Callable[[str], None] | None = None,
         variant: str = "",
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
+        from aetherlab.core.proc import ProcessCancelledError
+
+        def ensure_active() -> None:
+            if cancel_check is not None and cancel_check():
+                raise ProcessCancelledError("Cloud render cancelled")
+
+        ensure_active()
         ok, reason = self.available()
         if not ok:
             return _cloud_unavailable(scene, reason)
@@ -319,9 +341,11 @@ class CloudRenderBackend:
                 except Exception:  # noqa: BLE001
                     pass
 
+        run_id = None
         try:
             say("Checking cloud render cache")
             video = await asyncio.to_thread(self._download_cached, client, manifest, job_id, run_dir, cached)
+            ensure_active()
             if video:
                 scene.video_path = str(video)
                 scene.status = "rendered"
@@ -341,6 +365,7 @@ class CloudRenderBackend:
                 branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
                 workflow=getattr(settings, "github_workflow", DEFAULT_GITHUB_WORKFLOW) or DEFAULT_GITHUB_WORKFLOW,
             )
+            ensure_active()
 
             say("Uploading scene to GitHub")
             scene_path = f"jobs/{job_id}.py"
@@ -351,6 +376,7 @@ class CloudRenderBackend:
                 branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
                 message=f"Add AetherLab render job {job_id}",
             )
+            ensure_active()
 
             say("Dispatching cloud render")
             run_id = await asyncio.to_thread(
@@ -373,6 +399,7 @@ class CloudRenderBackend:
             poll = max(2, int(getattr(settings, "cloud_poll_seconds", 8)))
             run = None
             while time.monotonic() < deadline:
+                ensure_active()
                 run = await asyncio.to_thread(
                     client.get_run,
                     run_id,
@@ -397,7 +424,12 @@ class CloudRenderBackend:
                     ledger.failure(job_id, stderr, kind=kind)
                     return scene
                 say(f"Cloud render {status or 'queued'}")
-                await asyncio.sleep(poll)
+                sleep_deadline = time.monotonic() + poll
+                while time.monotonic() < sleep_deadline:
+                    ensure_active()
+                    await asyncio.sleep(
+                        min(0.25, max(0.0, sleep_deadline - time.monotonic()))
+                    )
 
             if not run or (run.get("status") or "").lower() != "completed":
                 cancel_id = (run or {}).get("id") or run_id
@@ -418,6 +450,7 @@ class CloudRenderBackend:
                 return _cloud_unavailable(scene, reason)
 
             say("Downloading cloud video")
+            ensure_active()
             artifact = await asyncio.to_thread(client.find_run_artifact, int(run["id"]), f"{job_id}.mp4")
             if not artifact:
                 scene.diagnostics.append("Cloud render succeeded but MP4 artifact was not found.")
@@ -425,6 +458,7 @@ class CloudRenderBackend:
                 scene.failure_kind = "unknown"
                 return scene
             video = await asyncio.to_thread(self._download_artifact, client, artifact, run_dir, job_id)
+            ensure_active()
             if not video:
                 scene.diagnostics.append("Cloud MP4 artifact failed validation.")
                 scene.status = "render-error"
@@ -438,6 +472,14 @@ class CloudRenderBackend:
             ledger.status(job_id, "artifact_downloaded", "MP4 downloaded")
             ledger.finish(job_id, "rendered", str(video))
             return scene
+        except ProcessCancelledError:
+            if run_id:
+                try:
+                    await asyncio.to_thread(client.cancel_run, int(run_id))
+                except Exception as exc:  # noqa: BLE001
+                    log.info("Could not cancel abandoned cloud run %s: %s", run_id, exc)
+            ledger.status(job_id, "cancelled", "cancelled by user")
+            raise
         except Exception as exc:  # noqa: BLE001
             log.warning("Cloud render unavailable; falling back to local: %s", _mask(str(exc)))
             ledger.status(job_id, "failed", _mask(str(exc)))

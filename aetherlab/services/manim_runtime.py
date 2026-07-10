@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
-from aetherlab.core.proc import subprocess_kwargs
+from aetherlab.core.proc import (
+    ProcessCancelledError,
+    run_process_tree,
+    subprocess_kwargs,
+)
 from aetherlab.services.scene_generator import SceneGenerator
 
 if TYPE_CHECKING:
@@ -209,7 +213,9 @@ class ManimRuntime:
         if s and s.openai_api_key:
             from aetherlab.services.code_safety import validate_code_safety
             from aetherlab.services.scene_validation import (
-                estimate_duration, scene_hygiene_warnings, validate_scene,
+                estimate_duration,
+                scene_hygiene_warnings,
+                validate_scene,
             )
 
             generator = SceneGenerator(s)
@@ -301,14 +307,29 @@ class ManimRuntime:
         brief: str = "",
         aspect: str = "full",
         progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         """Opt-in candidate tournament, failing soft to the normal single path."""
         s = settings or self._settings
+
+        async def render_final(scene: SceneBundle, final_brief: str) -> SceneBundle:
+            kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
+            return await self.render_scene_with_repair(
+                scene,
+                s,
+                quality=quality,
+                brief=final_brief,
+                progress=progress,
+                **kwargs,
+            )
+
+        async def score_candidates(items: list[SceneCandidate]) -> list[SceneCandidate]:
+            kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
+            return await self._render_and_score_candidates(items, s, progress, **kwargs)
+
         if not self.scene_tournament_enabled(s):
             scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
-            return await self.render_scene_with_repair(
-                scene, s, quality=quality, brief=brief, progress=progress
-            )
+            return await render_final(scene, brief)
 
         try:
             cap = effective_candidate_cap(s)
@@ -317,7 +338,7 @@ class ManimRuntime:
             first_built = await self._build_scene_candidates(
                 request, solver, rag, s, aspect, progress, count=1, start_index=0
             )
-            scored = await self._render_and_score_candidates(first_built, s, progress)
+            scored = await score_candidates(first_built)
             storyboard0 = scored[0].storyboard if scored else None
             budget = candidate_budget(storyboard0, cap) if scored else cap
             difficulty = storyboard_difficulty(storyboard0) if scored else 0.0
@@ -338,7 +359,7 @@ class ManimRuntime:
                     count=budget - len(first_built), start_index=len(first_built),
                 )
                 if more:
-                    scored += await self._render_and_score_candidates(more, s, progress)
+                    scored += await score_candidates(more)
             if not scored:
                 raise RuntimeError("no candidate rendered and scored")
             winner = sorted(
@@ -380,9 +401,7 @@ class ManimRuntime:
                 critique_issues=list(winner.issues),
                 critique_breakdown=dict(winner.breakdown),
             )
-            final = await self.render_scene_with_repair(
-                selected, s, quality=quality, brief=brief or request.prompt, progress=progress
-            )
+            final = await render_final(selected, brief or request.prompt)
             # Winners teach — from the FINAL, HQ-critiqued result, not the 480p
             # draft score used only for tournament SELECTION. The critique loop in
             # render_scene_with_repair re-scores the promoted HQ render (and any
@@ -395,12 +414,12 @@ class ManimRuntime:
             # so the ledger report can correlate the cheap proxy with what shipped.
             self._record_tournament_hq(job_id, final, s)
             return final
+        except ProcessCancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001 - tournament must never break solve
             log.info("Scene tournament failed (%s); falling back to single scene path.", exc)
             scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
-            return await self.render_scene_with_repair(
-                scene, s, quality=quality, brief=brief, progress=progress
-            )
+            return await render_final(scene, brief)
 
     def _record_aesthetic_pitfalls(self, issues: list[str], settings: "AppSettings") -> None:
         """Persist losing candidates' critic issues so future prompts avoid them."""
@@ -514,7 +533,9 @@ class ManimRuntime:
         """
         from aetherlab.services.code_safety import validate_code_safety
         from aetherlab.services.scene_validation import (
-            estimate_duration, scene_hygiene_warnings, validate_scene,
+            estimate_duration,
+            scene_hygiene_warnings,
+            validate_scene,
         )
 
         cap = effective_candidate_cap(settings)
@@ -585,6 +606,7 @@ class ManimRuntime:
         candidates: list[SceneCandidate],
         settings: "AppSettings",
         progress: Callable[[str], None] | None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> list[SceneCandidate]:
         import json as _json
 
@@ -603,8 +625,14 @@ class ManimRuntime:
                     progress(f"Draft rendering candidate {candidate.index + 1}")
                 # variant isolates this candidate's cloud job/artifact so
                 # byte-identical candidates dispatched concurrently never collide.
+                kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
                 draft = await self._render_once(
-                    candidate.scene, settings, "l", progress, variant=f"cand{candidate.index}"
+                    candidate.scene,
+                    settings,
+                    "l",
+                    progress,
+                    variant=f"cand{candidate.index}",
+                    **kwargs,
                 )
                 if draft.status != "rendered" or not draft.video_path:
                     return None
@@ -663,6 +691,8 @@ class ManimRuntime:
         scene_bundle: SceneBundle,
         settings: "AppSettings | None" = None,
         quality: str = "l",
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         """Render the generated scene to an MP4 video using Manim Community.
 
@@ -719,7 +749,7 @@ class ManimRuntime:
 
         started = time.time()
         try:
-            result = subprocess.run(
+            result = run_process_tree(
                 [
                     *manim_cmd, "render", f"-q{quality}",
                     "--fps", str(fps),
@@ -737,6 +767,7 @@ class ManimRuntime:
                 encoding="utf-8",
                 errors="replace",
                 timeout=render_timeout,
+                cancel_check=cancel_check,
                 cwd=str(run_dir),
                 **subprocess_kwargs(below_normal=tier["below_normal"]),
             )
@@ -754,6 +785,8 @@ class ManimRuntime:
                 scene_bundle.status = "render-error"
                 scene_bundle.failure_kind = kind
                 return scene_bundle
+        except ProcessCancelledError:
+            raise
         except subprocess.TimeoutExpired:
             _dump_render_failure(data_dir, scene_bundle.code, "render exceeded time budget", "timeout")
             scene_bundle.diagnostics.append(
@@ -792,6 +825,7 @@ class ManimRuntime:
         max_revisions: int = 2,
         brief: str = "",
         progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         """Render; repair crashes/timeouts; then (optionally) critique and revise.
 
@@ -811,6 +845,13 @@ class ManimRuntime:
         """
         s = settings or self._settings
         draft_quality = "l"  # validate/repair cheaply here; promote to `quality`
+
+        async def render_once(bundle: SceneBundle, render_quality: str) -> SceneBundle:
+            kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
+            return await self._render_once(
+                bundle, s, render_quality, progress, **kwargs
+            )
+
         # BUG-29: skip the draft render when the bundle already carries a valid
         # one (the tournament renders + critiques the winner as a draft before
         # handing it here). Re-rendering the same code at the same quality was a
@@ -823,7 +864,7 @@ class ManimRuntime:
             and Path(scene_bundle.video_path).exists()
         )
         if not already_drafted:
-            scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
+            scene_bundle = await render_once(scene_bundle, draft_quality)
 
         learner = None
         if s is not None:
@@ -890,7 +931,7 @@ class ManimRuntime:
             scene_bundle.code = fixed
             scene_bundle.status = "compiled"
             scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
-            scene_bundle = await self._render_once(scene_bundle, s, draft_quality, progress)
+            scene_bundle = await render_once(scene_bundle, draft_quality)
 
         # ── Promote the working code to the requested quality (Bug 4) ──
         # The draft rendered; render the final at the target quality. If that
@@ -905,7 +946,7 @@ class ManimRuntime:
                 diagnostics=list(scene_bundle.diagnostics),
                 storyboard=scene_bundle.storyboard,
             )
-            hq = await self._render_once(hq, s, quality, progress)
+            hq = await render_once(hq, quality)
             if hq.status == "rendered":
                 scene_bundle = hq
                 final_quality = quality
@@ -1014,7 +1055,7 @@ class ManimRuntime:
                     diagnostics=list(scene_bundle.diagnostics),
                     storyboard=scene_bundle.storyboard,
                 )
-                trial = await self._render_once(trial, s, final_quality, progress)
+                trial = await render_once(trial, final_quality)
                 if trial.status == "rendered":
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
@@ -1041,9 +1082,7 @@ class ManimRuntime:
                             diagnostics=list(scene_bundle.diagnostics),
                             storyboard=scene_bundle.storyboard,
                         )
-                        retry_trial = await self._render_once(
-                            retry_trial, s, final_quality, progress
-                        )
+                        retry_trial = await render_once(retry_trial, final_quality)
                     except Exception as exc:  # noqa: BLE001
                         scene_bundle.diagnostics.append(
                             f"Visual revision {round_no} render repair failed: {exc}"
@@ -1082,6 +1121,7 @@ class ManimRuntime:
         quality: str,
         progress: Callable[[str], None] | None = None,
         variant: str = "",
+        cancel_check: Callable[[], bool] | None = None,
     ) -> SceneBundle:
         """One render attempt through the selected backend, with local fallback.
 
@@ -1092,7 +1132,9 @@ class ManimRuntime:
         """
         s = settings or self._settings
         if s is None:
-            return self.render_scene(scene_bundle, settings, quality)
+            return self.render_scene(
+                scene_bundle, settings, quality, cancel_check=cancel_check
+            )
         from aetherlab.services.render_backend import (
             CLOUD_UNAVAILABLE,
             LocalRenderBackend,
@@ -1102,6 +1144,9 @@ class ManimRuntime:
 
         backend = select_backend(s, scene_bundle.code, quality)
         timeout = render_timeout_for(scene_bundle.code, quality, s)
+        cancel_kwargs = (
+            {"cancel_check": cancel_check} if cancel_check is not None else {}
+        )
         rendered = await backend.render(
             scene_bundle,
             quality=quality,
@@ -1109,6 +1154,7 @@ class ManimRuntime:
             timeout=timeout,
             progress=progress,
             variant=variant,
+            **cancel_kwargs,
         )
         if rendered.status != CLOUD_UNAVAILABLE:
             return rendered
@@ -1128,6 +1174,7 @@ class ManimRuntime:
             settings=s,
             timeout=timeout,
             progress=progress,
+            **cancel_kwargs,
         )
         if local.status == "rendered":
             local.diagnostics.append("Cloud render unavailable; rendered locally.")

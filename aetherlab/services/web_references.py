@@ -68,9 +68,19 @@ class WikipediaReferenceProvider:
             log.info("Wikipedia reference fetch failed: %s", exc)
             return []
 
-        pages = (data.get("query", {}) or {}).get("pages", {}) or {}
+        if not isinstance(data, dict):
+            return []
+        query_data = data.get("query")
+        if not isinstance(query_data, dict):
+            return []
+        pages = query_data.get("pages")
+        if not isinstance(pages, dict):
+            return []
         # MediaWiki returns pages keyed by id; 'index' preserves search rank.
-        ordered = sorted(pages.values(), key=lambda p: p.get("index", 1_000))
+        ordered = sorted(
+            (page for page in pages.values() if isinstance(page, dict)),
+            key=_page_rank,
+        )
         hits: list[RagHit] = []
         for i, page in enumerate(ordered[:limit]):
             title = str(page.get("title", "")).strip()
@@ -93,6 +103,13 @@ class WikipediaReferenceProvider:
                 )
             )
         return hits
+
+
+def _page_rank(page: dict) -> float:
+    try:
+        return float(page.get("index", 1_000))
+    except (TypeError, ValueError):
+        return 1_000.0
 
 
 def fetch_web_references(keywords: list[str], settings, limit: int = 3) -> list[RagHit]:

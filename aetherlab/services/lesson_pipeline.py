@@ -38,6 +38,7 @@ from aetherlab.core.models import (
     SceneBundle,
     SolverResult,
 )
+from aetherlab.core.proc import ProcessCancelledError
 from aetherlab.services.lesson_planner import plan_lesson
 from aetherlab.services.manim_runtime import ManimRuntime
 
@@ -135,7 +136,14 @@ class LessonPipeline:
                 if cancelled():
                     return index, None  # skip cheaply once cancel is requested
                 report(f"Chapter {index + 1}/{total}: {ch.title}", done, total)
-                bundle = await self._render_chapter(ch, plan, out_dir, quality, regenerate)
+                bundle = await self._render_chapter(
+                    ch,
+                    plan,
+                    out_dir,
+                    quality,
+                    regenerate,
+                    cancel_check=cancelled,
+                )
                 async with lock:
                     done += 1
                     report(f"Chapter {index + 1}/{total} done", done, total)
@@ -191,6 +199,7 @@ class LessonPipeline:
     async def _render_chapter(
         self, ch: LessonChapter, plan: LessonPlan, out_dir: Path, quality: str,
         regenerate: bool = False,
+        cancel_check: "Callable[[], bool] | None" = None,
     ) -> SceneBundle | None:
         """Render one chapter clip, reusing the existing scene pipeline.
 
@@ -215,14 +224,21 @@ class LessonPipeline:
                 scene = await self.manim.generate_render_tournament(
                     request, solver, rag, self.settings, quality=quality, brief=brief,
                     aspect=aspect,
+                    cancel_check=cancel_check,
                 )
             else:
                 scene = await self.manim.generate_scene_async(
                     request, solver, rag, self.settings, aspect=aspect
                 )
                 scene = await self.manim.render_scene_with_repair(
-                    scene, self.settings, quality=quality, brief=brief
+                    scene,
+                    self.settings,
+                    quality=quality,
+                    brief=brief,
+                    cancel_check=cancel_check,
                 )
+        except ProcessCancelledError:
+            return None
         except Exception as exc:  # noqa: BLE001 — one bad chapter must not kill the lesson
             log.warning("Chapter '%s' failed to render: %s", ch.title, exc)
             return None
