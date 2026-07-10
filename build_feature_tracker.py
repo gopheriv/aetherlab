@@ -495,7 +495,7 @@ FEATURES: list[tuple[str, ...]] = [
      "services/scene_templates.py / scene_generator.py / manim_runtime.py", "headless", "Documented", ""),
     ("F106", "Scene", "Static pre-render validation battery",
      "As a user, hallucinated APIs and broken LaTeX are caught before an expensive render, not after.",
-     "scene_validation: lint_manim_names (unknown names vs installed manim namespace — guaranteed NameErrors), lint_constructor_kwargs (provably-invalid kwargs, conservative: only classes without **kwargs), check_latex_strings (brace/environment/left-right balance, double scripts), estimate_duration (advisory beat-sum diagnostic). Wired into generate_scene_async (lint failure = regenerate) and the repair loop (lint report becomes the next repair's error).",
+     "scene_validation checks unknown Manim names, provably-invalid kwargs, malformed LaTeX, duration, and (for remote generated/revised code) an obvious-motion contract. SceneGenerator token-repairs unknown color-like constants such as GREEN_SCREEN/BROWN without touching strings/comments/defined names. Generation/repair/revision gates require .animate/Transform/updater evolution; prompt rules enumerate the safe palette, require visible motion in every act and differing final sampled frames, and require every requested on-screen element.",
      "services/scene_validation.py / manim_runtime.py", "headless", "Documented", ""),
     ("F107", "Scene", "Storyboard→codegen split (two-call generation)",
      "As a user, my scene is first *directed* (creative treatment), then *implemented* — not improvised in one shot.",
@@ -2375,7 +2375,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F102": ("PASS", "None", "PASS"),
     "F104": ("PASS", "None", "PASS"),
     "F105": ("PASS", "None", "PASS"),
-    "F106": ("PASS", "None", "PASS"),
+    "F106": ("PASS", "BUG-40; BUG-41", "PASS"),
     "F107": ("PASS", "None", "PASS"),
     "F108": ("PASS", "BUG-35; BUG-38", "PASS"),
     "F109": ("PASS", "None", "PASS"),
@@ -2624,6 +2624,7 @@ DEFECTS: dict[str, str] = {
     "F108": "BUG-35: vision critique parsed model text with strict json.loads; a raw LaTeX backslash such as \\omega raised Invalid \\escape and skipped critique, while \\theta silently decoded as a tab. Model responses now use a conservative JSON-object extractor and string-only repair shared by all model-JSON paths. BUG-38: aesthetic revisions were discarded immediately on their first static-gate or render failure; revised code now receives one targeted static repair and one traceback-driven render repair, while the prior cut remains the fallback. Regressions in t_f108.",
     "F171": "BUG-36: tournament variants isolated cloud job/artifact names but every candidate still committed through GitHub's shared render branch concurrently; the Contents API documents concurrent mutations as conflicts, observed as HTTP 409. Writes now serialize per repo/branch and retry 409 with bounded backoff for cross-process races. Regression in t_f171.",
     "F155": "BUG-37: an exhausted cloud poll budget returned terminal render-timeout, so ManimRuntime never entered its cloud-unavailable local fallback and each tournament candidate could wait the full 1800s ceiling. Cloud timeouts are now adaptive under the configured ceiling, cancel the remote run best-effort, return cloud-unavailable, and immediately fall back locally with clear diagnostics. Regression in t_f155 (plus timeout-cap coverage in t_f152).",
+    "F106": "BUG-40: codegen invented color constants such as GREEN_SCREEN/BROWN; prompt rules now enumerate the supported Manim palette and SceneGenerator token-repairs unknown loaded color-like names to real constants without touching strings/comments/user definitions. BUG-41: codegen could pass syntax/API lint while producing title cards, reveal-only curves, frozen endings, or omitting requested elements. Remote generation/repair/revision now applies an obvious-motion gate, and prompts require per-act motion, non-identical final sampled frames, and a noun-by-noun requested-element audit. Regressions in t_f106.",
 }
 
 

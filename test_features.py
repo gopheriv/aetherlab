@@ -933,7 +933,7 @@ def t_f105():
 def t_f106():
     from aetherlab.services.scene_validation import (
         validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
-        scene_hygiene_warnings,
+        motion_contract_issues, repair_unknown_color_constants, scene_hygiene_warnings,
     )
     bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
     issues = lint_manim_names(bad)
@@ -959,13 +959,47 @@ class S(Scene):
     clean = build_scene("S", "wave", "T", "S", ["s1"], {"frequency": 2.0})
     ok, iss = validate_scene(clean)
     assert ok, iss
+    # BUG-40: token-aware repair maps invented color-like names without
+    # touching string content or identifiers the scene defines itself.
+    invented = '''from manim import *
+class AetherLabScene(Scene):
+    def construct(self):
+        label = Text("GREEN_SCREEN / BROWN")
+        a = Dot(color=GREEN_SCREEN)
+        b = Dot(color=BROWN)
+        self.play(a.animate.shift(RIGHT), b.animate.shift(LEFT))
+'''
+    fixed, replacements = repair_unknown_color_constants(invented)
+    assert replacements == {"GREEN_SCREEN": "GREEN", "BROWN": "DARK_BROWN"}, replacements
+    assert 'Text("GREEN_SCREEN / BROWN")' in fixed
+    assert not lint_manim_names(fixed), lint_manim_names(fixed)
+    compile(fixed, "<fixed-colors>", "exec")
+
+    # BUG-41: remote scene gates reject no-motion and reveal-only title cards,
+    # while actual object evolution passes.
+    no_motion = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.add(Dot())\n"
+    reveal_only = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(FadeIn(Dot()))\n"
+    moving = "from manim import *\nclass S(Scene):\n    def construct(self):\n        d=Dot()\n        self.play(d.animate.shift(RIGHT))\n"
+    assert motion_contract_issues(no_motion) and motion_contract_issues(reveal_only)
+    assert not motion_contract_issues(moving)
+    assert not validate_scene(reveal_only, require_motion=True)[0]
+    assert validate_scene(moving, require_motion=True)[0]
+
+    from aetherlab.services.scene_generator import (
+        SCENE_CODEGEN_SYSTEM_PROMPT, SCENE_GENERATION_SYSTEM_PROMPT, SceneGenerator,
+    )
+    extracted = SceneGenerator(_settings())._extract_code(invented, "AetherLabScene")
+    assert "GREEN_SCREEN / BROWN" in extracted and "color=GREEN_SCREEN" not in extracted
+    prompt = (SCENE_GENERATION_SYSTEM_PROMPT + SCENE_CODEGEN_SYSTEM_PROMPT).lower()
+    assert "allowed global colors" in prompt and "final three sampled frames" in prompt
+    assert "every requested" in prompt and "noun by noun" in prompt
     est = estimate_duration(clean)
     assert est.total_seconds > 0 and est.play_calls >= 1
     # wired into generation and repair paths
     mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
     assert mr_src.count("validate_scene") >= 2 and "estimate_duration" in mr_src
     assert "scene_hygiene_warnings" in mr_src
-    return "lint+LaTeX+duration+hygiene checks work; wired into gen+repair (F106)"
+    return "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
 
 
 def t_f102():

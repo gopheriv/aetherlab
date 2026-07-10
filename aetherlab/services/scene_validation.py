@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
 import inspect
 import re
+import tokenize
 from dataclasses import dataclass, field
 
 
@@ -88,6 +90,37 @@ def _manim_namespace() -> set[str]:
 
 _EXTRA_KNOWN = {"np", "self", "math", "numpy", "random", "itertools", "functools"}
 
+_MANIM_COLOR_NAMES = {
+    "BLACK", "WHITE", "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE",
+    "MAROON", "GOLD", "ORANGE", "PINK", "LIGHT_PINK", "DARK_BLUE",
+    "DARK_BROWN", "LIGHT_BROWN", "GRAY", "GREY", "GRAY_BROWN", "GREY_BROWN",
+    "LIGHT_GRAY", "LIGHT_GREY", "DARK_GRAY", "DARK_GREY", "LIGHTER_GRAY",
+    "LIGHTER_GREY", "DARKER_GRAY", "DARKER_GREY", "PURE_RED", "PURE_GREEN",
+    "PURE_BLUE", "PURE_CYAN", "PURE_MAGENTA", "PURE_YELLOW", "LOGO_BLACK",
+    "LOGO_WHITE", "LOGO_BLUE", "LOGO_GREEN", "LOGO_RED",
+    *{
+        f"{base}_{suffix}"
+        for base in (
+            "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE", "MAROON",
+            "GOLD", "GRAY", "GREY",
+        )
+        for suffix in "ABCDE"
+    },
+}
+_COLOR_ALIASES = {
+    "BROWN": "DARK_BROWN",
+    "CYAN": "PURE_CYAN",
+    "MAGENTA": "PURE_MAGENTA",
+    "NAVY": "DARK_BLUE",
+    "SILVER": "LIGHT_GRAY",
+    "LIME": "GREEN",
+    "AQUA": "TEAL",
+}
+_COLOR_FAMILIES = (
+    "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE", "MAROON", "GOLD",
+    "ORANGE", "PINK", "GRAY", "GREY", "BROWN", "CYAN", "MAGENTA", "WHITE", "BLACK",
+)
+
 
 # ── 1. unknown-name lint ────────────────────────────────────────────────────
 
@@ -121,6 +154,107 @@ def lint_manim_names(code: str) -> list[str]:
                 "at render."
             )
     return issues
+
+
+def _nearest_color_name(name: str, available: set[str]) -> str | None:
+    if name in _COLOR_ALIASES:
+        return _COLOR_ALIASES[name]
+    parts = set(name.split("_"))
+    for family in _COLOR_FAMILIES:
+        if family not in parts:
+            continue
+        base = _COLOR_ALIASES.get(family, family)
+        for prefix in ("DARK", "LIGHT", "PURE"):
+            candidate = f"{prefix}_{base}"
+            if prefix in parts and candidate in available:
+                return candidate
+        if base in available:
+            return base
+    return None
+
+
+def repair_unknown_color_constants(code: str) -> tuple[str, dict[str, str]]:
+    """Map invented all-caps color identifiers to real Manim constants.
+
+    Only unknown names in Load context are candidates. Tokenization performs
+    the replacement so strings, comments, attributes, and user definitions are
+    never rewritten. If Manim is unavailable, the pinned built-in color list is
+    still enough for this fail-soft repair.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return code, {}
+    manim_ns = _manim_namespace()
+    available = _MANIM_COLOR_NAMES | (manim_ns & _MANIM_COLOR_NAMES)
+    defined = _module_defined_names(tree)
+    known = manim_ns | defined | set(dir(builtins)) | _EXTRA_KNOWN
+    replacements: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id.isupper()
+            and node.id not in known
+        ):
+            continue
+        replacement = _nearest_color_name(node.id, available)
+        if replacement:
+            replacements[node.id] = replacement
+    if not replacements:
+        return code, {}
+    tokens = tokenize.generate_tokens(io.StringIO(code).readline)
+    fixed = tokenize.untokenize(
+        token._replace(string=replacements.get(token.string, token.string))
+        if token.type == tokenize.NAME
+        else token
+        for token in tokens
+    )
+    return fixed, replacements
+
+
+_DYNAMIC_ANIMATIONS = {
+    "Transform", "ReplacementTransform", "TransformFromCopy", "TransformMatchingShapes",
+    "TransformMatchingTex", "MoveAlongPath", "Rotate", "ApplyMethod", "ApplyFunction",
+    "UpdateFromFunc", "UpdateFromAlphaFunc", "Restore", "Swap",
+}
+
+
+def motion_contract_issues(code: str) -> list[str]:
+    """Reject provably static generated scenes without judging artistic style."""
+    tree = _parse(code)
+    if tree is None:
+        return []
+    plays = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+        and node.func.attr == "play"
+    ]
+    if not plays:
+        return [
+            "[MOTION:NO_PLAY] Scene has no self.play animation; a static add()/wait() "
+            "scene cannot satisfy the visible-motion contract."
+        ]
+    call_names = {
+        _call_name(node.func).split(".")[-1]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    has_animate = any(
+        isinstance(node, ast.Attribute) and node.attr == "animate"
+        for node in ast.walk(tree)
+    )
+    has_updater = bool(call_names & {"add_updater", "always_redraw", "TracedPath"})
+    has_transform = bool(call_names & _DYNAMIC_ANIMATIONS)
+    if not (has_animate or has_updater or has_transform):
+        return [
+            "[MOTION:REVEAL_ONLY] Scene only reveals static objects; use .animate, "
+            "Transform/MoveAlongPath, or an updater so the physics evolves on-screen."
+        ]
+    return []
 
 
 # ── 2. constructor-kwarg lint ───────────────────────────────────────────────
@@ -435,8 +569,10 @@ def estimate_duration(code: str) -> DurationEstimate:
 # ── bundle ──────────────────────────────────────────────────────────────────
 
 
-def validate_scene(code: str) -> tuple[bool, list[str]]:
+def validate_scene(code: str, *, require_motion: bool = False) -> tuple[bool, list[str]]:
     """Run the three hard gates. Returns (ok, issues). Duration is not part of
     the verdict — callers surface it as an advisory diagnostic."""
     issues = lint_manim_names(code) + lint_constructor_kwargs(code) + check_latex_strings(code)
+    if require_motion:
+        issues.extend(motion_contract_issues(code))
     return (not issues), issues

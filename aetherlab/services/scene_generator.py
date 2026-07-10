@@ -22,7 +22,12 @@ friend. Correctness is the floor. Wonder is the target.
 0.1  Output ONLY valid Python. No markdown fences, no prose, no leading comments.
 0.2  `from manim import *` (Manim Community). Never manimlib. `import numpy as np`
      if used. Use ONLY real Manim Community mobjects, animations, rate functions,
-     and color constants — invent nothing.
+     and color constants — invent nothing. Allowed global colors are: BLACK,
+     WHITE, BLUE/GREEN/RED/YELLOW/TEAL/PURPLE/MAROON/GOLD (and their _A.._E
+     variants), ORANGE, PINK, LIGHT_PINK, GRAY/GREY variants, DARK_BLUE,
+     DARK_BROWN, LIGHT_BROWN, PURE_RED/GREEN/BLUE/CYAN/MAGENTA/YELLOW, and
+     LOGO_* colors. `BROWN`, `CYAN`, `MAGENTA`, and `GREEN_SCREEN` are NOT
+     global Manim constants; use DARK_BROWN, PURE_CYAN, PURE_MAGENTA, or GREEN.
 0.3  Exactly one scene class, named `{class_name}`, inheriting `Scene`
      (or `MovingCameraScene`/`ThreeDScene` if the story truly needs it), with
      `def construct(self)`.
@@ -34,9 +39,14 @@ friend. Correctness is the floor. Wonder is the target.
      curves bleed off-screen or overlap into mud.
 0.6  Surface the solver's `variables` as on-screen, ValueTracker-driven numbers
      (`DecimalNumber` / `always_redraw`) so they read as live and become sliders.
-0.7  15–22 s total. Never end frozen: the last 2–3 s is a living idle loop
-     (slow rotation, gentle pulse, drifting tracer) via ValueTracker +
-     always_redraw or an updater.
+0.7  15–22 s total. EVERY act must contain visible physical motion, not only
+     FadeIn/Write/Create reveals. Use .animate, Transform/MoveAlongPath, or an
+     updater. Never end frozen: the last 2–3 s is a living idle loop via
+     ValueTracker + always_redraw or an updater; the final three sampled frames
+     must be visibly different.
+0.8  Honor EVERY requested on-screen object, label, comparison, and physical
+     relationship from the user's prompt. Before output, audit the prompt noun
+     by noun and confirm each requested element is created and shown in code.
 
 ════════════════════════════════════════════════════════════════════════
 §1 · WRITE THE SCENARIO FIRST  (the #1 lever on creativity)
@@ -211,7 +221,10 @@ HARD CONSTRAINTS (violating any ruins the render):
 1. Output ONLY valid Python — no markdown fences, no prose.
 2. `from manim import *` (Manim Community). Never manimlib. `import numpy as np`
    if used. Use ONLY real Manim Community mobjects, animations, rate functions,
-   and color constants — invent nothing.
+   and real global color constants — invent nothing. Use WHITE, BLACK, BLUE,
+   GREEN, RED, YELLOW, TEAL, PURPLE, MAROON, GOLD, ORANGE, PINK, GRAY/GREY
+   (including _A.._E variants), DARK_BLUE/DARK_BROWN/LIGHT_BROWN, and
+   PURE_CYAN/PURE_MAGENTA. Never use BROWN or GREEN_SCREEN.
 3. Exactly one scene class named `{class_name}` inheriting `Scene` (or
    `MovingCameraScene` if the storyboard demands camera moves), with
    `def construct(self)`.
@@ -221,11 +234,14 @@ HARD CONSTRAINTS (violating any ruins the render):
    or lay out with `.arrange()`/`.next_to()`/`.to_edge()`.
 6. Surface the given variables as ValueTracker-driven DecimalNumbers on screen.
 7. Match each act's duration_s with your run_time/wait budget (±20%).
-8. End with the storyboard's idle loop via ValueTracker + always_redraw —
-   never a frozen last frame.
+8. Every act must visibly MOVE via .animate, Transform/MoveAlongPath, or an
+   updater. End with the storyboard's idle loop via ValueTracker + always_redraw;
+   the final three sampled frames must differ, never a frozen last frame.
 9. Use the storyboard's palette consistently; the accent color appears ONLY at
    the hero frame.
-10. Maintain scene hygiene: before a new act introduces unrelated content, fade
+10. Implement every object/label/comparison requested by the original problem;
+    audit the request noun by noun before returning code.
+11. Maintain scene hygiene: before a new act introduces unrelated content, fade
     out or transform the previous act's group; never stack unrelated mobjects at
     the same `.move_to(...)` coordinate; use `VGroup(...).arrange(...)` for
     multiple labels/equations; avoid `.copy()` unless the original is transformed
@@ -244,10 +260,14 @@ Rules:
    `def construct(self)`).
 3. Address the critique concretely (spacing, legibility, pacing, palette,
    overlap, dead time) — do not simplify the scene into a bare plot.
-4. Use only real Manim Community APIs.
+4. Use only real Manim Community APIs and global colors. Never invent BROWN,
+   GREEN_SCREEN, or other color names; use DARK_BROWN/GREEN or a hex string.
 5. Preserve scene hygiene: no stale copied originals, no repeated unrelated
    move_to anchors without cleanup, no abrupt self.clear(), and no dominant bare
-   grids."""
+   grids.
+6. Preserve visible physical motion in every act and a living ending whose last
+   sampled frames differ; do not "fix" a critique by freezing or deleting a
+   requested object."""
 
 
 SCENE_REPAIR_SYSTEM_PROMPT = """You are the AetherLab Manim repair engineer. A Manim Community scene you
@@ -265,6 +285,8 @@ Rules:
 5. If the failure involved clutter/overlap, fix with FadeOut/Transform,
    VGroup.arrange(), or different zones rather than piling new objects onto the
    same anchor.
+6. Keep every requested object and visible-motion beat; never repair a crash by
+   reducing the scene to static text/axes.
 """
 
 SCENE_REPAIR_USER_TEMPLATE = """## Render error
@@ -677,6 +699,14 @@ class SceneGenerator:
                 f"(got {len(code)} chars after stripping)."
             )
 
+        from aetherlab.services.scene_validation import repair_unknown_color_constants
+
+        code, replacements = repair_unknown_color_constants(code)
+        if replacements:
+            log.info(
+                "Repaired invented Manim color constants: %s",
+                ", ".join(f"{old}->{new}" for old, new in sorted(replacements.items())),
+            )
         return code
 
     def _fallback_scene(self, class_name: str, solver: SolverResult) -> str:

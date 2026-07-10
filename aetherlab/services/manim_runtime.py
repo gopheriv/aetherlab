@@ -232,7 +232,7 @@ class ManimRuntime:
                 # Static pre-render lint: hallucinated names, provably-bad
                 # kwargs, structurally broken LaTeX. Catching these here turns
                 # a render crash + repair round into a fresh generation.
-                lint_ok, lint_issues = validate_scene(code)
+                lint_ok, lint_issues = validate_scene(code, require_motion=True)
                 if not lint_ok:
                     diagnostics.append(
                         f"Attempt {attempt + 1}: pre-render lint failed: "
@@ -545,7 +545,7 @@ class ManimRuntime:
                 if not safe:
                     log.info("Candidate %d rejected by safety gate: %s", i + 1, safety_issues[:3])
                     continue
-                lint_ok, lint_issues = validate_scene(code)
+                lint_ok, lint_issues = validate_scene(code, require_motion=True)
                 if not lint_ok:
                     log.info("Candidate %d rejected by scene lint: %s", i + 1, lint_issues[:3])
                     continue
@@ -877,7 +877,7 @@ class ManimRuntime:
                 break
             from aetherlab.services.scene_validation import validate_scene
 
-            lint_ok, lint_issues = validate_scene(fixed)
+            lint_ok, lint_issues = validate_scene(fixed, require_motion=True)
             if not lint_ok:
                 # The repair itself introduced a provable render failure —
                 # feed the lint report back as the next round's error instead
@@ -973,7 +973,7 @@ class ManimRuntime:
                     static_issues.append(f"compile: {exc}")
                 if not static_issues:
                     safe, safety_issues = validate_code_safety(revised)
-                    lint_ok, lint_issues = validate_scene(revised)
+                    lint_ok, lint_issues = validate_scene(revised, require_motion=True)
                     if not safe:
                         static_issues.extend(safety_issues)
                     if not lint_ok:
@@ -993,7 +993,7 @@ class ManimRuntime:
                         )
                         compile(revised, "<aetherlab-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(revised)
-                        lint_ok, lint_issues = validate_scene(revised)
+                        lint_ok, lint_issues = validate_scene(revised, require_motion=True)
                         if not safe or not lint_ok:
                             raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
                         scene_bundle.diagnostics.append(
@@ -1030,7 +1030,7 @@ class ManimRuntime:
                         )
                         compile(repaired, "<aetherlab-render-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(repaired)
-                        lint_ok, lint_issues = validate_scene(repaired)
+                        lint_ok, lint_issues = validate_scene(repaired, require_motion=True)
                         if not safe or not lint_ok:
                             raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
                         retry_trial = SceneBundle(
