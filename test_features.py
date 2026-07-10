@@ -2809,7 +2809,8 @@ def t_f152():
     # RenderBackend seam: default local, explicit cloud, auto threshold routing.
     from dataclasses import replace
     from aetherlab.services.render_backend import (
-        CloudRenderBackend, LocalRenderBackend, cloud_job_id, render_fps_for, select_backend,
+        CloudRenderBackend, LocalRenderBackend, cloud_job_id, render_fps_for,
+        render_timeout_for, select_backend,
     )
     from aetherlab.core.models import SceneBundle
     s = _settings()
@@ -2823,6 +2824,8 @@ def t_f152():
     scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
     assert cloud_job_id(scene, quality="l", fps=30) != cloud_job_id(scene, quality="h", fps=30)
     assert render_fps_for(heavy, "h") == 30
+    stale_long = replace(cloud, cloud_render_timeout=1800)
+    assert render_timeout_for("light", "l", stale_long) == 420
     return "backend selection local/cloud/auto + stable cloud job ids (F152)"
 
 
@@ -3060,7 +3063,49 @@ def t_f155():
     assert out.status == "rendered" and calls["local"] == 1
     assert any("GitHub token" in d for d in out.diagnostics)
     assert any("rendered locally" in d for d in out.diagnostics)
-    return "cloud unavailable falls back to local without raising (F155)"
+
+    # BUG-37: exhausting the cloud poll budget is also cloud unavailability,
+    # not a terminal render-timeout. Cancel the remote run and fall back now.
+    class TimeoutClient:
+        def __init__(self): self.cancelled = []
+        def find_repo_artifact(self, name): return None
+        def default_branch(self): return "main"
+        def ensure_workflow(self, *, workflow, branch): return False
+        def ensure_branch(self, branch): pass
+        def put_file(self, path, content, *, branch, message): pass
+        def dispatch(self, **kw): return 91
+        def get_run(self, run_id, *, job_id, branch):
+            return {"id": 91, "status": "queued"}
+        def cancel_run(self, run_id): self.cancelled.append(run_id)
+
+    timeout_client = TimeoutClient()
+    orig_select = rb.select_backend
+    orig_timeout = rb.render_timeout_for
+    rb.LocalRenderBackend = FakeLocal
+    rb.select_backend = lambda settings, code, quality: rb.CloudRenderBackend(
+        settings, client=timeout_client
+    )
+    rb.render_timeout_for = lambda code, quality, settings: 0
+    try:
+        calls["local"] = 0
+        s2 = replace(
+            _settings(), render_mode="cloud", github_repo="owner/render",
+            github_token="ghp_" + "x" * 24, data_dir=_TMP / "cloud_timeout",
+        )
+        scene2 = SceneBundle(
+            "AetherLabScene",
+            "from manim import *\nclass AetherLabScene(Scene):\n    pass\n",
+            "manim-community", "compiled",
+        )
+        out2 = asyncio.run(ManimRuntime(s2)._render_once(scene2, s2, "l"))
+    finally:
+        rb.LocalRenderBackend = orig
+        rb.select_backend = orig_select
+        rb.render_timeout_for = orig_timeout
+    assert out2.status == "rendered" and calls["local"] == 1
+    assert timeout_client.cancelled == [91]
+    assert any("timed out" in d.lower() and "falling back" in d.lower() for d in out2.diagnostics)
+    return "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
 
 
 def t_f156():
@@ -3954,7 +3999,7 @@ def t_f171():
 
     from aetherlab.core.models import SceneBundle
     from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
-    from aetherlab.services.render_backend import cloud_job_id
+    from aetherlab.services.render_backend import GitHubActionsClient, cloud_job_id
 
     code = "class AetherLabScene(Scene):\n    def construct(self):\n        self.play(Create(Dot()))\n        self.wait(1)\n"
     sb = SceneBundle("AetherLabScene", code, "manim", "compiled")
@@ -3965,6 +4010,50 @@ def t_f171():
     assert cloud_job_id(sb, quality="l", fps=30, variant="") == base, "empty variant must preserve cache id"
     salted = [cloud_job_id(sb, quality="l", fps=30, variant=f"cand{i}") for i in range(4)]
     assert len(set(salted)) == 4 and base not in salted, salted
+
+    # BUG-36: unique paths are insufficient because GitHub's Contents API
+    # commits each file to the shared branch. Concurrent PUTs must serialize.
+    import concurrent.futures
+    import threading
+    import time
+    import urllib.error
+
+    class ConcurrentPutClient(GitHubActionsClient):
+        def __init__(self):
+            super().__init__("owner", "render", "token")
+            self.guard = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+            self.writes = 0
+
+        def _request(self, method, path, payload=None, *, raw=False):
+            if method == "GET" and "/contents/" in path:
+                raise urllib.error.HTTPError("u", 404, "missing", {}, None)
+            if method == "PUT":
+                with self.guard:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                time.sleep(0.03)
+                with self.guard:
+                    self.active -= 1
+                    self.writes += 1
+                return {}
+            raise AssertionError((method, path))
+
+    put_client = ConcurrentPutClient()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                put_client.put_file, f"jobs/cand{i}.py", code,
+                branch="renders", message=f"candidate {i}",
+            )
+            for i in range(2)
+        ]
+        for future in futures:
+            future.result()
+    assert put_client.writes == 2 and put_client.max_active == 1, (
+        put_client.writes, put_client.max_active
+    )
 
     # Concurrently render THREE byte-identical candidates through the real
     # tournament scorer with a stubbed render; each must get its own variant and
@@ -3991,7 +4080,7 @@ def t_f171():
     # A manual live-smoke script exists for the real GitHub end-to-end path.
     smoke = Path("tools/cloud_tournament_smoke.py").read_text(encoding="utf-8")
     assert "cloud_job_id" in smoke and "variant" in smoke and "asyncio.gather" in smoke
-    return "cloud fan-out: per-candidate job-id isolation prevents concurrent artifact collision (F171)"
+    return "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
 
 
 def t_f172():

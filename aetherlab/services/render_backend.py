@@ -202,6 +202,19 @@ LOCAL_RENDER_LIMIT: int = max(
 )
 _LOCAL_RENDER_SEM = threading.Semaphore(LOCAL_RENDER_LIMIT)
 
+# GitHub's Contents API creates one commit per write and documents concurrent
+# mutations as conflicting. Tournament candidates use separate files but share
+# a branch, so serialize by repository+branch inside this process; bounded 409
+# retries below also cover a second AetherLab process writing at the same time.
+_BRANCH_WRITE_LOCKS_GUARD = threading.Lock()
+_BRANCH_WRITE_LOCKS: dict[tuple[str, str, str], threading.RLock] = {}
+
+
+def _branch_write_lock(owner: str, repo: str, branch: str) -> threading.RLock:
+    key = (owner.lower(), repo.lower(), branch)
+    with _BRANCH_WRITE_LOCKS_GUARD:
+        return _BRANCH_WRITE_LOCKS.setdefault(key, threading.RLock())
+
 
 class LocalRenderBackend:
     name = "local"
@@ -351,7 +364,11 @@ class CloudRenderBackend:
             )
             ledger.status(job_id, "in_progress", "dispatched to GitHub Actions")
 
-            deadline = time.monotonic() + min(timeout, int(getattr(settings, "cloud_render_timeout", timeout)))
+            effective_timeout = max(
+                0,
+                min(timeout, int(getattr(settings, "cloud_render_timeout", timeout) or timeout)),
+            )
+            deadline = time.monotonic() + effective_timeout
             poll = max(2, int(getattr(settings, "cloud_poll_seconds", 8)))
             run = None
             while time.monotonic() < deadline:
@@ -382,14 +399,22 @@ class CloudRenderBackend:
                 await asyncio.sleep(poll)
 
             if not run or (run.get("status") or "").lower() != "completed":
-                _dump_render_failure(settings.data_dir, scene.code, "cloud render exceeded time budget", "timeout")
-                scene.diagnostics.append(
-                    f"Cloud render timed out ({timeout}s, cost {_estimate_render_cost(scene.code):.1f})."
+                cancel_id = (run or {}).get("id") or run_id
+                if cancel_id:
+                    try:
+                        await asyncio.to_thread(client.cancel_run, int(cancel_id))
+                    except Exception as exc:  # noqa: BLE001 — fallback must still proceed
+                        log.info("Could not cancel timed-out cloud run %s: %s", cancel_id, exc)
+                reason = (
+                    f"Cloud render timed out after {effective_timeout}s "
+                    f"(cost {_estimate_render_cost(scene.code):.1f}); "
+                    "cancelled the cloud attempt and falling back to local."
                 )
-                scene.status = "render-timeout"
-                scene.failure_kind = "timeout"
-                ledger.failure(job_id, f"exceeded time budget ({timeout}s)", kind="timeout")
-                return scene
+                _dump_render_failure(settings.data_dir, scene.code, reason, "timeout")
+                ledger.failure(job_id, reason, kind="timeout")
+                log.warning(reason)
+                say("Cloud render timed out; falling back to local")
+                return _cloud_unavailable(scene, reason)
 
             say("Downloading cloud video")
             artifact = await asyncio.to_thread(client.find_run_artifact, int(run["id"]), f"{job_id}.mp4")
@@ -509,7 +534,11 @@ def render_timeout_for(code: str, quality: str, settings: "AppSettings") -> int:
     from aetherlab.services.manim_runtime import _estimate_render_cost
 
     if str(getattr(settings, "render_mode", "local") or "local").lower() in {"cloud", "auto"}:
-        return int(getattr(settings, "cloud_render_timeout", 1800) or 1800)
+        configured = max(60, min(1800, int(getattr(settings, "cloud_render_timeout", 600) or 600)))
+        base = {"l": 420, "m": 540, "h": 720, "k": 900}.get(quality, 420)
+        cost = _estimate_render_cost(code)
+        adaptive = base + int(max(0.0, min(4.0, cost - 1.0)) * 60)
+        return min(configured, adaptive)
     base_timeout = {"l": 240, "m": 420, "h": 600, "k": 900}.get(quality, 240)
     return min(int(base_timeout * _estimate_render_cost(code)), 1800)
 
@@ -669,44 +698,74 @@ class GitHubActionsClient:
             return json.loads(body.decode("utf-8")) if body else {}
 
     def ensure_branch(self, branch: str) -> None:
-        try:
-            self._request("GET", f"/repos/{self.owner}/{self.repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
-            return
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                raise
-        repo_info = self._request("GET", f"/repos/{self.owner}/{self.repo}")
-        default = repo_info.get("default_branch", "main")
-        ref = self._request("GET", f"/repos/{self.owner}/{self.repo}/git/ref/heads/{urllib.parse.quote(default, safe='')}")
-        sha = ref.get("object", {}).get("sha")
-        if not sha:
-            raise RuntimeError("Could not resolve default branch SHA.")
-        self._request(
-            "POST",
-            f"/repos/{self.owner}/{self.repo}/git/refs",
-            {"ref": f"refs/heads/{branch}", "sha": sha},
-        )
+        with _branch_write_lock(self.owner, self.repo, branch):
+            try:
+                self._request("GET", f"/repos/{self.owner}/{self.repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}")
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    raise
+            repo_info = self._request("GET", f"/repos/{self.owner}/{self.repo}")
+            default = repo_info.get("default_branch", "main")
+            ref = self._request("GET", f"/repos/{self.owner}/{self.repo}/git/ref/heads/{urllib.parse.quote(default, safe='')}")
+            sha = ref.get("object", {}).get("sha")
+            if not sha:
+                raise RuntimeError("Could not resolve default branch SHA.")
+            try:
+                self._request(
+                    "POST",
+                    f"/repos/{self.owner}/{self.repo}/git/refs",
+                    {"ref": f"refs/heads/{branch}", "sha": sha},
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code != 422:
+                    raise
+                # Another process may have created it after our initial GET.
+                self._request(
+                    "GET",
+                    f"/repos/{self.owner}/{self.repo}/git/ref/heads/{urllib.parse.quote(branch, safe='')}",
+                )
 
     def put_file(self, path: str, content: str, *, branch: str, message: str) -> None:
-        sha = None
         quoted = urllib.parse.quote(path)
+        lock = _branch_write_lock(self.owner, self.repo, branch)
+        for attempt in range(3):
+            try:
+                with lock:
+                    sha = None
+                    try:
+                        existing = self._request(
+                            "GET",
+                            f"/repos/{self.owner}/{self.repo}/contents/{quoted}?ref={urllib.parse.quote(branch)}",
+                        )
+                        sha = existing.get("sha")
+                    except urllib.error.HTTPError as exc:
+                        if exc.code != 404:
+                            raise
+                    payload = {
+                        "message": message,
+                        "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                        "branch": branch,
+                    }
+                    if sha:
+                        payload["sha"] = sha
+                    self._request("PUT", f"/repos/{self.owner}/{self.repo}/contents/{quoted}", payload)
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code != 409 or attempt == 2:
+                    raise
+                time.sleep(0.2 * (2 ** attempt))
+
+    def cancel_run(self, run_id: int) -> None:
+        """Best-effort cancellation for a run that exceeded AetherLab's budget."""
         try:
-            existing = self._request(
-                "GET",
-                f"/repos/{self.owner}/{self.repo}/contents/{quoted}?ref={urllib.parse.quote(branch)}",
+            self._request(
+                "POST",
+                f"/repos/{self.owner}/{self.repo}/actions/runs/{run_id}/cancel",
             )
-            sha = existing.get("sha")
         except urllib.error.HTTPError as exc:
-            if exc.code != 404:
+            if exc.code not in {409, 422}:
                 raise
-        payload = {
-            "message": message,
-            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
-            "branch": branch,
-        }
-        if sha:
-            payload["sha"] = sha
-        self._request("PUT", f"/repos/{self.owner}/{self.repo}/contents/{quoted}", payload)
 
     def default_branch(self) -> str:
         return str(self._request("GET", f"/repos/{self.owner}/{self.repo}").get("default_branch", "main"))

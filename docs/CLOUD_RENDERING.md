@@ -42,7 +42,9 @@ For a fine-grained token, restrict it to the render repository and grant:
 
 The app uses Contents write to commit `jobs/<job_id>.py` to the render branch,
 Actions write to dispatch the workflow, and Actions read to poll runs and
-download artifacts.
+download artifacts. Candidate writes are serialized per repository/branch and
+HTTP 409 conflicts receive a short bounded retry; distinct job files still
+share one branch tip, so names alone are not concurrency control.
 
 ## manim-bot Migration
 
@@ -108,9 +110,13 @@ hard LaTeX dependency.
 
 Cloud failures map back to the normal render contract:
 
-- timeout -> `render-timeout`, `failure_kind="timeout"`
+- poll timeout -> cancel the remote run best-effort and immediately fall back local
 - Manim crash -> `render-error`, classified as latex/ffmpeg/oom/hallucinated-api/unknown
 - no network/token/repo/workflow -> local fallback
+
+The configured cloud timeout is a ceiling. AetherLab derives a smaller
+quality/cost-aware budget (a light draft is capped at 420 seconds even when an
+old config still says 1800); the default ceiling is 600 seconds.
 
 The existing render repair, visual critique, and narration loops operate on the
 returned `SceneBundle` exactly as they do for local renders.

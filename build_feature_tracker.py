@@ -691,7 +691,7 @@ FEATURES: list[tuple[str, ...]] = [
      "services/render_backend.py / .github/workflows/render.yml", "headless", "Documented", ""),
     ("F155", "Render", "Cloud fail-soft local fallback",
      "As a user, missing token/network/CI never crashes a solve; AetherLab just renders locally.",
-     "Cloud unavailable returns an internal cloud-unavailable SceneBundle status; ManimRuntime._render_once restores compiled status and invokes LocalRenderBackend. Successful fallback appends a diagnostic and MainWindow shows a warning toast/status message.",
+     "Missing configuration/network or an exhausted adaptive cloud poll budget returns an internal cloud-unavailable SceneBundle status; ManimRuntime._render_once restores compiled status and invokes LocalRenderBackend. Timed-out Actions runs are cancelled best-effort first. Successful fallback preserves a clear diagnostic and MainWindow warning.",
      "services/render_backend.py / services/manim_runtime.py / ui/main_window.py", "headless", "Documented", ""),
     ("F156", "Security", "Cloud render secret guard",
      "As a user, cloud rendering must not commit API keys or private config material.",
@@ -755,7 +755,7 @@ FEATURES: list[tuple[str, ...]] = [
      "services/scene_critic.py / core/models.py / services/manim_runtime.py / tools/prompt_quality_lab.py", "headless", "Documented", ""),
     ("F171", "Quality", "Parallel cloud fan-out with per-candidate isolation",
      "As a power user with cloud rendering, when the tournament renders N candidates, I expect them to render concurrently on the farm without stealing each other's artifacts.",
-     "manim_runtime._render_and_score_candidates already renders candidates concurrently (asyncio.gather bounded by scene_candidate_concurrency) and routes each through _render_once -> select_backend, so cloud-configured users fan out to GitHub Actions. Phase 2 closes the concurrency race: cloud_job_id (also the cloud cache key) now takes a `variant` salt so byte-identical candidates dispatched at once can no longer collide on the same jobs/<id>.py scene file or <id>.mp4 artifact (the BUG-15 race), while an empty variant stays byte-identical to the legacy id so the single-scene path keeps its content cache. _render_once threads the variant; the tournament passes cand<index>. Keyless candidates are ranked by the Phase-1 static proxy instead of being dropped. tools/cloud_tournament_smoke.py is a manual live end-to-end check; t_f171 proves isolation with a stubbed concurrent render. Phase 2 of docs/QUALITY_FLYWHEEL_MISSION.md.",
+     "manim_runtime._render_and_score_candidates fans candidates out through the cloud backend with a per-candidate variant salt, so byte-identical scenes keep distinct job paths/artifacts while the empty variant preserves single-scene cache keys. Because those distinct files still commit to one branch tip, GitHubActionsClient serializes Contents API writes per repository/branch and retries HTTP 409 conflicts with bounded backoff. Keyless candidates still use the static proxy; tools/cloud_tournament_smoke.py remains the live end-to-end check.",
      "services/render_backend.py / services/manim_runtime.py / tools/cloud_tournament_smoke.py", "headless", "Documented", ""),
     ("F172", "Quality", "Aesthetic pitfall learning (losers teach)",
      "As a maintainer, when the critic keeps naming the same visual problems, I expect the next generation to actively avoid them.",
@@ -2431,7 +2431,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F152": ("PASS", "None", "PASS"),
     "F153": ("PARTIAL", "BUG-19", "PARTIAL"),
     "F154": ("PARTIAL", "BUG-15; BUG-17; BUG-18; BUG-20", "PARTIAL"),
-    "F155": ("PARTIAL", "None", "PARTIAL"),
+    "F155": ("PASS", "BUG-37", "PASS"),
     "F156": ("PASS", "None", "PASS"),
     "F157": ("PASS", "None", "PASS"),
     "F158": ("PASS", "None", "PASS"),
@@ -2454,12 +2454,9 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # without a live vision model or a render.
     "F170": ("PASS", "None", "PASS"),
     # ── Quality Flywheel Phase 2 (F171) ─────────────────────────────────────
-    # The isolation guarantee (distinct per-candidate cloud job/artifact) is
-    # proven deterministically with a stubbed concurrent render; the live
-    # concurrent GitHub farm run needs real credentials (tools/
-    # cloud_tournament_smoke.py), so this stays PARTIAL like the other
-    # live-cloud stories.
-    "F171": ("PARTIAL", "None", "PARTIAL"),
+    # Distinct candidate ids plus serialized branch commits are exercised
+    # deterministically; the manual real-GitHub smoke remains available.
+    "F171": ("PASS", "BUG-36", "PASS"),
     # ── Quality Flywheel Phase 3 (F172 losers teach, F173 winners teach) ────
     "F172": ("PASS", "None", "PASS"),
     "F173": ("PASS", "BUG-31", "PASS"),
@@ -2625,6 +2622,8 @@ DEFECTS: dict[str, str] = {
     "F180": "BUG-32: the A/B verdict said 'did NOT help' whenever more prompts regressed than improved (`or losses > wins`), even with a POSITIVE mean lift — a self-contradicting conclusion (`did NOT help (mean +2.00, 1 win / 2 loss)`) for the flywheel's core measurement. Now the negative verdict requires a negative mean (`mean_lift < -eps and losses >= wins`) and sign/count disagreement routes to an explicit 'Mixed result' verdict. Regression in t_f180.",
     "F133": "BUG-33: all six external-tool subprocess call sites (Manim render, pdflatex, GIF ffmpeg, ffmpeg/ffprobe frame sampling, gh auth) captured output with text=True but no encoding, so Python decoded child bytes with the host LOCALE codec. On a non-UTF-8 Windows console (cp1251/Cyrillic) Manim's UTF-8 output containing a byte undefined in that codec raised UnicodeDecodeError in subprocess's reader thread, failing an otherwise-successful render — seen as a visual revision that 'did not render', silently capping scene quality. Fixed by adding encoding='utf-8', errors='replace' to all six calls. Regression in t_f133.",
     "F108": "BUG-35: vision critique parsed model text with strict json.loads; a raw LaTeX backslash such as \\omega raised Invalid \\escape and skipped critique, while \\theta silently decoded as a tab. Model responses now use a conservative JSON-object extractor and string-only repair for raw LaTeX/backslashes/control characters, shared by critique, solver, storyboard, lesson planning, and fact checking. Regression in t_f108.",
+    "F171": "BUG-36: tournament variants isolated cloud job/artifact names but every candidate still committed through GitHub's shared render branch concurrently; the Contents API documents concurrent mutations as conflicts, observed as HTTP 409. Writes now serialize per repo/branch and retry 409 with bounded backoff for cross-process races. Regression in t_f171.",
+    "F155": "BUG-37: an exhausted cloud poll budget returned terminal render-timeout, so ManimRuntime never entered its cloud-unavailable local fallback and each tournament candidate could wait the full 1800s ceiling. Cloud timeouts are now adaptive under the configured ceiling, cancel the remote run best-effort, return cloud-unavailable, and immediately fall back locally with clear diagnostics. Regression in t_f155 (plus timeout-cap coverage in t_f152).",
 }
 
 

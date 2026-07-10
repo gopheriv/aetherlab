@@ -52,7 +52,7 @@ class AppSettings:
     github_oauth_client_id: str = ""
     cloud_render_threshold: float = 3.0
     cloud_poll_seconds: int = 8
-    cloud_render_timeout: int = 1800
+    cloud_render_timeout: int = 600
     visual_critic_max_passes: int = 2
     visual_critic_keyframes: int = 6
     min_quality_score: float = 0.0
@@ -287,7 +287,7 @@ def load_settings() -> AppSettings:
             os.getenv("CLOUD_RENDER_TIMEOUT"),
             app_cfg.get("cloud_render_timeout"),
             legacy_env.get("CLOUD_RENDER_TIMEOUT"),
-            default=1800,
+            default=600,
         ),
         visual_critic_max_passes=_as_int(
             os.getenv("AETHERLAB_VISUAL_CRITIC_MAX_PASSES"),
