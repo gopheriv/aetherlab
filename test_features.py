@@ -3743,11 +3743,9 @@ def t_f157():
         assert elapsed < 0.2 and cloud_started.wait(0.5)
         assert not d._cloud_test_btn.isEnabled()
         cloud_release.set()
-        deadline = time.monotonic() + 2.0
-        while d._cloud_task and d._cloud_task.is_running and time.monotonic() < deadline:
-            _app.processEvents()
-            time.sleep(0.01)
-        _app.processEvents()
+        if d._cloud_task:
+            d._cloud_task.wait(3.0)  # deterministic join, not a slow-runner deadline
+        _app.processEvents()          # deliver the queued finished/result signals
         assert d._cloud_test_btn.isEnabled()
         assert "regression" in d._cloud_result.text()
     finally:
@@ -3771,10 +3769,8 @@ def t_f157():
         assert elapsed < 0.2 and device_started.wait(0.5)
         assert not d._get_token_btn.isEnabled()
         device_release.set()
-        deadline = time.monotonic() + 2.0
-        while d._github_task and d._github_task.is_running and time.monotonic() < deadline:
-            _app.processEvents()
-            time.sleep(0.01)
+        if d._github_task:
+            d._github_task.wait(3.0)  # deterministic join, not a slow-runner deadline
         _app.processEvents()
         assert d._get_token_btn.isEnabled()
         assert "failed" in d._cloud_result.text().lower()

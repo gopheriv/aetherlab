@@ -43,6 +43,18 @@ class BackgroundTask(QtCore.QObject):
     def cancel(self) -> None:
         self._cancel.set()
 
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until the worker thread has fully finished (bounded).
+
+        Teardown-safety: a caller joins before destroying the owning dialog so no
+        daemon thread is left to emit a signal into a torn-down widget (a PyQt
+        slot touching a deleted C++ object aborts the process — the exact
+        CI-only, timing-dependent crash this guards against).
+        """
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+
     def _report(self, payload: object) -> None:
         if not self._cancel.is_set():
             self._emit(self.progress, payload)
@@ -56,7 +68,10 @@ class BackgroundTask(QtCore.QObject):
             if not self._cancel.is_set():
                 self._emit(self.failed, str(exc)[:240])
         finally:
-            self._emit(self.finished)
+            # Don't emit into a dialog that asked to cancel (it is closing): the
+            # re-enable slots would touch widgets under teardown.
+            if not self._cancel.is_set():
+                self._emit(self.finished)
 
     @staticmethod
     def _emit(signal, *args: object) -> None:
