@@ -1085,6 +1085,77 @@ def t_f108():
     ).ManimRuntime.render_scene_with_repair)
     assert "critique_video" in src and ".revise(" in src and "max_revisions" in src
     assert "keeping previous cut" in src, "revisions must never downgrade a shipped render"
+
+    # BUG-38: a weaker reviser may emit code that fails static validation. The
+    # revision must get one targeted repair before the previous cut is kept.
+    from aetherlab.services import scene_critic as critic_module
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    video = _TMP / "revision-draft.mp4"
+    video.write_bytes(b"draft")
+    settings = replace(
+        _settings(), openai_api_key="sk-test", vision_model="vision-test",
+        visual_critic_max_passes=2,
+    )
+    runtime = ManimRuntime(settings)
+    calls = {"critique": 0, "repair": 0, "render": 0}
+    original_critique = critic_module.critique_video
+    original_revise = SceneGenerator.revise
+    original_repair = SceneGenerator.repair
+
+    async def fake_critique(*args, **kwargs):
+        calls["critique"] += 1
+        if calls["critique"] == 1:
+            return Critique(verdict="revise", score=4.0, issues=["fix layout"])
+        return Critique(verdict="ship", score=8.0)
+
+    async def fake_revise(self, code, critique, class_name):
+        return (
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot(color=GREEN_SCREEN)\n"
+            "        self.play(Create(dot))\n"
+        )
+
+    async def fake_repair(self, code, error, class_name):
+        calls["repair"] += 1
+        return (
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot(color=GREEN)\n"
+            "        self.play(Create(dot))\n"
+            "        self.play(dot.animate.shift(RIGHT))\n"
+        )
+
+    async def fake_render(scene, settings, quality, progress=None, variant=""):
+        calls["render"] += 1
+        if calls["render"] == 1:
+            return replace(
+                scene, status="render-error",
+                diagnostics=[*scene.diagnostics, "Manim render failed: bad revised API"],
+            )
+        return replace(scene, status="rendered", video_path=str(video))
+
+    critic_module.critique_video = fake_critique
+    SceneGenerator.revise = fake_revise
+    SceneGenerator.repair = fake_repair
+    runtime._render_once = fake_render  # type: ignore[assignment]
+    try:
+        start = SceneBundle(
+            "AetherLabScene",
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n        self.play(Create(Dot()))\n",
+            "manim-community", "rendered", video_path=str(video),
+        )
+        recovered = asyncio.run(runtime.render_scene_with_repair(start, settings, quality="l"))
+    finally:
+        critic_module.critique_video = original_critique
+        SceneGenerator.revise = original_revise
+        SceneGenerator.repair = original_repair
+    assert recovered.status == "rendered" and "GREEN_SCREEN" not in recovered.code
+    assert calls == {"critique": 2, "repair": 2, "render": 2}, calls
+    assert any("Applied repaired visual revision" in d for d in recovered.diagnostics)
     import pathlib
     import tempfile
     vids = sorted(

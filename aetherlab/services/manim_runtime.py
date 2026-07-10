@@ -960,19 +960,50 @@ class ManimRuntime:
                         "\n".join(crit.issues) or "Improve composition and pacing.",
                         scene_bundle.class_name,
                     )
-                    compile(revised, "<aetherlab-revised-scene>", "exec")
                 except Exception as exc:  # noqa: BLE001
                     scene_bundle.diagnostics.append(
                         f"Visual revision {round_no} failed: {exc}"
                     )
                     break
-                safe, _ = validate_code_safety(revised)
-                lint_ok, _ = validate_scene(revised)
-                if not safe or not lint_ok:
+
+                static_issues: list[str] = []
+                try:
+                    compile(revised, "<aetherlab-revised-scene>", "exec")
+                except Exception as exc:  # noqa: BLE001
+                    static_issues.append(f"compile: {exc}")
+                if not static_issues:
+                    safe, safety_issues = validate_code_safety(revised)
+                    lint_ok, lint_issues = validate_scene(revised)
+                    if not safe:
+                        static_issues.extend(safety_issues)
+                    if not lint_ok:
+                        static_issues.extend(lint_issues)
+                if static_issues:
                     scene_bundle.diagnostics.append(
-                        f"Visual revision {round_no} rejected by static gates."
+                        f"Visual revision {round_no} failed static gates: "
+                        + "; ".join(static_issues[:4])
                     )
-                    break
+                    try:
+                        revised = await generator.repair(
+                            revised,
+                            "The visual revision failed before rendering. Fix every "
+                            "validation error while preserving the requested aesthetic "
+                            "improvements:\n" + "\n".join(static_issues[:8]),
+                            scene_bundle.class_name,
+                        )
+                        compile(revised, "<aetherlab-repaired-visual-revision>", "exec")
+                        safe, safety_issues = validate_code_safety(revised)
+                        lint_ok, lint_issues = validate_scene(revised)
+                        if not safe or not lint_ok:
+                            raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
+                        scene_bundle.diagnostics.append(
+                            f"Repaired visual revision {round_no} before rendering."
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        scene_bundle.diagnostics.append(
+                            f"Visual revision {round_no} repair failed: {exc}"
+                        )
+                        break
                 # Render the revision as a trial: only adopt it if it still
                 # renders — never downgrade a shipped cut to a failed one.
                 trial = SceneBundle(
@@ -988,10 +1019,47 @@ class ManimRuntime:
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
                 else:
-                    scene_bundle.diagnostics.append(
-                        f"Visual revision {round_no} did not render; keeping previous cut."
+                    render_error = (
+                        trial.diagnostics[-1]
+                        if trial.diagnostics
+                        else f"revision render ended with status {trial.status}"
                     )
-                    break
+                    try:
+                        repaired = await generator.repair(
+                            revised, render_error, scene_bundle.class_name
+                        )
+                        compile(repaired, "<aetherlab-render-repaired-visual-revision>", "exec")
+                        safe, safety_issues = validate_code_safety(repaired)
+                        lint_ok, lint_issues = validate_scene(repaired)
+                        if not safe or not lint_ok:
+                            raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
+                        retry_trial = SceneBundle(
+                            class_name=scene_bundle.class_name,
+                            code=repaired,
+                            engine=scene_bundle.engine,
+                            status="compiled",
+                            diagnostics=list(scene_bundle.diagnostics),
+                            storyboard=scene_bundle.storyboard,
+                        )
+                        retry_trial = await self._render_once(
+                            retry_trial, s, final_quality, progress
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        scene_bundle.diagnostics.append(
+                            f"Visual revision {round_no} render repair failed: {exc}"
+                        )
+                        retry_trial = None
+                    if retry_trial is not None and retry_trial.status == "rendered":
+                        retry_trial.diagnostics.append(
+                            f"Applied repaired visual revision {round_no}."
+                        )
+                        scene_bundle = retry_trial
+                    else:
+                        scene_bundle.diagnostics.append(
+                            f"Visual revision {round_no} did not render after repair; "
+                            "keeping previous cut."
+                        )
+                        break
 
         # ── Narration↔visual sync (manim-bot decision) ───────────────────
         # Derive a voiceover from the FINAL code and fit it to the rendered
