@@ -24,8 +24,9 @@ jobs:
           pip install -e .[rag]
           # imageio-ffmpeg (the app's optional 'narration' extra) gives the
           # assembly tests (F143/F148) a portable ffmpeg binary; without it they
-          # skip the render-driven checks fail-soft.
-          pip install manim matplotlib pillow imageio-ffmpeg
+          # skip the render-driven checks fail-soft. openpyxl backs the feature
+          # tracker .xlsx (build_feature_tracker + tracker_integrity_audit).
+          pip install manim matplotlib pillow imageio-ffmpeg openpyxl
 
       - name: Run behavioural feature suite
         env:
@@ -52,8 +53,13 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-      - name: Ensure generated tracker artifacts are committed
-        run: git diff --exit-code -- AetherLab_Feature_Tracker.xlsx AetherLab_Feature_Tracker.csv feature_test_results.json
+      # NOTE: a byte-exact "committed matches regenerated" check is intentionally
+      # NOT run here. The regenerated artifacts are environment-dependent (the
+      # .xlsx embeds a write timestamp; feature_test_results.json / the CSV Notes
+      # column embed runner-specific text such as the Python path in F58 and a
+      # render duration in F148), so it can never match a commit from another
+      # machine. Cross-artifact consistency is already enforced above by
+      # `tracker_integrity_audit --check` against the generator + results.
 
       - name: Upload tracker + results
         if: always()
