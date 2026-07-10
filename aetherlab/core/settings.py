@@ -63,6 +63,8 @@ class AppSettings:
     # Independent of scene_candidates, which is the explicit power-user override.
     auto_tournament: bool = True
     provider_source: str = "environment"
+    api_key_source: str = "none"
+    provider_warning: str = ""
 
 
 OLLAMA_OPENAI_BASE_URL = "http://localhost:11434/v1"
@@ -138,10 +140,16 @@ def load_settings() -> AppSettings:
     env_model = _first_env("AETHERLAB_LLM_MODEL", "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL")
     legacy_model = _first_mapping(legacy_env, "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL")
     llm_model = env_model or app_cfg.get("model") or legacy_model or qwen.get("model") or "gpt-5.5"
+    env_api_key, env_api_key_name = _first_env_named(
+        "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"
+    )
+    legacy_api_key, legacy_api_key_name = _first_mapping_named(
+        legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"
+    )
     api_key = (
-        _first_env("AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY")
+        env_api_key
         or app_cfg.get("api_key")
-        or _first_mapping(legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY")
+        or legacy_api_key
         or qwen.get("api_key")
     )
     base_url = (
@@ -157,12 +165,25 @@ def load_settings() -> AppSettings:
         base_url = base_url or OLLAMA_OPENAI_BASE_URL
         api_key = api_key or "ollama"
 
-    if env_model or _first_env(
-        "AETHERLAB_OPENAI_API_KEY",
-        "OPENAI_API_KEY",
-        "GPT_API_KEY",
-        "DASHSCOPE_API_KEY",
-    ):
+    if env_api_key_name:
+        api_key_source = f"environment: {env_api_key_name}"
+    elif app_cfg.get("api_key"):
+        api_key_source = f"app config: {app_config_path()}"
+    elif legacy_api_key_name:
+        api_key_source = f"legacy .env: {legacy_api_key_name}"
+    elif qwen.get("api_key"):
+        api_key_source = str(qwen.get("source") or "Qwen settings")
+    elif preset == "ollama":
+        api_key_source = "Ollama local (no secret)"
+    else:
+        api_key_source = "none"
+    provider_warning = (
+        f"{env_api_key_name} overrides the API key saved in Settings."
+        if env_api_key_name and app_cfg.get("api_key")
+        else ""
+    )
+
+    if env_model or env_api_key_name:
         source = "environment"
     elif preset == "ollama":
         source = "ollama-local"
@@ -322,6 +343,8 @@ def load_settings() -> AppSettings:
             default=True,
         ),
         provider_source=source,
+        api_key_source=api_key_source,
+        provider_warning=provider_warning,
     )
 
 
@@ -333,12 +356,30 @@ def _first_env(*names: str) -> str | None:
     return None
 
 
+def _first_env_named(*names: str) -> tuple[str | None, str | None]:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip(), name
+    return None, None
+
+
 def _first_mapping(values: dict[str, str], *names: str) -> str | None:
     for name in names:
         value = values.get(name)
         if value is not None and value.strip():
             return value.strip()
     return None
+
+
+def _first_mapping_named(
+    values: dict[str, str], *names: str
+) -> tuple[str | None, str | None]:
+    for name in names:
+        value = values.get(name)
+        if value is not None and value.strip():
+            return value.strip(), name
+    return None, None
 
 
 def _workflow_name(value: str | None) -> str:

@@ -119,9 +119,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
         from aetherlab.core.settings import load_app_config
 
+        app_config = load_app_config()
         self._preset_combo = QtWidgets.QComboBox()
         self._preset_combo.addItems(["Custom endpoint", "Local Ollama", "No AI (offline)"])
-        saved_preset = load_app_config().get("provider_preset", "")
+        saved_preset = app_config.get("provider_preset", "")
         self._preset_combo.setCurrentIndex(
             {"": 0, "custom": 0, "ollama": 1, "none": 2}.get(saved_preset, 0)
         )
@@ -131,7 +132,12 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         form.addLayout(self._labeled("Provider", self._preset_combo))
 
-        self._api_key_edit = QtWidgets.QLineEdit(settings.openai_api_key or "")
+        editable_key = (
+            app_config.get("api_key", "")
+            if str(getattr(settings, "api_key_source", "")).startswith("environment:")
+            else (settings.openai_api_key or "")
+        )
+        self._api_key_edit = QtWidgets.QLineEdit(editable_key)
         self._api_key_edit.setObjectName("MonoField")
         self._api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self._api_key_edit.setPlaceholderText("sk-…")
@@ -144,6 +150,23 @@ class SettingsDialog(QtWidgets.QDialog):
         self._model_edit = QtWidgets.QLineEdit(settings.llm_model)
         self._model_edit.setObjectName("MonoField")
         form.addLayout(self._labeled("Model", self._model_edit))
+
+        from aetherlab.ui.provider_status import ProviderStatusPanel
+
+        self._provider_status = ProviderStatusPanel(settings, self)
+        form.addWidget(self._provider_status)
+        self._model_edit.textChanged.connect(self._provider_status.set_model)
+
+        self._llm_timeout = QtWidgets.QSpinBox()
+        self._llm_timeout.setRange(5, 900)
+        self._llm_timeout.setSuffix(" s")
+        self._llm_timeout.setValue(int(settings.llm_timeout_seconds))
+        form.addLayout(self._labeled("Model timeout", self._llm_timeout))
+
+        self._llm_retries = QtWidgets.QComboBox()
+        self._llm_retries.addItems(["No automatic retries", "Retry once"])
+        self._llm_retries.setCurrentIndex(min(1, max(0, settings.llm_max_retries)))
+        form.addLayout(self._labeled("Timeout retries", self._llm_retries))
 
         # Test connection row
         test_row = QtWidgets.QHBoxLayout()
@@ -602,6 +625,8 @@ class SettingsDialog(QtWidgets.QDialog):
         return {
             "provider_preset": preset_map.get(self._preset_combo.currentIndex(), "custom"),
             "model": self._model_edit.text().strip(),
+            "llm_timeout_seconds": str(self._llm_timeout.value()),
+            "llm_max_retries": str(self._llm_retries.currentIndex()),
             "api_key": self._api_key_edit.text().strip() or None,
             "base_url": self._base_url_edit.text().strip() or None,
             "library_path": self._library_edit.text().strip(),
@@ -1093,11 +1118,13 @@ class MainWindow(QtWidgets.QMainWindow):
             vals = dialog.get_settings()
 
             # Persist to the app config so the values survive restarts.
-            from aetherlab.core.settings import save_app_config
+            from aetherlab.core.settings import load_settings, save_app_config
             save_app_config(
                 {
                     "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
+                    "llm_timeout_seconds": vals["llm_timeout_seconds"],
+                    "llm_max_retries": vals["llm_max_retries"],
                     "api_key": vals["api_key"],
                     "base_url": vals["base_url"],
                     "library_path": vals["library_path"],
@@ -1118,27 +1145,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 }
             )
 
-            from dataclasses import replace
-            self.settings = replace(
-                self.settings,
-                llm_model=vals["model"] or self.settings.llm_model,
-                openai_api_key=vals["api_key"],
-                openai_base_url=vals["base_url"],
-                library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
-                data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
-                render_mode=vals["render_mode"],
-                cloud_provider="github_actions",
-                github_repo=vals["github_repo"],
-                github_token=vals["github_token"] or "",
-                github_workflow=vals["github_workflow"],
-                github_branch=vals["github_branch"],
-                cloud_render_threshold=float(vals["cloud_render_threshold"]),
-                vision_model=vals["vision_model"],
-                web_references=vals["web_references"],
-                narration_enabled=vals["narration_enabled"],
-                auto_tournament=vals["auto_tournament"],
-                tts_voice=vals["tts_voice"] or self.settings.tts_voice,
-            )
+            # Re-resolve the just-saved config through the canonical precedence
+            # chain. Direct replacement made a saved key appear active until
+            # restart even when an environment key actually shadows it.
+            self.settings = load_settings()
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")
             from aetherlab.services.course_mode import CourseProgressStore

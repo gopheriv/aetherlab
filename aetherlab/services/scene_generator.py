@@ -7,6 +7,7 @@ import re
 
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
+from aetherlab.services.model_policy import codegen_request_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -406,6 +407,7 @@ class SceneGenerator:
                 # the whole point of storyboarding separately.
                 temperature=temperature,
                 max_tokens=4096,
+                **codegen_request_kwargs(self.settings),
             )
             content = response.choices[0].message.content or ""
             board = load_model_json(content)
@@ -536,6 +538,7 @@ class SceneGenerator:
             # <think> blocks, and the cinematic prompt yields 100+ line scenes —
             # leave generous room or the code gets cut off mid-statement.
             max_tokens=32768,
+            **codegen_request_kwargs(self.settings),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -580,6 +583,7 @@ class SceneGenerator:
             ],
             temperature=0.2,
             max_tokens=32768,
+            **codegen_request_kwargs(self.settings),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -611,6 +615,7 @@ class SceneGenerator:
             ],
             temperature=0.3,
             max_tokens=32768,
+            **codegen_request_kwargs(self.settings),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -657,6 +662,7 @@ class SceneGenerator:
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=0.5,
             max_tokens=1200,
+            **codegen_request_kwargs(self.settings),
         )
         text = (response.choices[0].message.content or "").strip()
         # Strip any accidental markdown fences/headers a model may add.

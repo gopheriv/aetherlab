@@ -39,6 +39,8 @@ GENERIC_LABELS = {
 IGNORE_SETTING_FIELDS = {
     # Internal attribution/debug field, not a user-configurable setting.
     "provider_source",
+    "api_key_source",
+    "provider_warning",
 }
 
 

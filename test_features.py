@@ -254,7 +254,12 @@ def t_f10():
     from aetherlab.ui.main_window import SettingsDialog
     d = SettingsDialog(_settings())
     vals = d.get_settings()
-    assert set(["model", "api_key", "base_url", "library_path", "data_dir", "default_quality"]).issubset(vals)
+    assert set([
+        "model", "api_key", "base_url", "llm_timeout_seconds", "llm_max_retries",
+        "library_path", "data_dir", "default_quality",
+    ]).issubset(vals)
+    assert d._provider_status.active_label.text().startswith("Active:")
+    assert "API key source:" in d._provider_status.source_label.text()
     assert isinstance(d._settings_scroll, QtWidgets.QScrollArea)
     assert d._settings_scroll.widgetResizable()
     screen = QtWidgets.QApplication.primaryScreen()
@@ -267,18 +272,46 @@ def t_f10():
     # Redirect the default data dir into _TMP so nothing touches the real config.
     import aetherlab.core.settings as S
     saved_env = os.environ.pop("AETHERLAB_DATA_DIR", None)
+    key_names = (
+        "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY",
+    )
+    saved_keys = {name: os.environ.pop(name, None) for name in key_names}
     orig_default = S._default_data_dir
     S._default_data_dir = lambda: _TMP / "cfghome"
     try:
         custom = _TMP / "custom_data"
-        S.save_app_config({"data_dir": str(custom)})
+        S.save_app_config({
+            "data_dir": str(custom), "api_key": "saved-secret",
+            "model": "qwen3-coder-plus", "base_url": "https://dashscope.example/v1",
+        })
         assert S.load_settings().data_dir == custom, "data_dir must persist from app-config"
+        os.environ["DASHSCOPE_API_KEY"] = "stale-env-secret"
+        shadowed = S.load_settings()
+        assert shadowed.openai_api_key == "stale-env-secret"
+        assert shadowed.api_key_source == "environment: DASHSCOPE_API_KEY"
+        assert "DASHSCOPE_API_KEY overrides" in shadowed.provider_warning
+        from aetherlab.ui.provider_status import ProviderStatusPanel
+        status = ProviderStatusPanel(shadowed)
+        visible = " ".join((
+            status.active_label.text(), status.source_label.text(), status.warning_label.text(),
+        ))
+        assert "Qwen / DashScope" in visible and "DASHSCOPE_API_KEY" in visible
+        assert "stale-env-secret" not in visible and "saved-secret" not in visible
+        status.close()
+        shadow_dialog = SettingsDialog(shadowed)
+        assert shadow_dialog._api_key_edit.text() == "saved-secret"
+        assert "stale-env-secret" not in shadow_dialog._api_key_edit.text()
+        shadow_dialog.close()
     finally:
         S._default_data_dir = orig_default
         (_TMP / "cfghome" / "settings.json").unlink(missing_ok=True)
+        for name, value in saved_keys.items():
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
         if saved_env is not None:
             os.environ["AETHERLAB_DATA_DIR"] = saved_env
-    return "settings dialog scrolls/fits screen; keys ok; Data path persists via config (BUG-4)"
+    return "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
 
 
 def t_f11():
@@ -1078,16 +1111,28 @@ def t_f107():
     class _Client:
         chat = _Chat()
 
-    sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
+    sg = SceneGenerator(replace(
+        _settings(), openai_api_key="sk-test", llm_model="qwen3.7-plus"
+    ))
     sg._client = _Client()
     code = asyncio.run(sg._generate_remote(
         ProblemRequest(prompt="pendulum"), _solver(), _rag(), "AetherLabScene"))
     assert len(calls) == 2, "storyboard call + codegen call expected"
     assert calls[0]["temperature"] == 0.9 and calls[1]["temperature"] == 0.15
+    assert all(
+        call.get("extra_body") == {"enable_thinking": False} for call in calls
+    ), calls
     assert "Locked storyboard" in calls[1]["messages"][1]["content"]
     assert sg._last_storyboard and "acts" in sg._last_storyboard
     assert "class AetherLabScene" in code
-    return "hot storyboard@0.9 → cold codegen@0.15; fail-soft (F107)"
+    from aetherlab.services.model_policy import (
+        codegen_request_kwargs, is_thinking_only_model, model_codegen_warning,
+    )
+    assert codegen_request_kwargs(sg.settings) == {"extra_body": {"enable_thinking": False}}
+    assert is_thinking_only_model("qwen3.7-max-preview")
+    assert "qwen3-coder-plus" in model_codegen_warning("qwen3.7-plus", 60)
+    assert inspect.getsource(SceneGenerator).count("codegen_request_kwargs") >= 5
+    return "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
 
 
 def t_f108():
