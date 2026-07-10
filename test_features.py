@@ -23,8 +23,11 @@ import traceback
 from pathlib import Path
 
 try:  # Windows consoles default to cp1251/cp1252 and choke on arrows in notes.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    # line_buffering=True flushes every line so a HARD crash (native abort, no
+    # Python traceback) still records progress in a redirected CI log — otherwise
+    # block-buffering loses which test was running when the process died.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 except Exception:  # noqa: BLE001
     pass
 
@@ -60,15 +63,18 @@ results: dict[str, dict] = {}
 
 
 def check(fid: str, fn) -> None:
+    # Flushed pre-run marker: if a test HARD-crashes the process (native abort,
+    # no catchable exception), this is the last line in the log — pinpointing it.
+    print(f"  [run ] {fid} ...", flush=True)
     try:
         note = fn() or ""
         results[fid] = {"status": "PASS", "note": str(note)[:300]}
-        print(f"  [PASS] {fid}: {note}")
+        print(f"  [PASS] {fid}: {note}", flush=True)
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         results[fid] = {"status": "FAIL", "note": f"{type(exc).__name__}: {exc}"[:300]}
-        print(f"  [FAIL] {fid}: {type(exc).__name__}: {exc}")
-        print("\n".join("      " + ln for ln in tb.splitlines()[-4:]))
+        print(f"  [FAIL] {fid}: {type(exc).__name__}: {exc}", flush=True)
+        print("\n".join("      " + ln for ln in tb.splitlines()[-4:]), flush=True)
 
 
 def _ffmpeg_exe():
