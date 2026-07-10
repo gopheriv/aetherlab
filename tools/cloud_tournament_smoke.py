@@ -36,6 +36,9 @@ _SCENE = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=3, help="number of concurrent identical candidates")
     args = parser.parse_args(argv)

@@ -181,6 +181,9 @@ def audit() -> dict[str, object]:
 
 
 def main() -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Audit code surfaces against the feature tracker.")
     parser.add_argument("--json", action="store_true", help="Print the full JSON report.")
     parser.add_argument(

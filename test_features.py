@@ -115,7 +115,8 @@ def t_f01():
 def t_f02():
     import subprocess
     r = subprocess.run([sys.executable, "-m", "aetherlab", "--smoke", "Solve the simple pendulum"],
-                       capture_output=True, text=True, timeout=600, env={**os.environ})
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=600, env={**os.environ})
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr[-300:]}"
     assert "smoke pipeline complete" in r.stdout.lower(), r.stdout[-300:]
     return "smoke exit 0; scene status line present"
@@ -2219,7 +2220,8 @@ def t_f131():
     import subprocess
     from aetherlab import __version__
     r = subprocess.run([sys.executable, "-m", "aetherlab", "--version"],
-                       capture_output=True, text=True, timeout=60, env={**os.environ})
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, env={**os.environ})
     assert __version__ in (r.stdout + r.stderr), (r.stdout, r.stderr)
     from aetherlab.__main__ import _setup_logging
     _setup_logging()
@@ -2276,18 +2278,66 @@ def t_f133():
         if "creationflags=" in pathlib.Path(f).read_text(encoding="utf-8"):
             offenders.append(f)
     assert not offenders, f"raw creationflags remain in: {offenders}"
-    # BUG-33: every text-capturing external-tool call must decode as UTF-8 with a
-    # lossy fallback. Without it a non-UTF-8 host locale (e.g. cp1251) raises
-    # UnicodeDecodeError in subprocess's reader thread and fails the render.
+    # BUG-33/39: audit every Python surface instead of a hand-maintained five-
+    # file list. Text subprocess pipes and text files must specify encodings;
+    # print-producing entry points must configure redirected legacy streams.
+    import ast
+    import io
+
+    from aetherlab.core.console import configure_utf8_stdio
+
+    roots = [pathlib.Path("aetherlab"), pathlib.Path("tools"), pathlib.Path("packaging")]
+    py_files = sorted({p for root in roots for p in root.rglob("*.py")})
+    py_files += [pathlib.Path("build_feature_tracker.py"), pathlib.Path("aetherlab_watchdog.py"), pathlib.Path("test_features.py")]
     undecoded = []
-    for f in ("aetherlab/services/manim_runtime.py", "aetherlab/services/scene_critic.py",
-              "aetherlab/services/pdf.py", "aetherlab/services/render_backend.py",
-              "aetherlab/ui/main_window.py"):
-        src = pathlib.Path(f).read_text(encoding="utf-8")
-        if src.count('errors="replace"') < src.count("text=True"):
-            undecoded.append(f)
-    assert not undecoded, f"text=True subprocess calls missing UTF-8/errors=replace in: {undecoded}"
-    return "xplat kwargs win↔posix; zero raw creationflags; UTF-8 tool output (F133)"
+    default_codec = []
+    unsafe_console = []
+    for path in py_files:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        has_print = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "print":
+                has_print = True
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.func.attr in {"run", "Popen", "check_output", "check_call"}
+            ):
+                kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+                text_mode = any(
+                    isinstance(kwargs.get(name), ast.Constant) and kwargs[name].value is True
+                    for name in ("text", "universal_newlines")
+                )
+                if text_mode and not {"encoding", "errors"} <= set(kwargs):
+                    undecoded.append(f"{path}:{node.lineno}")
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {"read_text", "write_text"}:
+                kwargs = {kw.arg for kw in node.keywords if kw.arg}
+                if "encoding" not in kwargs:
+                    default_codec.append(f"{path}:{node.lineno}")
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                mode = "r"
+                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                    mode = str(node.args[1].value)
+                kwargs = {kw.arg for kw in node.keywords if kw.arg}
+                if "b" not in mode and "encoding" not in kwargs:
+                    default_codec.append(f"{path}:{node.lineno}")
+        if has_print and "configure_utf8_stdio" not in source:
+            unsafe_console.append(str(path))
+    assert not undecoded, f"text subprocess calls missing UTF-8/errors=replace: {undecoded}"
+    assert not default_codec, f"text file calls relying on locale codec: {default_codec}"
+    assert not unsafe_console, f"print entry points lack UTF-8 stdio policy: {unsafe_console}"
+
+    raw = io.BytesIO()
+    cp1251 = io.TextIOWrapper(raw, encoding="cp1251", errors="strict")
+    configure_utf8_stdio((cp1251,))
+    cp1251.write("revision → θ")
+    cp1251.flush()
+    assert raw.getvalue().decode("utf-8") == "revision → θ"
+    return "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
 
 
 def t_f134():
@@ -4856,6 +4906,9 @@ TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
 
 
 def main() -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     print("=" * 72)
     print(f"AETHERLAB FEATURE TESTS  ({len(TESTS)} features)  tmp={_TMP}")
     print("=" * 72)

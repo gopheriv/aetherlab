@@ -55,7 +55,7 @@ FEATURES: list[tuple[str, ...]] = [
     # ── Settings / Config ───────────────────────────────────────────────────
     ("F06", "Settings", "Load settings from environment",
      "As a user, my AETHERLAB_*/OPENAI_* env vars configure the app, and I can reuse compatible manim-bot env names during migration.",
-     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, provider fields, and bounded LLM controls (AETHERLAB_LLM_TIMEOUT 5–900s and AETHERLAB_LLM_MAX_RETRIES 0–1, also persisted in app config). Every asynchronous OpenAI-compatible client uses the same effective timeout/retry policy, so the SDK's default retries cannot multiply a slow call. Compatible manim-bot aliases and a legacy .env can fill still-unset fields unless disabled.",
+     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, provider fields, and bounded LLM controls (`llm_timeout_seconds` via AETHERLAB_LLM_TIMEOUT, 5–900s; `llm_max_retries` via AETHERLAB_LLM_MAX_RETRIES, 0–1; both persisted in app config). Every asynchronous OpenAI-compatible client uses the same effective policy, so SDK retries cannot multiply a slow call. Compatible manim-bot aliases and a legacy .env can fill still-unset fields unless disabled.",
      "core/settings.py", "headless", "Documented", ""),
     ("F07", "Settings", "App-config persistence (settings.json)",
      "As a user, values I save in the Settings dialog survive restarts.",
@@ -603,8 +603,8 @@ FEATURES: list[tuple[str, ...]] = [
      "packaging/ / services/manim_runtime.py / scene_generator.py / docs/ / .github/", "headless", "Documented", ""),
     ("F133", "Render", "Cross-platform render subprocess",
      "As a user on any OS (and any cloud/Linux runner), rendering and the ffmpeg/pdflatex helpers work.",
-     "core/proc.subprocess_kwargs() returns creationflags (CREATE_NO_WINDOW, optional BELOW_NORMAL_PRIORITY) on Windows and start_new_session=True on POSIX — the Windows-only flags never reach a Linux subprocess. All six call sites (manim render, pdflatex, GIF ffmpeg, ffprobe/ffmpeg frame sampling) use it; zero raw creationflags remain. Prerequisite for cloud rendering (runners are Linux).",
-     "core/proc.py / services/manim_runtime.py / pdf.py / scene_critic.py / ui/main_window.py", "headless", "Documented", ""),
+     "core/proc.subprocess_kwargs() keeps Windows creationflags off POSIX. Every text-capturing subprocess specifies UTF-8 with replacement, every Path/open text call specifies an encoding, and print-producing CLI entry points call core.console.configure_utf8_stdio so redirected legacy-code-page streams cannot raise. F133 performs an AST audit across aetherlab, tools, packaging, the tracker builder, watchdog, and feature harness instead of relying on a hand-maintained call-site list.",
+     "core/proc.py / core/console.py / services/ / ui/ / tools/ / packaging/", "headless", "Documented", ""),
     ("F134", "Render", "Frame-cache desync fix (the sync bug)",
      "As a user, a regenerated/repaired scene renders exactly its current code — never spliced with stale frames from a previous render.",
      "Each render runs in an isolated uuid-suffixed media dir (_RUNS_DIR/<scene>_<q>_<uuid>) with --disable_caching, so Manim can never reuse a partial-movie file across renders. _find_video_in returns THIS render's mp4 (class-named, mtime-fresh) instead of 'newest mp4 in a shared tree'. Old run dirs are LRU-pruned (bounded temp); a pruned cached video self-heals via the pipeline's video-missing re-render.",
@@ -2410,7 +2410,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     # F148/F166/F167 already stamped inline. DEFECTS-linked bugs noted.
     "F131": ("PASS", "None", "PASS"),
     "F132": ("PASS", "None", "PASS"),
-    "F133": ("PASS", "BUG-33", "PASS"),
+    "F133": ("PASS", "BUG-33; BUG-39", "PASS"),
     "F134": ("PASS", "None", "PASS"),
     "F135": ("PASS", "None", "PASS"),
     "F136": ("PASS", "None", "PASS"),
@@ -2620,7 +2620,7 @@ DEFECTS: dict[str, str] = {
     "F166": "BUG-26: export_lesson_bundle wrote the zip straight to the target, so a mid-write failure (disk full, missing asset) truncated it and destroyed any prior good bundle, leaving a plausible-but-incomplete zip that still opened. Now builds into a sibling .part file and os.replace()s onto the target only on full success, unlinking staging on failure.",
     "F167": "BUG-27: _QuestionCard radios were never locked and re-emitted answer_recorded on every toggle, so switching a selection (or clicking each option until '✓ Correct') recorded multiple quiz attempts and inflated the persisted course score. The card now records only the first answer and disables the group afterward.",
     "F180": "BUG-32: the A/B verdict said 'did NOT help' whenever more prompts regressed than improved (`or losses > wins`), even with a POSITIVE mean lift — a self-contradicting conclusion (`did NOT help (mean +2.00, 1 win / 2 loss)`) for the flywheel's core measurement. Now the negative verdict requires a negative mean (`mean_lift < -eps and losses >= wins`) and sign/count disagreement routes to an explicit 'Mixed result' verdict. Regression in t_f180.",
-    "F133": "BUG-33: all six external-tool subprocess call sites (Manim render, pdflatex, GIF ffmpeg, ffmpeg/ffprobe frame sampling, gh auth) captured output with text=True but no encoding, so Python decoded child bytes with the host LOCALE codec. On a non-UTF-8 Windows console (cp1251/Cyrillic) Manim's UTF-8 output containing a byte undefined in that codec raised UnicodeDecodeError in subprocess's reader thread, failing an otherwise-successful render — seen as a visual revision that 'did not render', silently capping scene quality. Fixed by adding encoding='utf-8', errors='replace' to all six calls. Regression in t_f133.",
+    "F133": "BUG-33: six external-tool subprocesses decoded text with the host locale and could crash on cp1251; they now use UTF-8/errors=replace. BUG-39: the follow-up found packaging/build.py's frozen smoke capture still locale-decoded and print-producing tools could fail when redirected to a legacy stream. The smoke capture is explicit UTF-8, every CLI configures UTF-8 stdio fail-soft, and t_f133 now AST-audits all production/test Python for text subprocess, text-file, and console encoding assumptions.",
     "F108": "BUG-35: vision critique parsed model text with strict json.loads; a raw LaTeX backslash such as \\omega raised Invalid \\escape and skipped critique, while \\theta silently decoded as a tab. Model responses now use a conservative JSON-object extractor and string-only repair shared by all model-JSON paths. BUG-38: aesthetic revisions were discarded immediately on their first static-gate or render failure; revised code now receives one targeted static repair and one traceback-driven render repair, while the prior cut remains the fallback. Regressions in t_f108.",
     "F171": "BUG-36: tournament variants isolated cloud job/artifact names but every candidate still committed through GitHub's shared render branch concurrently; the Contents API documents concurrent mutations as conflicts, observed as HTTP 409. Writes now serialize per repo/branch and retry 409 with bounded backoff for cross-process races. Regression in t_f171.",
     "F155": "BUG-37: an exhausted cloud poll budget returned terminal render-timeout, so ManimRuntime never entered its cloud-unavailable local fallback and each tournament candidate could wait the full 1800s ceiling. Cloud timeouts are now adaptive under the configured ceiling, cancel the remote run best-effort, return cloud-unavailable, and immediately fall back locally with clear diagnostics. Regression in t_f155 (plus timeout-cap coverage in t_f152).",
@@ -2648,6 +2648,9 @@ def apply_results() -> None:
 
 
 if __name__ == "__main__":
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     apply_results()
     write_csv()
     write_xlsx()

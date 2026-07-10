@@ -54,6 +54,9 @@ SECRET_ENV_KEYS = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)

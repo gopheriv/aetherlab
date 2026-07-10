@@ -105,6 +105,9 @@ def fit_quality_proxy(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, default=None,
                         help="render_ledger.json to train from (default: the app's data dir).")

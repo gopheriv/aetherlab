@@ -203,6 +203,9 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Verify tracker generator/CSV/XLSX/results/test parity."
     )

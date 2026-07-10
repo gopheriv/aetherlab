@@ -277,6 +277,9 @@ def render_report(summary: dict[str, Any], source: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, default=None,
                         help="Path to render_ledger.json (default: the app's data dir).")

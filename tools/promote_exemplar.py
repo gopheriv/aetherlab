@@ -35,6 +35,9 @@ def _store():
 
 
 def main(argv: list[str] | None = None) -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--list", action="store_true", help="list exemplar candidates")
