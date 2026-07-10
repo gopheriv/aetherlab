@@ -270,11 +270,9 @@ async def critique_video(
     try:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            timeout=max(settings.llm_timeout_seconds, 300),
-        )
+        from aetherlab.services.model_policy import openai_client_kwargs
+
+        client = AsyncOpenAI(**openai_client_kwargs(settings))
         response = await client.chat.completions.create(
             model=settings.vision_model,
             messages=[

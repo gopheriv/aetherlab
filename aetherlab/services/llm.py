@@ -91,13 +91,11 @@ class AsyncLLMCoordinator:
     async def _solve_remote(self, request: ProblemRequest) -> SolverResult:
         from openai import AsyncOpenAI
 
+        from aetherlab.services.model_policy import openai_client_kwargs
+
         # Lazy-create client on first use
         if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=max(self.settings.llm_timeout_seconds, 300),
-            )
+            self._client = AsyncOpenAI(**openai_client_kwargs(self.settings))
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,

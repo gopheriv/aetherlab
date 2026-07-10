@@ -25,6 +25,7 @@ class AppSettings:
     openai_base_url: str | None
     llm_model: str
     llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = 0
     llm_context_window: int = 250_000
     # Optional vision-capable model (same OpenAI-compatible endpoint) used by
     # the scene critic to look at rendered frames. None disables the critique
@@ -186,7 +187,29 @@ def load_settings() -> AppSettings:
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,
-        llm_timeout_seconds=float(_first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT") or "60"),
+        llm_timeout_seconds=max(
+            5.0,
+            min(
+                900.0,
+                _as_float(
+                    _first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT"),
+                    app_cfg.get("llm_timeout_seconds"),
+                    _first_mapping(legacy_env, "LLM_TIMEOUT"),
+                    default=60.0,
+                ),
+            ),
+        ),
+        llm_max_retries=max(
+            0,
+            min(
+                1,
+                _as_int(
+                    os.getenv("AETHERLAB_LLM_MAX_RETRIES"),
+                    app_cfg.get("llm_max_retries"),
+                    default=0,
+                ),
+            ),
+        ),
         vision_model=(
             _first_env("AETHERLAB_VISION_MODEL", "VISION_MODEL")
             or app_cfg.get("vision_model")

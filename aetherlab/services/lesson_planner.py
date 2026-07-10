@@ -115,11 +115,9 @@ async def _plan_remote(
 ) -> "LessonPlan | None":
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        timeout=max(settings.llm_timeout_seconds, 300),
-    )
+    from aetherlab.services.model_policy import openai_client_kwargs
+
+    client = AsyncOpenAI(**openai_client_kwargs(settings))
     if audience not in VALID_AUDIENCES:
         audience = "undergrad"
     user = (

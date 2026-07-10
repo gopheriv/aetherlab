@@ -153,7 +153,8 @@ def t_f06():
     keys = (
         "AETHERLAB_LLM_MODEL", "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY",
         "AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "MANIM_MODEL",
-        "GPT_API_KEY", "GPT_BASE_URL", "LLM_TIMEOUT",
+        "GPT_API_KEY", "GPT_BASE_URL", "AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT",
+        "AETHERLAB_LLM_MAX_RETRIES",
         "AETHERLAB_VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_MAX_PASSES",
         "AETHERLAB_VISUAL_CRITIC_KEYFRAMES", "VISUAL_CRITIC_KEYFRAMES",
         "AETHERLAB_SCENE_CANDIDATES", "AETHERLAB_SCENE_CANDIDATE_CONCURRENCY",
@@ -163,7 +164,9 @@ def t_f06():
         os.environ["MANIM_MODEL"] = "manim-bot-code-model"
         os.environ["GPT_API_KEY"] = "sk-gpt"
         os.environ["GPT_BASE_URL"] = "https://example.test/v1"
+        os.environ["AETHERLAB_LLM_TIMEOUT"] = "17"
         os.environ["LLM_TIMEOUT"] = "77"
+        os.environ["AETHERLAB_LLM_MAX_RETRIES"] = "1"
         os.environ["VISUAL_CRITIC_MAX_PASSES"] = "3"
         os.environ["VISUAL_CRITIC_KEYFRAMES"] = "4"
         os.environ["AETHERLAB_SCENE_CANDIDATES"] = "3"
@@ -172,7 +175,8 @@ def t_f06():
         assert compat.llm_model == "manim-bot-code-model"
         assert compat.openai_api_key == "sk-gpt"
         assert compat.openai_base_url == "https://example.test/v1"
-        assert compat.llm_timeout_seconds == 77.0
+        assert compat.llm_timeout_seconds == 17.0
+        assert compat.llm_max_retries == 1
         assert compat.visual_critic_max_passes == 3 and compat.visual_critic_keyframes == 4
         assert compat.scene_candidates == 3 and compat.scene_candidate_concurrency == 2
     finally:
@@ -180,7 +184,29 @@ def t_f06():
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-    return f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; manim-bot aliases load"
+
+    # BUG-34: every asynchronous model client must use one bounded timeout /
+    # retry policy. The SDK defaults to two retries, multiplying a slow call.
+    from aetherlab.services.model_policy import openai_client_kwargs
+    from dataclasses import replace
+
+    bounded = replace(s, llm_timeout_seconds=17, llm_max_retries=1)
+    assert openai_client_kwargs(bounded)["timeout"] == 17
+    assert openai_client_kwargs(bounded)["max_retries"] == 1
+    for path in (
+        "aetherlab/services/llm.py",
+        "aetherlab/services/scene_generator.py",
+        "aetherlab/services/scene_critic.py",
+        "aetherlab/services/lesson_planner.py",
+        "aetherlab/services/fact_check.py",
+    ):
+        src = Path(path).read_text(encoding="utf-8")
+        assert "openai_client_kwargs" in src, f"unbounded model client in {path}"
+        assert "timeout=max(" not in src, f"hidden timeout floor remains in {path}"
+    return (
+        f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; "
+        "bounded async client retries; manim-bot aliases load (BUG-34)"
+    )
 
 
 def t_f07():

@@ -333,12 +333,10 @@ class SceneGenerator:
     def _ensure_client(self):
         from openai import AsyncOpenAI
 
+        from aetherlab.services.model_policy import openai_client_kwargs
+
         if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=max(self.settings.llm_timeout_seconds, 300),
-            )
+            self._client = AsyncOpenAI(**openai_client_kwargs(self.settings))
         return self._client
 
     async def storyboard(
@@ -542,16 +540,9 @@ class SceneGenerator:
 
     async def repair(self, code: str, error: str, class_name: str) -> str:
         """Ask the LLM to fix a scene that failed at render time."""
-        from openai import AsyncOpenAI
+        client = self._ensure_client()
 
-        if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=max(self.settings.llm_timeout_seconds, 300),
-            )
-
-        response = await self._client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=self.settings.llm_model,
             messages=[
                 {

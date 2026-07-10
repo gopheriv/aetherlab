@@ -86,11 +86,9 @@ def _cite(hit) -> str:
 async def _check_chapter(chapter, hits, settings: "AppSettings") -> None:
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        timeout=max(settings.llm_timeout_seconds, 120),
-    )
+    from aetherlab.services.model_policy import openai_client_kwargs
+
+    client = AsyncOpenAI(**openai_client_kwargs(settings))
     passages = "\n\n".join(f"[{_cite(h)}]\n{h.excerpt[:500]}" for h in hits[:3])
     user = (
         f"## Chapter narration\n{chapter.narration}\n\n"
