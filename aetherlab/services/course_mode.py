@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
+
 
 @dataclass(frozen=True)
 class CourseSummary:
@@ -33,47 +35,62 @@ class CourseProgressStore:
         correct: bool,
         choice: str,
     ) -> CourseSummary:
-        data = self._load()
-        lessons = data.setdefault("lessons", {})
-        key = lesson_key(plan)
-        entry = lessons.setdefault(
-            key,
-            {
-                "title": str(getattr(plan, "title", "")),
-                "topic": str(getattr(plan, "topic", "")),
-                "audience": str(getattr(plan, "audience", "")),
-                "attempts": 0,
-                "correct": 0,
-                "questions": {},
-            },
-        )
-        now = datetime.now(timezone.utc).isoformat()
-        questions = entry.setdefault("questions", {})
-        q_entry = questions.setdefault(str(question_index), {})
-        q_entry["prompt"] = _question_prompt(plan, question_index)
-        q_entry["concept"] = _question_concept(plan, question_index)
-        q_entry["attempts"] = int(q_entry.get("attempts", 0)) + 1
-        q_entry["last_choice"] = str(choice)
-        q_entry["last_correct"] = bool(correct)
-        q_entry["last_at"] = now
-        if correct:
-            q_entry["correct"] = int(q_entry.get("correct", 0)) + 1
-        else:
-            q_entry["misses"] = int(q_entry.get("misses", 0)) + 1
-        entry["attempts"] = int(entry.get("attempts", 0)) + 1
-        if correct:
-            entry["correct"] = int(entry.get("correct", 0)) + 1
-        entry["last_at"] = now
-        self._save(data)
-        return self.summary(plan)
+        with path_lock(self.path):
+            data = self._load()
+            lessons = data.setdefault("lessons", {})
+            key = lesson_key(plan)
+            entry = lessons.get(key)
+            if not isinstance(entry, dict):
+                entry = {
+                    "title": str(getattr(plan, "title", "")),
+                    "topic": str(getattr(plan, "topic", "")),
+                    "audience": str(getattr(plan, "audience", "")),
+                    "attempts": 0,
+                    "correct": 0,
+                    "questions": {},
+                }
+                lessons[key] = entry
+            now = datetime.now(timezone.utc).isoformat()
+            questions = entry.get("questions")
+            if not isinstance(questions, dict):
+                questions = {}
+                entry["questions"] = questions
+            q_entry = questions.get(str(question_index))
+            if not isinstance(q_entry, dict):
+                q_entry = {}
+                questions[str(question_index)] = q_entry
+            q_entry["prompt"] = _question_prompt(plan, question_index)
+            q_entry["concept"] = _question_concept(plan, question_index)
+            q_entry["attempts"] = _count(q_entry.get("attempts")) + 1
+            q_entry["last_choice"] = str(choice)
+            q_entry["last_correct"] = bool(correct)
+            q_entry["last_at"] = now
+            if correct:
+                q_entry["correct"] = _count(q_entry.get("correct")) + 1
+            else:
+                q_entry["misses"] = _count(q_entry.get("misses")) + 1
+            entry["attempts"] = _count(entry.get("attempts")) + 1
+            if correct:
+                entry["correct"] = _count(entry.get("correct")) + 1
+            entry["last_at"] = now
+            self._save(data)
+            return self.summary(plan)
 
     def summary(self, plan: Any) -> CourseSummary:
-        data = self._load()
-        entry = data.get("lessons", {}).get(lesson_key(plan), {})
-        attempts = int(entry.get("attempts", 0) or 0)
-        correct = int(entry.get("correct", 0) or 0)
+        with path_lock(self.path):
+            data = self._load()
+        lessons = data.get("lessons", {})
+        if not isinstance(lessons, dict):
+            lessons = {}
+        entry = lessons.get(lesson_key(plan), {})
+        if not isinstance(entry, dict):
+            entry = {}
+        attempts = _count(entry.get("attempts"))
+        correct = _count(entry.get("correct"))
         score = (correct / attempts) if attempts else 0.0
         questions = entry.get("questions", {})
+        if not isinstance(questions, dict):
+            questions = {}
         missed = [
             str(q.get("concept", "")).strip()
             for q in questions.values()
@@ -102,16 +119,20 @@ class CourseProgressStore:
         )
 
     def _load(self) -> dict[str, Any]:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        with path_lock(self.path):
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return {"schema": "aetherlab.course_progress.v1", "lessons": {}}
+        if not isinstance(payload, dict):
             return {"schema": "aetherlab.course_progress.v1", "lessons": {}}
+        if not isinstance(payload.get("lessons"), dict):
+            payload["lessons"] = {}
+        return payload
 
     def _save(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
-        tmp.replace(self.path)
+        with path_lock(self.path):
+            atomic_write_json(self.path, data)
 
 
 def lesson_key(plan: Any) -> str:
@@ -119,6 +140,13 @@ def lesson_key(plan: Any) -> str:
     audience = str(getattr(plan, "audience", "undergrad")).lower()
     normalized = re.sub(r"[^a-z0-9]+", "-", topic).strip("-") or "lesson"
     return f"{audience}:{normalized}"
+
+
+def _count(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _question_prompt(plan: Any, question_index: int) -> str:

@@ -21,11 +21,11 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=gpt-5.5 data_dir set timeout=60.0; manim-bot aliases load"
+    "note": "model=gpt-5.5 data_dir set timeout=60.0; bounded async client retries; manim-bot aliases load (BUG-34)"
   },
   "F07": {
     "status": "PASS",
-    "note": "save/load round-trip; None dropped; path honored"
+    "note": "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
   },
   "F08": {
     "status": "PASS",
@@ -37,7 +37,7 @@
   },
   "F10": {
     "status": "PASS",
-    "note": "settings dialog scrolls/fits screen; keys ok; Data path persists via config (BUG-4)"
+    "note": "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
   },
   "F11": {
     "status": "PASS",
@@ -129,7 +129,7 @@
   },
   "F33": {
     "status": "PASS",
-    "note": "scene reused only on engine+status match; stale missing videos re-render"
+    "note": "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
   },
   "F34": {
     "status": "PASS",
@@ -421,11 +421,11 @@
   },
   "F106": {
     "status": "PASS",
-    "note": "lint+LaTeX+duration+hygiene checks work; wired into gen+repair (F106)"
+    "note": "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
   },
   "F107": {
     "status": "PASS",
-    "note": "hot storyboard@0.9 \u2192 cold codegen@0.15; fail-soft (F107)"
+    "note": "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
   },
   "F108": {
     "status": "PASS",
@@ -529,7 +529,7 @@
   },
   "F133": {
     "status": "PASS",
-    "note": "xplat kwargs win\u2194posix; zero raw creationflags; UTF-8 tool output (F133)"
+    "note": "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
   },
   "F134": {
     "status": "PASS",
@@ -617,7 +617,7 @@
   },
   "F155": {
     "status": "PASS",
-    "note": "cloud unavailable falls back to local without raising (F155)"
+    "note": "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
   },
   "F156": {
     "status": "PASS",
@@ -653,7 +653,7 @@
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 66/66 current surfaces (F164)"
+    "note": "feature-surface audit covers 69/69 current surfaces (F164)"
   },
   "F165": {
     "status": "PASS",
@@ -681,7 +681,7 @@
   },
   "F171": {
     "status": "PASS",
-    "note": "cloud fan-out: per-candidate job-id isolation prevents concurrent artifact collision (F171)"
+    "note": "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
   },
   "F172": {
     "status": "PASS",
@@ -697,7 +697,7 @@
   },
   "F175": {
     "status": "PASS",
-    "note": "render-farm ledger: secret-scrubbed job/candidate events with tournament + cloud wiring (F175)"
+    "note": "render-farm ledger + atomic concurrent JSON persistence across stores (F175)"
   },
   "F176": {
     "status": "PASS",

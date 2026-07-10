@@ -22,6 +22,8 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
+
 log = logging.getLogger(__name__)
 
 # ── the exemplars ───────────────────────────────────────────────────────────
@@ -282,7 +284,7 @@ class ExemplarCandidateStore:
             return []
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
+            return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
         except Exception as exc:  # noqa: BLE001 — corruption must not break render
             log.debug("exemplar-candidate store unreadable: %s", exc)
             return []
@@ -308,18 +310,18 @@ class ExemplarCandidateStore:
             from aetherlab.services import embeddings as _emb
 
             vec = _emb.embed_one(query_text) if query_text else None
-            items = [c for c in self._load() if c.get("code") != code]
-            items.insert(0, {
-                "domain": str(domain or "unknown"),
-                "code": str(code),
-                "score": round(float(score), 3),
-                "verdict": str(verdict),
-                "query_text": str(query_text or ""),
-                "embedding": [float(x) for x in vec] if vec is not None else None,
-                "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            })
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(items[:_MAX_CANDIDATES], indent=2), encoding="utf-8")
+            with path_lock(self.path):
+                items = [c for c in self._load() if c.get("code") != code]
+                items.insert(0, {
+                    "domain": str(domain or "unknown"),
+                    "code": str(code),
+                    "score": round(float(score), 3),
+                    "verdict": str(verdict),
+                    "query_text": str(query_text or ""),
+                    "embedding": [float(x) for x in vec] if vec is not None else None,
+                    "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                })
+                atomic_write_json(self.path, items[:_MAX_CANDIDATES])
             return True
         except Exception as exc:  # noqa: BLE001 — promotion is a bonus, never fatal
             log.debug("could not record exemplar candidate: %s", exc)

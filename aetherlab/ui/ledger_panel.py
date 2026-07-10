@@ -83,7 +83,10 @@ class RenderLedgerPanel(QtWidgets.QWidget):
             winner = rec.get("winner_index")
             label = f"{_status_glyph(status)} {rec.get('scene_class', 'job')} · {backend}"
             if winner is not None:
-                label += f" · winner #{int(winner) + 1}"
+                try:
+                    label += f" · winner #{int(winner) + 1}"
+                except (TypeError, ValueError):
+                    pass
             self._jobs.addItem(QtWidgets.QListWidgetItem(label))
         has_jobs = bool(self._records)
         self._empty.setVisible(not has_jobs)
@@ -117,8 +120,17 @@ class RenderLedgerPanel(QtWidgets.QWidget):
         if candidates:
             parts.append("<h4 style='color:#E2E8F0;margin:12px 0 4px'>Candidates</h4><ul>")
             for cand in candidates:
-                idx = int(cand.get("index", 0))
-                mark = " ← winner" if winner is not None and idx == int(winner) else ""
+                if not isinstance(cand, dict):
+                    continue
+                try:
+                    idx = int(cand.get("index", 0))
+                except (TypeError, ValueError):
+                    idx = 0
+                try:
+                    is_winner = winner is not None and idx == int(winner)
+                except (TypeError, ValueError):
+                    is_winner = False
+                mark = " ← winner" if is_winner else ""
                 colour = "#10B981" if mark else "#E2E8F0"
                 parts.append(
                     f"<li style='color:{colour}'>#{idx + 1}: score "
@@ -138,6 +150,8 @@ class RenderLedgerPanel(QtWidgets.QWidget):
         if timeline:
             parts.append("<h4 style='color:#E2E8F0;margin:12px 0 4px'>Timeline</h4><ul>")
             for event in timeline:
+                if not isinstance(event, dict):
+                    continue
                 detail = f" — {esc(event.get('detail'))}" if event.get("detail") else ""
                 parts.append(
                     f"<li style='color:#94A3B8'>{esc(event.get('at', ''))}: "

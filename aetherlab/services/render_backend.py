@@ -29,6 +29,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
 from aetherlab.core.models import SceneBundle
 
 if TYPE_CHECKING:
@@ -220,8 +221,8 @@ class LocalRenderBackend:
     name = "local"
 
     def available(self) -> tuple[bool, str]:
-        from importlib.util import find_spec
         import shutil
+        from importlib.util import find_spec
 
         if find_spec("manim") or shutil.which("manim"):
             return True, "Manim is available locally."
@@ -912,23 +913,25 @@ class CloudRenderManifest:
         self.path = path
 
     def _load(self) -> dict:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
+        with path_lock(self.path):
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return payload if isinstance(payload, dict) else {}
 
     def get(self, job_id: str) -> dict | None:
         item = self._load().get(job_id)
         return item if isinstance(item, dict) else None
 
     def put(self, job_id: str, data: dict) -> None:
-        payload = self._load()
-        payload[job_id] = data
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        with path_lock(self.path):
+            payload = self._load()
+            payload[job_id] = data
+            try:
+                atomic_write_json(self.path, payload)
+            except OSError:
+                pass
 
 
 class BytesReader:

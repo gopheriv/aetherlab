@@ -91,26 +91,39 @@ class SessionCache:
         if row is None:
             return None
 
-        solver = None
-        if row["solver_json"]:
-            solver = SolverResult.from_json(json.loads(row["solver_json"]), cached=True)
-
-        rag = None
-        if row["rag_json"]:
-            rag = RagResult.from_json(json.loads(row["rag_json"]), cached=True)
-
-        scene = None
-        if row["scene_json"]:
-            scene = SceneBundle.from_json(json.loads(row["scene_json"]), cached=True)
+        solver = self._decode_cached(row["solver_json"], SolverResult.from_json)
+        rag = self._decode_cached(row["rag_json"], RagResult.from_json)
+        scene = self._decode_cached(row["scene_json"], SceneBundle.from_json)
+        parameters = self._decode_object(row["parameters_json"]) or {}
 
         return CachedSession(
             key=row["key"],
             prompt=row["prompt"],
-            parameters_json=json.loads(row["parameters_json"]),
+            parameters_json=parameters,
             solver=solver,
             rag=rag,
             scene=scene,
         )
+
+    @staticmethod
+    def _decode_object(raw: str | None) -> dict[str, Any] | None:
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @classmethod
+    def _decode_cached(cls, raw: str | None, factory):
+        payload = cls._decode_object(raw)
+        if payload is None:
+            return None
+        try:
+            return factory(payload, cached=True)
+        except (TypeError, ValueError, KeyError):
+            return None
 
     def store_solver(self, key: str, solver: SolverResult) -> None:
         self._store_json(key, "solver_json", solver.to_json())

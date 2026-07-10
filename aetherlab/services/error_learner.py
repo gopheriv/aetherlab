@@ -13,8 +13,8 @@ the pipeline smarter *across runs* in two ways:
    have recurred, so a repeatedly-seen failure can be flagged in the repair
    prompt ("you have hit this before").
 
-Standard library only — no project imports, no third-party deps — so it stays a
-safe, isolated, unit-testable leaf just like :mod:`code_safety`.
+No third-party dependencies; persistence uses the app's standard-library-only
+atomic JSON helper so parallel render candidates cannot overwrite each other.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
 
 log = logging.getLogger(__name__)
 
@@ -186,27 +188,37 @@ class AestheticPitfallStore:
         if not self.store_path:
             return
         try:
-            self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            self.store_path.write_text(json.dumps(self._store, indent=2), encoding="utf-8")
+            atomic_write_json(self.store_path, self._store)
         except Exception as exc:  # noqa: BLE001 — persistence is best-effort
             log.debug("could not persist aesthetic store: %s", exc)
 
     def record(self, issues: list[str]) -> None:
         """Tally each non-empty, normalized aesthetic issue once."""
-        changed = False
-        for issue in issues or []:
-            phrase = normalize_aesthetic(issue)
-            if not phrase:
-                continue
-            entry = self._store.setdefault(phrase, {"count": 0, "last_seen": ""})
-            entry["count"] = int(entry.get("count", 0)) + 1
-            entry["last_seen"] = datetime.now(UTC).isoformat(timespec="seconds")
-            changed = True
-        if changed:
-            self._save()
+        def _record() -> bool:
+            changed = False
+            for issue in issues or []:
+                phrase = normalize_aesthetic(issue)
+                if not phrase:
+                    continue
+                entry = self._store.setdefault(phrase, {"count": 0, "last_seen": ""})
+                entry["count"] = int(entry.get("count", 0)) + 1
+                entry["last_seen"] = datetime.now(UTC).isoformat(timespec="seconds")
+                changed = True
+            return changed
+
+        if not self.store_path:
+            _record()
+            return
+        with path_lock(self.store_path):
+            self._store = self._load()
+            if _record():
+                self._save()
 
     def top(self, n: int = 6) -> list[tuple[str, int]]:
         """Most-recorded pitfalls first (ties broken by phrase for determinism)."""
+        if self.store_path:
+            with path_lock(self.store_path):
+                self._store = self._load()
         items = [(p, int(e.get("count", 0))) for p, e in self._store.items() if e.get("count", 0) > 0]
         items.sort(key=lambda pc: (-pc[1], pc[0]))
         return items[: max(0, n)]
@@ -247,8 +259,7 @@ class ErrorLearner:
         if not self.store_path:
             return
         try:
-            self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            self.store_path.write_text(json.dumps(self._store, indent=2), encoding="utf-8")
+            atomic_write_json(self.store_path, self._store)
         except Exception as exc:  # noqa: BLE001 — persistence is best-effort
             log.debug("could not persist error store: %s", exc)
 
@@ -269,15 +280,27 @@ class ErrorLearner:
     # -- public API -----------------------------------------------------------
     def seen_count(self, stderr: str) -> int:
         """How many times this error signature has been recorded before now."""
+        if self.store_path:
+            with path_lock(self.store_path):
+                self._store = self._load()
         return int(self._store.get(error_signature(stderr), {}).get("count", 0))
 
     def record(self, stderr: str) -> str:
         """Record one occurrence of ``stderr``; returns its signature."""
         sig = error_signature(stderr)
-        entry = self._store.setdefault(sig, {"count": 0, "last_seen": ""})
-        entry["count"] = int(entry.get("count", 0)) + 1
-        entry["last_seen"] = datetime.now(UTC).isoformat(timespec="seconds")
-        self._save()
+
+        def _record() -> None:
+            entry = self._store.setdefault(sig, {"count": 0, "last_seen": ""})
+            entry["count"] = int(entry.get("count", 0)) + 1
+            entry["last_seen"] = datetime.now(UTC).isoformat(timespec="seconds")
+
+        if not self.store_path:
+            _record()
+            return sig
+        with path_lock(self.store_path):
+            self._store = self._load()
+            _record()
+            self._save()
         return sig
 
     def hints_for(self, stderr: str) -> list[str]:

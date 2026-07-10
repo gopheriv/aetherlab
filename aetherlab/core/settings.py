@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
+
 
 @dataclass(frozen=True)
 class AppSettings:
@@ -85,9 +87,12 @@ def load_app_config() -> dict[str, str]:
     path = app_config_path()
     if not path.exists():
         return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    with path_lock(path):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+    if not isinstance(payload, dict):
         return {}
     return {
         k: str(v)
@@ -99,14 +104,14 @@ def load_app_config() -> dict[str, str]:
 def save_app_config(values: dict[str, str | None]) -> Path:
     """Persist Settings-dialog values. Empty/None values are dropped."""
     path = app_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing = load_app_config()
-    for key, value in values.items():
-        if value is None or not str(value).strip():
-            existing.pop(key, None)
-        else:
-            existing[key] = str(value).strip()
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    with path_lock(path):
+        existing = load_app_config()
+        for key, value in values.items():
+            if value is None or not str(value).strip():
+                existing.pop(key, None)
+            else:
+                existing[key] = str(value).strip()
+        atomic_write_json(path, existing)
     return path
 
 

@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
 from aetherlab.core.models import (
     LessonBundle,
     LessonChapter,
@@ -412,20 +413,25 @@ class _PlanCache:
         path = self._path(topic, audience)
         if not path.exists():
             return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        with path_lock(path):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+        if not isinstance(payload, dict):
             return None
-        plan = LessonPlan.from_json(payload, cached=True)
+        try:
+            plan = LessonPlan.from_json(payload, cached=True)
+        except (TypeError, ValueError):
+            return None
         plan.cached = True  # from_json honours a stored cached=False; force it
         return plan if plan.chapters else None
 
     def put(self, topic: str, audience: str, plan: LessonPlan) -> None:
+        path = self._path(topic, audience)
         try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            self._path(topic, audience).write_text(
-                json.dumps(plan.to_json(), indent=1), encoding="utf-8"
-            )
+            with path_lock(path):
+                atomic_write_json(path, plan.to_json(), indent=1)
         except OSError:
             pass
 
@@ -448,10 +454,12 @@ class _ChapterCache:
     def _load(self) -> dict:
         if not self.path.exists():
             return {}
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
+        with path_lock(self.path):
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return payload if isinstance(payload, dict) else {}
 
     def get(self, key: str) -> SceneBundle | None:
         from aetherlab.services.pipeline import _video_exists
@@ -459,16 +467,19 @@ class _ChapterCache:
         entry = self._load().get(key)
         if not entry:
             return None
-        scene = SceneBundle.from_json(entry, cached=True)
+        try:
+            scene = SceneBundle.from_json(entry, cached=True)
+        except (TypeError, ValueError):
+            return None
         if scene.status == "rendered" and _video_exists(scene.video_path):
             return scene
         return None
 
     def put(self, key: str, scene: SceneBundle) -> None:
-        data = self._load()
-        data[key] = scene.to_json()
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(data, indent=1), encoding="utf-8")
-        except OSError:
-            pass
+        with path_lock(self.path):
+            data = self._load()
+            data[key] = scene.to_json()
+            try:
+                atomic_write_json(self.path, data, indent=1)
+            except OSError:
+                pass

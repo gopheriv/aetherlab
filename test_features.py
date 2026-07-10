@@ -211,6 +211,9 @@ def t_f06():
 
 
 def t_f07():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     from aetherlab.core.settings import save_app_config, load_app_config, app_config_path
     save_app_config({"model": "cfg-model", "api_key": None, "base_url": "http://x"})
     cfg = load_app_config()
@@ -218,9 +221,31 @@ def t_f07():
     assert "api_key" not in cfg, "None should be dropped"
     p = app_config_path()
     assert p.exists()
+    # BUG-45: syntactically valid JSON with the wrong top-level shape is a
+    # corrupt config, not an AttributeError during application startup/save.
+    p.write_text("[]", encoding="utf-8")
+    assert load_app_config() == {}
+    p.write_text("null", encoding="utf-8")
+    save_app_config({"model": "recovered-model"})
+    assert load_app_config()["model"] == "recovered-model"
+
+    # BUG-44: fresh callers must merge concurrent settings updates rather than
+    # racing direct writes and dropping keys.
+    writers = 8
+    gate = threading.Barrier(writers)
+
+    def save_one(index: int) -> None:
+        gate.wait(timeout=10)
+        save_app_config({f"probe_{index}": str(index)})
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        list(pool.map(save_one, range(writers)))
+    cfg = load_app_config()
+    assert all(cfg.get(f"probe_{i}") == str(i) for i in range(writers)), cfg
+    assert not list(p.parent.glob(f".{p.name}.*.tmp"))
     # cleanup so it doesn't taint provider-precedence test
     p.unlink()
-    return "save/load round-trip; None dropped; path honored"
+    return "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
 
 
 def t_f08():
@@ -584,6 +609,9 @@ def t_f32():
 
 
 def t_f33():
+    from aetherlab.core.cache import SessionCache
+    from aetherlab.core.models import ProblemRequest
+
     pipeline_mod = __import__("aetherlab.services.pipeline", fromlist=["AetherLabPipeline"])
     src = inspect.getsource(pipeline_mod.AetherLabPipeline.run)
     assert "engine != current_engine" in src and "compiled" in src
@@ -591,7 +619,27 @@ def t_f33():
         "Cached rendered video missing; re-rendering." in src
         and 'scene.video_path = ""' in src
     )
-    return "scene reused only on engine+status match; stale missing videos re-render"
+
+    # BUG-45: one malformed JSON artifact in SQLite is a cache miss for that
+    # field, not a crash that discards the independently valid solver result.
+    cache = SessionCache(_TMP / "malformed_rows.sqlite3")
+    key = cache.ensure_request(ProblemRequest(prompt="malformed cache row"))
+    with cache._connect() as connection:
+        connection.execute(
+            "UPDATE sessions SET parameters_json=?, solver_json=?, rag_json=?, scene_json=? "
+            "WHERE key=?",
+            (
+                "null",
+                json.dumps(_solver().to_json()),
+                '{"hits":[7]}',
+                "[]",
+                key,
+            ),
+        )
+    recovered = cache.get(key)
+    assert recovered is not None and recovered.solver is not None
+    assert recovered.parameters_json == {} and recovered.rag is None and recovered.scene is None
+    return "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
 
 
 def t_f34():
@@ -2692,6 +2740,21 @@ def t_f143():
     )
     assert cache.get("bad") is None, "chapter cache must reject unplayable videos"
 
+    # BUG-45: valid JSON arrays/scalars in cache files degrade to misses and a
+    # following write reconstructs a valid object store.
+    cache.path.write_text("[]", encoding="utf-8")
+    assert cache.get(k) is None
+    cache.put(k, SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(clip)))
+    assert cache.get(k) is not None
+
+    from aetherlab.services.lesson_pipeline import _PlanCache
+
+    plan_cache = _PlanCache(_settings())
+    plan_path = plan_cache._path(plan.topic, plan.audience)
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text("null", encoding="utf-8")
+    assert plan_cache.get(plan.topic, plan.audience) is None
+
     s = replace(_settings(), openai_api_key=None, narration_enabled=False)
     lp = LessonPipeline(s)
     # BUG-9 regression: a failed middle render must not compact chapter scenes
@@ -3229,6 +3292,15 @@ def t_f154():
         assert GitHubActionsClient.from_settings(cli_auth).token.startswith("ghp_")
     finally:
         rb._github_cli_token = orig_cli_token
+
+    from aetherlab.services.render_backend import CloudRenderManifest
+
+    malformed_manifest_path = _TMP / "cloud_manifest_wrong_shape.json"
+    malformed_manifest_path.write_text("[]", encoding="utf-8")
+    malformed_manifest = CloudRenderManifest(malformed_manifest_path)
+    assert malformed_manifest.get("missing") is None
+    malformed_manifest.put("recovered", {"status": "rendered"})
+    assert malformed_manifest.get("recovered") == {"status": "rendered"}
     return "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
 
 
@@ -3560,6 +3632,7 @@ def t_f161():
         openai_api_key="sk-test",
         vision_model="vision-test",
         scene_candidates=1,
+        auto_tournament=False,
     )
     single = ManimRuntime(single_settings)
     calls: list[str] = []
@@ -3574,8 +3647,13 @@ def t_f161():
         calls.append(f"render:{scene.code}")
         return rendered
 
+    async def unexpected_candidate_build(*_args, **_kwargs):
+        raise AssertionError("opted-out single path attempted provider-backed candidate generation")
+
     single.generate_scene_async = fake_generate
     single.render_scene_with_repair = fake_render
+    single._build_scene_candidates = unexpected_candidate_build
+    assert not single.scene_tournament_enabled(single_settings)
     got = asyncio.run(single.generate_render_tournament(request, solver, rag, single_settings))
     assert got is rendered and calls == ["generate", "render:single-code"]
 
@@ -3971,6 +4049,18 @@ def t_f167():
     summary2 = CourseProgressStore(store_path).summary(plan)
     assert summary2.attempts == 1 and summary2.missed_concepts == summary.missed_concepts
 
+    # BUG-45: valid-but-wrong JSON shapes and malformed nested counters recover
+    # as empty progress instead of breaking the lesson's quiz interaction.
+    key = lesson_key(plan)
+    store_path.write_text(
+        json.dumps({"lessons": {key: {"attempts": "bad", "questions": []}}}),
+        encoding="utf-8",
+    )
+    repaired = CourseProgressStore(store_path).record_quiz_answer(plan, 0, True, "A")
+    assert repaired.attempts == 1 and repaired.correct == 1
+    store_path.write_text("[]", encoding="utf-8")
+    assert CourseProgressStore(store_path).summary(plan).attempts == 0
+
     lv = LessonView()
     try:
         lv.set_lesson(LessonBundle(plan=plan))
@@ -4346,6 +4436,11 @@ def t_f173():
     # Identical code dedups rather than piling up.
     store.record(domain="pendulum", code=code, score=9.4, verdict="ship")
     assert len(ExemplarCandidateStore(_TMP / "exemplar_candidates.json").list()) == 1
+    # BUG-45: malformed-but-valid rows are ignored, and the next good winner
+    # reconstructs a usable candidate list instead of failing on scalar .get().
+    store.path.write_text('[null, 3, {"code":"old"}]', encoding="utf-8")
+    assert store.record(domain="wave", code="new", score=9.0, verdict="ship")
+    assert all(isinstance(item, dict) for item in store.list())
 
     # The tournament records winners; the store never lives in the curated source.
     rt_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
@@ -4504,6 +4599,9 @@ def t_f174():
 def t_f175():
     # Quality Flywheel Phase 5a: the render-farm job/candidate event ledger.
     import inspect
+    import json as _json
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
     from dataclasses import replace
 
     from aetherlab.core.models import SceneBundle
@@ -4547,6 +4645,115 @@ def t_f175():
         capped.start(job_id=f"k{i}")
     assert len(capped.list(50)) == 3
 
+    # BUG-44: every mutable JSON store reached by parallel candidates/chapters
+    # shares one transactional path lock and atomic replace. Fresh instances are
+    # intentional: an instance-local lock would still lose these updates.
+    workers = 12
+
+    def parallel_json(path: Path, writer) -> object:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        gate = threading.Barrier(workers)
+
+        def run_one(index: int) -> None:
+            gate.wait(timeout=10)
+            writer(index)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(run_one, range(workers)))
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+        return payload
+
+    ledger_race = _TMP / "ledger_race.json"
+    ledger_payload = parallel_json(
+        ledger_race,
+        lambda i: RenderJobLedger(ledger_race, max_jobs=workers).start(job_id=f"r{i}"),
+    )
+    assert {row["job_id"] for row in ledger_payload} == {f"r{i}" for i in range(workers)}
+
+    from aetherlab.services.render_backend import CloudRenderManifest
+
+    manifest_race = _TMP / "manifest_race.json"
+    manifest_payload = parallel_json(
+        manifest_race,
+        lambda i: CloudRenderManifest(manifest_race).put(f"m{i}", {"index": i}),
+    )
+    assert set(manifest_payload) == {f"m{i}" for i in range(workers)}
+    manifest_race.write_text("[]", encoding="utf-8")
+    malformed_manifest = CloudRenderManifest(manifest_race)
+    assert malformed_manifest.get("missing") is None
+    malformed_manifest.put("recovered", {"ok": True})
+    assert malformed_manifest.get("recovered") == {"ok": True}
+
+    from aetherlab.services.lesson_pipeline import _ChapterCache
+
+    chapter_dir = _TMP / "chapter_race_store"
+    chapter_path = chapter_dir / "chapters_cache.json"
+    chapter_payload = parallel_json(
+        chapter_path,
+        lambda i: _ChapterCache(chapter_dir).put(
+            f"c{i}", SceneBundle("S", f"code-{i}", "e", "compiled")
+        ),
+    )
+    assert set(chapter_payload) == {f"c{i}" for i in range(workers)}, sorted(chapter_payload)
+
+    from aetherlab.services.course_mode import CourseProgressStore
+    from aetherlab.services.lesson_planner import _template_lesson
+
+    course_race = _TMP / "course_race.json"
+    plan = _template_lesson("Concurrent pendulum", "undergrad")
+    parallel_json(
+        course_race,
+        lambda i: CourseProgressStore(course_race).record_quiz_answer(
+            plan, 0, True, str(i)
+        ),
+    )
+    course_summary = CourseProgressStore(course_race).summary(plan)
+    assert course_summary.attempts == workers and course_summary.correct == workers
+
+    from aetherlab.services.error_learner import AestheticPitfallStore, ErrorLearner
+
+    errors_race = _TMP / "errors_race.json"
+    parallel_json(
+        errors_race,
+        lambda _i: ErrorLearner(errors_race).record("NameError: missing_widget"),
+    )
+    assert ErrorLearner(errors_race).seen_count("NameError: missing_widget") == workers
+
+    aesthetic_race = _TMP / "aesthetic_race.json"
+    parallel_json(
+        aesthetic_race,
+        lambda _i: AestheticPitfallStore(aesthetic_race).record(["label overlaps axis"]),
+    )
+    assert AestheticPitfallStore(aesthetic_race).top(1)[0][1] == workers
+
+    from aetherlab.services.scene_exemplars import ExemplarCandidateStore
+
+    exemplar_race = _TMP / "exemplar_race.json"
+    exemplar_payload = parallel_json(
+        exemplar_race,
+        lambda i: ExemplarCandidateStore(exemplar_race).record(
+            domain="wave", code=f"scene-{i}", score=9.0, verdict="ship"
+        ),
+    )
+    assert len(exemplar_payload) == workers
+
+    # BUG-45: valid JSON with hostile/nested shapes remains fail-soft and can be
+    # repaired by the next legitimate mutation.
+    ledger_race.write_text(
+        '[null, 7, {"job_id":"damaged","timeline":"bad","candidates":[1]}]',
+        encoding="utf-8",
+    )
+    damaged = RenderJobLedger(ledger_race)
+    damaged.status("damaged", "in_progress", "recovered")
+    assert damaged.get("damaged")["timeline"][-1]["detail"] == "recovered"
+    exemplar_race.write_text('[null, 3, {"code":"old"}]', encoding="utf-8")
+    assert ExemplarCandidateStore(exemplar_race).record(
+        domain="wave", code="new", score=9.0, verdict="ship"
+    )
+    assert all(isinstance(row, dict) for row in _json.loads(exemplar_race.read_text(encoding="utf-8")))
+
     # Tournament wiring: per-candidate scores + winner land in the ledger.
     s = replace(_settings(), data_dir=_TMP / "ledger_tourney")
     rt = ManimRuntime(s)
@@ -4562,7 +4769,7 @@ def t_f175():
     rb_src = inspect.getsource(__import__("aetherlab.services.render_backend", fromlist=["CloudRenderBackend"]).CloudRenderBackend)
     assert "RenderJobLedger" in rb_src and "ledger.failure(" in rb_src and "ledger.finish(" in rb_src
     assert "fallback(" in inspect.getsource(ManimRuntime._render_once)
-    return "render-farm ledger: secret-scrubbed job/candidate events with tournament + cloud wiring (F175)"
+    return "render-farm ledger + atomic concurrent JSON persistence across stores (F175)"
 
 
 def t_f176():
@@ -4602,6 +4809,19 @@ def t_f176():
         assert empty._jobs.count() == 0 and empty._empty.isVisibleTo(empty)
     finally:
         empty.close()
+
+    malformed_path = _TMP / "malformed_panel_ledger.json"
+    malformed_path.write_text(
+        '[null,{"job_id":"x","winner_index":"bad","candidates":[1,{"index":"bad"}],'
+        '"timeline":[false,{"status":"queued"}]}]',
+        encoding="utf-8",
+    )
+    malformed = RenderLedgerPanel(malformed_path)
+    try:
+        assert malformed._jobs.count() == 1
+        assert "Candidates" in malformed._details.toPlainText()
+    finally:
+        malformed.close()
 
     # The dashboard is reachable from the Settings cloud surface.
     dialog = SettingsDialog(_settings())

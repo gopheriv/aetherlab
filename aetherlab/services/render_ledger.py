@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from aetherlab.core.atomic_json import atomic_write_json, path_lock
+
 log = logging.getLogger(__name__)
 
 # The lifecycle states a render job (or a candidate) can move through. Kept as a
@@ -107,6 +109,25 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _normalise_record(row: dict) -> dict:
+    """Make a persisted row safe for mutations and dashboard/report readers."""
+    job_id = str(row.get("job_id", ""))
+    defaults = asdict(JobRecord(job_id=job_id, created_at=str(row.get("created_at", ""))))
+    record = {**defaults, **row, "job_id": job_id}
+    record["timeline"] = [
+        event for event in record.get("timeline", []) if isinstance(event, dict)
+    ] if isinstance(record.get("timeline"), list) else []
+    record["candidates"] = [
+        candidate for candidate in record.get("candidates", []) if isinstance(candidate, dict)
+    ] if isinstance(record.get("candidates"), list) else []
+    winner = record.get("winner_index")
+    try:
+        record["winner_index"] = int(winner) if winner is not None else None
+    except (TypeError, ValueError):
+        record["winner_index"] = None
+    return record
+
+
 class RenderJobLedger:
     """JSON-backed, fail-soft, secret-scrubbed ledger of render jobs."""
 
@@ -118,35 +139,41 @@ class RenderJobLedger:
     def _load(self) -> list[dict]:
         if not self.path or not self.path.exists():
             return []
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except Exception as exc:  # noqa: BLE001 — corruption must not break renders
-            log.debug("render ledger unreadable, starting fresh: %s", exc)
-            return []
+        with path_lock(self.path):
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                return [
+                    _normalise_record(row) for row in data if isinstance(row, dict)
+                ] if isinstance(data, list) else []
+            except Exception as exc:  # noqa: BLE001 — corruption must not break renders
+                log.debug("render ledger unreadable, starting fresh: %s", exc)
+                return []
 
     def _save(self, jobs: list[dict]) -> None:
         if not self.path:
             return
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(jobs[: self.max_jobs], indent=2), encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
-            log.debug("could not persist render ledger: %s", exc)
+        with path_lock(self.path):
+            try:
+                atomic_write_json(self.path, jobs[: self.max_jobs])
+            except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+                log.debug("could not persist render ledger: %s", exc)
 
     def _mutate(self, job_id: str, apply) -> None:
         """Load, find-or-create the job, apply a mutation, and persist. Fail-soft."""
         if not job_id:
             return
         try:
-            jobs = self._load()
-            record = next((j for j in jobs if j.get("job_id") == job_id), None)
-            if record is None:
-                record = asdict(JobRecord(job_id=job_id, created_at=_now()))
-                jobs.insert(0, record)
-            apply(record)
-            record["updated_at"] = _now()
-            self._save(jobs)
+            if not self.path:
+                return
+            with path_lock(self.path):
+                jobs = self._load()
+                record = next((j for j in jobs if j.get("job_id") == job_id), None)
+                if record is None:
+                    record = asdict(JobRecord(job_id=job_id, created_at=_now()))
+                    jobs.insert(0, record)
+                apply(record)
+                record["updated_at"] = _now()
+                self._save(jobs)
         except Exception as exc:  # noqa: BLE001 — observability must never break a render
             log.debug("render ledger update failed: %s", exc)
 
