@@ -10,9 +10,18 @@ references. To enable AI, see [QUICKSTART.md §4](QUICKSTART.md): local Ollama
 verify the provider actually answers.
 
 ## The AI answers but is very slow
-Cloud providers vary a lot; some free tiers queue for minutes. The pipeline
-retries and falls back automatically, but the run will feel slow. Try a
-faster model, or local Ollama with a small model (`qwen2.5:7b`).
+Cloud providers vary a lot; some free tiers queue for minutes. AetherLab does
+not retry timed-out model calls by default and uses the timeout shown in
+Settings (5–900 seconds). Try a faster model or local Ollama with a small model
+(`qwen2.5:7b`). For Qwen scene generation, `qwen3-coder-plus` is recommended;
+hybrid Qwen thinking is disabled automatically for non-streaming scene calls.
+
+## Settings key is ignored
+Settings shows the active provider, model, and exact API-key source. Environment
+variables have higher precedence than the saved key. If, for example,
+`DASHSCOPE_API_KEY` shadows the configured key, Settings displays a warning with
+the variable name (never its value). Remove/update that environment variable or
+set the intended higher-precedence key, then reopen Settings.
 
 ## Videos don't render / "render-error"
 - The render self-heals up to two times automatically — check the Code view's

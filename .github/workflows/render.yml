@@ -1,0 +1,113 @@
+name: AetherLab Cloud Render
+run-name: AetherLab render ${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Stable render job id
+        required: true
+        type: string
+      quality:
+        description: Manim quality flag
+        required: true
+        default: l
+        type: choice
+        options: [l, m, h, k]
+      fps:
+        description: Frames per second
+        required: true
+        default: "30"
+        type: string
+      scene_path:
+        description: Path to committed scene file
+        required: true
+        type: string
+      class_name:
+        description: Manim scene class
+        required: true
+        default: AetherLabScene
+        type: string
+      needs_latex:
+        description: Install a minimal TeX stack
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install system render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          if [ "${{ inputs.needs_latex }}" = "true" ]; then
+            sudo apt-get install -y --no-install-recommends \
+              texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+          fi
+
+      - name: Install pinned Manim
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "manim==0.20.1"
+          python - <<'PY'
+          import importlib.metadata as m
+          print("manim", m.version("manim"))
+          PY
+
+      - name: Render scene
+        id: render
+        shell: bash
+        run: |
+          set +e
+          mkdir -p out
+          python -m manim render \
+            -q${{ inputs.quality }} \
+            --fps "${{ inputs.fps }}" \
+            --disable_caching \
+            --media_dir out \
+            "${{ inputs.scene_path }}" \
+            "${{ inputs.class_name }}" 2>&1 | tee "${{ inputs.job_id }}.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          mp4="$(find out -type f -name '*.mp4' -print0 | xargs -0 ls -S | head -n 1)"
+          if [ -z "$mp4" ]; then
+            echo "No MP4 produced" | tee -a "${{ inputs.job_id }}.log"
+            exit 2
+          fi
+          cp "$mp4" "${{ inputs.job_id }}.mp4"
+
+      - name: Upload rendered MP4
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.job_id }}.mp4
+          path: ${{ inputs.job_id }}.mp4
+          retention-days: 14
+
+      - name: Upload render log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.job_id }}.log
+          path: ${{ inputs.job_id }}.log
+          if-no-files-found: ignore
+          retention-days: 14

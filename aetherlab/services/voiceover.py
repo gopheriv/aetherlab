@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 from pathlib import Path
 
 from aetherlab.core.proc import subprocess_kwargs
@@ -245,27 +244,36 @@ async def narrate_segment(
 
 
 def _fmt_srt_time(seconds: float) -> str:
-    seconds = max(0.0, seconds)
-    h, rem = divmod(int(seconds), 3600)
+    total_ms = max(0, int(round(float(seconds) * 1000)))
+    total_s, ms = divmod(total_ms, 1000)
+    h, rem = divmod(total_s, 3600)
     m, s = divmod(rem, 60)
-    ms = int(round((seconds - int(seconds)) * 1000))
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def build_srt(segments: list[tuple[str, float]]) -> str:
+def build_srt(
+    segments: list[tuple[str, float]],
+    starts: list[float] | None = None,
+) -> str:
     """Build .srt subtitles from ordered (text, clip_duration_seconds) pairs.
 
     Each chapter becomes one cue spanning its clip; blank narration is skipped.
+
+    ``starts`` gives each chapter's explicit start time (seconds) in the final
+    video. Pass it for a PRODUCED lesson, whose intro/chapter title cards and
+    crossfades push chapters later than a plain concat — without it the cues use
+    a naive running sum of clip durations and drift out of sync with the video.
     """
     cues: list[str] = []
     t = 0.0
     index = 1
-    for text, duration in segments:
+    for i, (text, duration) in enumerate(segments):
         duration = max(float(duration), 0.0)
+        start = float(starts[i]) if starts and i < len(starts) else t
         text = " ".join(str(text).split())
         if text:
             cues.append(
-                f"{index}\n{_fmt_srt_time(t)} --> {_fmt_srt_time(t + duration)}\n{text}\n"
+                f"{index}\n{_fmt_srt_time(start)} --> {_fmt_srt_time(start + duration)}\n{text}\n"
             )
             index += 1
         t += duration

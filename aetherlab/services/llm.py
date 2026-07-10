@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from collections import Counter
 
@@ -60,6 +59,10 @@ FALLBACK_EQUATIONS: dict[str, list[str]] = {
         r"F = -\frac{G M m}{r^2}\hat{r}",
         r"r(\varphi) = \frac{p}{1 + e\cos\varphi}",
     ],
+    "em_field": [
+        r"E = k q / r^2",
+        r"\Phi_E = q / \varepsilon_0",
+    ],
     "wave": [
         r"\frac{\partial^2 y}{\partial t^2} = c^2 \frac{\partial^2 y}{\partial x^2}",
         r"y(x,t) = A\sin(kx - \omega t)",
@@ -87,13 +90,11 @@ class AsyncLLMCoordinator:
     async def _solve_remote(self, request: ProblemRequest) -> SolverResult:
         from openai import AsyncOpenAI
 
+        from aetherlab.services.model_policy import openai_client_kwargs
+
         # Lazy-create client on first use
         if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=max(self.settings.llm_timeout_seconds, 300),
-            )
+            self._client = AsyncOpenAI(**openai_client_kwargs(self.settings))
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,
@@ -158,16 +159,9 @@ class AsyncLLMCoordinator:
         )
 
     def _parse_json(self, content: str) -> dict[str, object]:
-        # Reasoning models (e.g. MiniMax-M3) may wrap output in <think> blocks
-        # whose prose can contain stray braces - drop them before extraction.
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            raise
+        from aetherlab.services.model_json import load_model_json
+
+        return load_model_json(content)
 
     def _fallback(self, request: ProblemRequest, *, note: str) -> SolverResult:
         keywords = extract_keywords(request.prompt)

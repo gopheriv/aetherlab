@@ -45,8 +45,8 @@ ROSE = "#F43F5E"
 ROSE_HOVER = "#FB7185"
 ROSE_TINT_10 = "rgba(244, 63, 94, 0.10)"
 
-FONT_UI = "'Segoe UI', 'Inter', sans-serif"
-FONT_MONO = "'Cascadia Code', 'Consolas', monospace"
+FONT_UI = "DejaVu Sans"
+FONT_MONO = "DejaVu Sans"
 
 
 AETHERLAB_QSS = f"""
@@ -566,5 +566,179 @@ QSlider:focus::handle:horizontal {{ border: 2px solid {CYAN_HOVER}; }}
 QFrame#CommandBarShell[focused="true"] {{
     border: 1px solid {CYAN};
     background-color: {ELEV};
+}}
+
+/* ═════════════ Precision-instrument refinement pass ═════════════ */
+/* The appended rules intentionally override the older v2 base above. They keep
+   the cyan/math/stage DNA while tightening radius, focus, tabs, and telemetry
+   surfaces across widgets that still relied on platform defaults. */
+
+QFrame#CardFrame,
+QFrame#AnalysisCard,
+QFrame#CanvasFrame,
+QFrame#ListShell,
+QFrame#VideoControlsBar {{
+    border-radius: 8px;
+    background-color: {BG_PANEL_2};
+    border: 1px solid {LINE_0};
+}}
+
+QFrame#CardFrame:hover,
+QFrame#AnalysisCard:hover,
+QFrame#ListShell:hover {{
+    border-color: {BORDER_HAIRLINE};
+}}
+
+QFrame#AnalysisCard {{
+    background-color: {BG_PANEL_2};
+    border-top: 1px solid {CYAN_TINT_20};
+}}
+
+QWidget#SceneToolbar {{
+    background-color: {BG_PANEL_1};
+    border-bottom: 1px solid {LINE_0};
+}}
+
+QWidget#RunningStatusStrip {{
+    background-color: {BG_DEEPEST};
+    border-top: 1px solid {LINE_0};
+}}
+
+QFrame#SetupStrip,
+QFrame#LibraryEmptyState {{
+    background-color: {BG_PANEL_1};
+    border: 1px dashed {BORDER_STRONG};
+    border-radius: 8px;
+}}
+
+QWidget#BlueprintBackdrop {{
+    background-color: {BG_DEEPEST};
+}}
+
+QLabel#EquationBanner {{
+    background-color: {STAGE};
+    border: 1px solid {CYAN_TINT_20};
+    border-bottom: 2px solid {CYAN_DEEP};
+    border-radius: 8px;
+    color: {CYAN};
+    font-family: {FONT_MONO};
+    font-size: 18px;
+    padding: 18px 20px;
+}}
+
+QLabel#KeywordChip {{
+    border-radius: 6px;
+    border-color: {VIOLET};
+    background-color: {VIOLET_TINT_10};
+    padding: 3px 9px;
+}}
+
+QPushButton#ExampleChip {{
+    border-radius: 8px;
+    background-color: {ELEV};
+    border: 1px solid {LINE_0};
+    padding: 10px 14px;
+}}
+QPushButton#ExampleChip:hover {{
+    border-color: {CYAN};
+    background-color: {HOVER_SURFACE};
+}}
+
+QPushButton#PillTab {{
+    border-radius: 8px;
+    background-color: {BG_PANEL_1};
+    padding: 7px 14px;
+}}
+QPushButton#PillTab:checked {{
+    background-color: {CYAN_TINT_10};
+    border-color: {CYAN};
+    color: {CYAN};
+}}
+
+QFrame#CommandBarShell {{
+    border-radius: 8px;
+    background-color: {ELEV};
+    border-color: {BORDER_HAIRLINE};
+}}
+
+QComboBox#QualityCombo {{
+    font-family: {FONT_MONO};
+    color: {TEXT_HIGH};
+}}
+
+QTabWidget::pane {{
+    border: 1px solid {LINE_0};
+    border-radius: 8px;
+    background-color: {BG_PANEL_2};
+    top: -1px;
+}}
+QTabBar::tab {{
+    background-color: {BG_PANEL_1};
+    color: {TEXT_MID};
+    border: 1px solid {LINE_0};
+    border-bottom: none;
+    padding: 8px 14px;
+    margin-right: 4px;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QTabBar::tab:selected {{
+    color: {CYAN};
+    background-color: {BG_PANEL_2};
+    border-color: {CYAN_TINT_20};
+}}
+QTabBar::tab:hover {{
+    color: {TEXT_HIGH};
+    background-color: {HOVER_SURFACE};
+}}
+
+QProgressBar {{
+    background-color: {LINE_0};
+    border: none;
+    border-radius: 3px;
+    height: 6px;
+}}
+QProgressBar::chunk {{
+    background-color: {CYAN};
+    border-radius: 3px;
+}}
+
+QRadioButton {{
+    color: {TEXT_MID};
+    font-size: 12.5px;
+    spacing: 8px;
+}}
+QRadioButton::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid {BORDER_STRONG};
+    background: {BG_PANEL_2};
+}}
+QRadioButton::indicator:checked {{
+    border: 4px solid {CYAN};
+    background: {STAGE};
+}}
+
+QListWidget#HistoryList::item:selected,
+QListWidget::item:selected {{
+    border-left: 2px solid {CYAN};
+}}
+
+QToolButton#CanvasExportButton {{
+    background-color: rgba(24, 24, 34, 0.72);
+    border: 1px solid {LINE_0};
+    border-radius: 7px;
+}}
+QToolButton#CanvasExportButton:hover {{
+    border-color: {CYAN};
+    background-color: {HOVER_SURFACE};
+}}
+
+QFrame#ErrorBanner {{
+    background-color: {ROSE_TINT_10};
+    border-bottom: 2px solid {ROSE};
 }}
 """

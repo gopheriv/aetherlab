@@ -36,6 +36,9 @@ def main() -> int:
 
     sys.path.insert(0, str(ROOT))
     from aetherlab import __version__
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
 
     print(f"Building AetherLab {__version__}")
 
@@ -59,7 +62,8 @@ def main() -> int:
     print("\nSmoke-testing the frozen bundle (keyless)…", flush=True)
     result = subprocess.run(
         [str(exe), "--smoke", "Solve the simple pendulum"],
-        capture_output=True, text=True, timeout=900, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=900, env=env,
     )
     print(result.stdout[-2000:])
     if result.returncode != 0:

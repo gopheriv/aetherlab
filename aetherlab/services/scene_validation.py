@@ -18,8 +18,13 @@ wrong against the *installed* Manim, never guesses):
 Plus ``estimate_duration`` — an advisory beat-sum of play/wait run_times so the
 pipeline can compare against its 15–22s contract without rendering.
 
-``validate_scene`` bundles the three hard checks into one verdict. Duration is
-advisory-only (fallback templates are deliberately short).
+``scene_hygiene_warnings`` adds NIMA-inspired layout/readability heuristics:
+repeated same-coordinate placement without cleanup, object accumulation,
+stale copies, abrupt ``self.clear()``, and dominant unstyled grids. These are
+advisory because some advanced scenes intentionally keep ghost overlays/trails.
+
+``validate_scene`` bundles the three hard checks into one verdict. Duration and
+scene hygiene are advisory-only (fallback templates are deliberately short).
 
 Leaf module: stdlib + (lazily) the installed manim for ground truth.
 """
@@ -28,8 +33,10 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
 import inspect
 import re
+import tokenize
 from dataclasses import dataclass, field
 
 
@@ -83,6 +90,37 @@ def _manim_namespace() -> set[str]:
 
 _EXTRA_KNOWN = {"np", "self", "math", "numpy", "random", "itertools", "functools"}
 
+_MANIM_COLOR_NAMES = {
+    "BLACK", "WHITE", "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE",
+    "MAROON", "GOLD", "ORANGE", "PINK", "LIGHT_PINK", "DARK_BLUE",
+    "DARK_BROWN", "LIGHT_BROWN", "GRAY", "GREY", "GRAY_BROWN", "GREY_BROWN",
+    "LIGHT_GRAY", "LIGHT_GREY", "DARK_GRAY", "DARK_GREY", "LIGHTER_GRAY",
+    "LIGHTER_GREY", "DARKER_GRAY", "DARKER_GREY", "PURE_RED", "PURE_GREEN",
+    "PURE_BLUE", "PURE_CYAN", "PURE_MAGENTA", "PURE_YELLOW", "LOGO_BLACK",
+    "LOGO_WHITE", "LOGO_BLUE", "LOGO_GREEN", "LOGO_RED",
+    *{
+        f"{base}_{suffix}"
+        for base in (
+            "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE", "MAROON",
+            "GOLD", "GRAY", "GREY",
+        )
+        for suffix in "ABCDE"
+    },
+}
+_COLOR_ALIASES = {
+    "BROWN": "DARK_BROWN",
+    "CYAN": "PURE_CYAN",
+    "MAGENTA": "PURE_MAGENTA",
+    "NAVY": "DARK_BLUE",
+    "SILVER": "LIGHT_GRAY",
+    "LIME": "GREEN",
+    "AQUA": "TEAL",
+}
+_COLOR_FAMILIES = (
+    "BLUE", "GREEN", "RED", "YELLOW", "TEAL", "PURPLE", "MAROON", "GOLD",
+    "ORANGE", "PINK", "GRAY", "GREY", "BROWN", "CYAN", "MAGENTA", "WHITE", "BLACK",
+)
+
 
 # ── 1. unknown-name lint ────────────────────────────────────────────────────
 
@@ -116,6 +154,107 @@ def lint_manim_names(code: str) -> list[str]:
                 "at render."
             )
     return issues
+
+
+def _nearest_color_name(name: str, available: set[str]) -> str | None:
+    if name in _COLOR_ALIASES:
+        return _COLOR_ALIASES[name]
+    parts = set(name.split("_"))
+    for family in _COLOR_FAMILIES:
+        if family not in parts:
+            continue
+        base = _COLOR_ALIASES.get(family, family)
+        for prefix in ("DARK", "LIGHT", "PURE"):
+            candidate = f"{prefix}_{base}"
+            if prefix in parts and candidate in available:
+                return candidate
+        if base in available:
+            return base
+    return None
+
+
+def repair_unknown_color_constants(code: str) -> tuple[str, dict[str, str]]:
+    """Map invented all-caps color identifiers to real Manim constants.
+
+    Only unknown names in Load context are candidates. Tokenization performs
+    the replacement so strings, comments, attributes, and user definitions are
+    never rewritten. If Manim is unavailable, the pinned built-in color list is
+    still enough for this fail-soft repair.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return code, {}
+    manim_ns = _manim_namespace()
+    available = _MANIM_COLOR_NAMES | (manim_ns & _MANIM_COLOR_NAMES)
+    defined = _module_defined_names(tree)
+    known = manim_ns | defined | set(dir(builtins)) | _EXTRA_KNOWN
+    replacements: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id.isupper()
+            and node.id not in known
+        ):
+            continue
+        replacement = _nearest_color_name(node.id, available)
+        if replacement:
+            replacements[node.id] = replacement
+    if not replacements:
+        return code, {}
+    tokens = tokenize.generate_tokens(io.StringIO(code).readline)
+    fixed = tokenize.untokenize(
+        token._replace(string=replacements.get(token.string, token.string))
+        if token.type == tokenize.NAME
+        else token
+        for token in tokens
+    )
+    return fixed, replacements
+
+
+_DYNAMIC_ANIMATIONS = {
+    "Transform", "ReplacementTransform", "TransformFromCopy", "TransformMatchingShapes",
+    "TransformMatchingTex", "MoveAlongPath", "Rotate", "ApplyMethod", "ApplyFunction",
+    "UpdateFromFunc", "UpdateFromAlphaFunc", "Restore", "Swap",
+}
+
+
+def motion_contract_issues(code: str) -> list[str]:
+    """Reject provably static generated scenes without judging artistic style."""
+    tree = _parse(code)
+    if tree is None:
+        return []
+    plays = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+        and node.func.attr == "play"
+    ]
+    if not plays:
+        return [
+            "[MOTION:NO_PLAY] Scene has no self.play animation; a static add()/wait() "
+            "scene cannot satisfy the visible-motion contract."
+        ]
+    call_names = {
+        _call_name(node.func).split(".")[-1]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    has_animate = any(
+        isinstance(node, ast.Attribute) and node.attr == "animate"
+        for node in ast.walk(tree)
+    )
+    has_updater = bool(call_names & {"add_updater", "always_redraw", "TracedPath"})
+    has_transform = bool(call_names & _DYNAMIC_ANIMATIONS)
+    if not (has_animate or has_updater or has_transform):
+        return [
+            "[MOTION:REVEAL_ONLY] Scene only reveals static objects; use .animate, "
+            "Transform/MoveAlongPath, or an updater so the physics evolves on-screen."
+        ]
+    return []
 
 
 # ── 2. constructor-kwarg lint ───────────────────────────────────────────────
@@ -230,6 +369,146 @@ def check_latex_strings(code: str) -> list[str]:
 # ── 4. advisory duration estimate ───────────────────────────────────────────
 
 
+_INTRO_ANIMS = {
+    "Create", "Write", "FadeIn", "GrowFromCenter", "GrowArrow",
+    "DrawBorderThenFill", "ShowCreation",
+}
+_CLEANUP_ANIMS = {"FadeOut", "ReplacementTransform", "Transform", "Uncreate"}
+
+
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _call_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def _assignment_owner(tree: ast.Module, call: ast.Call) -> str | None:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or node.value is not call:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                return target.id
+    return None
+
+
+def _placement_owner(tree: ast.Module, call: ast.Call) -> str | None:
+    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+        return call.func.value.id
+    return _assignment_owner(tree, call)
+
+
+def _has_cleanup_between(lines: list[str], first: int, second: int, owner: str) -> bool:
+    between = "\n".join(lines[max(first, 0):max(second - 1, first)])
+    return (
+        f"FadeOut({owner}" in between
+        or f"Uncreate({owner}" in between
+        or f"self.remove({owner}" in between
+        or f"ReplacementTransform({owner}" in between
+        or f"Transform({owner}" in between
+        or "FadeOut(*self.mobjects" in between
+    )
+
+
+def _placement_warnings(code: str, tree: ast.Module) -> list[str]:
+    lines = code.splitlines()
+    placements: dict[str, list[tuple[str, int, str]]] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "move_to"
+            and node.args
+        ):
+            continue
+        owner = _placement_owner(tree, node)
+        if not owner:
+            continue
+        pos = ast.get_source_segment(code, node.args[0]) or ""
+        norm = re.sub(r"\s+", "", pos)
+        if norm:
+            placements.setdefault(norm, []).append((owner, node.lineno, pos))
+
+    warnings: list[str] = []
+    for _norm, owners in placements.items():
+        if len(owners) < 2:
+            continue
+        owners = sorted(owners, key=lambda x: x[1])
+        for (prev_owner, prev_line, pos), (owner, line, _pos) in zip(owners, owners[1:]):
+            if owner == prev_owner or _has_cleanup_between(lines, prev_line, line, prev_owner):
+                continue
+            warnings.append(
+                f"[HYGIENE:OVERLAP] {prev_owner} (line {prev_line}) and {owner} "
+                f"(line {line}) both move_to({pos}) without cleanup of {prev_owner}."
+            )
+            break
+    return warnings
+
+
+def _copy_warnings(code: str) -> list[str]:
+    warnings: list[str] = []
+    for match in re.finditer(r"\b(\w+)\.copy\(\)", code):
+        original = match.group(1)
+        line_no = code[:match.start()].count("\n") + 1
+        after = "\n".join(code[match.end():].splitlines()[:20])
+        if not any(
+            token in after
+            for token in (
+                f"FadeOut({original}", f"Uncreate({original}", f"self.remove({original}",
+                f"ReplacementTransform({original}", f"Transform({original}",
+            )
+        ):
+            warnings.append(
+                f"[HYGIENE:STALE_COPY] {original}.copy() at line {line_no} has no "
+                "nearby FadeOut/Transform/remove for the original."
+            )
+    return warnings
+
+
+def scene_hygiene_warnings(code: str) -> list[str]:
+    """Return advisory warnings for likely visual layout bugs."""
+    tree = _parse(code)
+    if tree is None:
+        return []
+    warnings: list[str] = []
+    warnings.extend(_placement_warnings(code, tree))
+
+    call_names = [
+        _call_name(node.func).split(".")[-1]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    ]
+    intro_count = sum(1 for name in call_names if name in _INTRO_ANIMS)
+    cleanup_count = sum(1 for name in call_names if name in _CLEANUP_ANIMS)
+    if intro_count >= 12 and cleanup_count < max(2, intro_count // 4):
+        warnings.append(
+            f"[HYGIENE:ACCUMULATION] {intro_count} introduced objects but only "
+            f"{cleanup_count} cleanup/transform calls; high clutter risk."
+        )
+
+    if re.search(r"\bself\.clear\(\)", code):
+        warnings.append(
+            "[HYGIENE:CLEAR] self.clear() abruptly wipes continuity; prefer "
+            "self.play(FadeOut(*self.mobjects)) or section cleanup."
+        )
+    if re.search(r"\bNumberPlane\s*\(\s*\)", code) and "stroke_opacity" not in code:
+        warnings.append(
+            "[HYGIENE:GRID] Bare NumberPlane() lacks subtle stroke_opacity styling; "
+            "the grid can dominate the physics."
+        )
+    if re.search(r"\w+\s*\[\s*\d+\s*\]\s*\[\s*\d+\s*\]", code):
+        warnings.append(
+            "[HYGIENE:MATH_INDEX] Deep MathTex indexing is fragile; prefer "
+            "get_part_by_tex(), set_color_by_tex(), or TransformMatchingTex."
+        )
+
+    warnings.extend(_copy_warnings(code))
+    return warnings
+
+
 @dataclass
 class DurationEstimate:
     total_seconds: float
@@ -290,8 +569,10 @@ def estimate_duration(code: str) -> DurationEstimate:
 # ── bundle ──────────────────────────────────────────────────────────────────
 
 
-def validate_scene(code: str) -> tuple[bool, list[str]]:
+def validate_scene(code: str, *, require_motion: bool = False) -> tuple[bool, list[str]]:
     """Run the three hard gates. Returns (ok, issues). Duration is not part of
     the verdict — callers surface it as an advisory diagnostic."""
     issues = lint_manim_names(code) + lint_constructor_kwargs(code) + check_latex_strings(code)
+    if require_motion:
+        issues.extend(motion_contract_issues(code))
     return (not issues), issues

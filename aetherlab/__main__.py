@@ -9,6 +9,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 from aetherlab import __version__
+from aetherlab.core.console import configure_utf8_stdio
 from aetherlab.core.models import ProblemRequest
 from aetherlab.core.settings import load_settings
 from aetherlab.services.pipeline import AetherLabPipeline
@@ -70,6 +71,7 @@ async def _run_smoke(prompt: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     raw = list(sys.argv[1:] if argv is None else argv)
     # Frozen-bundle relay: inside a PyInstaller dist there is no `python -m
     # manim`, so the renderer re-invokes THIS exe as `aetherlab --manim render

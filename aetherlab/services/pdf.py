@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,21 +130,35 @@ def export_derivation_to_latex(
     return output_path
 
 
-def compile_latex_to_pdf(tex_path: Path) -> Path | None:
+def compile_latex_to_pdf(
+    tex_path: Path,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> Path | None:
     """Compile a .tex file to PDF using pdflatex. Returns PDF path or None."""
-    from aetherlab.core.proc import subprocess_kwargs
+    from aetherlab.core.proc import (
+        ProcessCancelledError,
+        run_process_tree,
+        subprocess_kwargs,
+    )
 
+    pdf_path = tex_path.with_suffix(".pdf")
+    pdf_path.unlink(missing_ok=True)
     try:
-        result = subprocess.run(
+        result = run_process_tree(
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
+            cancel_check=cancel_check,
             **subprocess_kwargs(),
         )
-        pdf_path = tex_path.with_suffix(".pdf")
-        if pdf_path.exists():
+        if result.returncode == 0 and pdf_path.exists():
             return pdf_path
+    except ProcessCancelledError:
+        raise
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return None

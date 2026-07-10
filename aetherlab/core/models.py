@@ -136,6 +136,16 @@ class SceneBundle:
     # When narration is added, video_path points at the narrated mp4 and this
     # keeps the original silent render as a fallback. Old cache rows load as "".
     silent_video_path: str = ""
+    # Persisted perceptual-quality metadata from services/scene_critic.py.
+    # Old cache rows load as 0/"", preserving today's reuse behavior unless a
+    # nonzero min_quality_score setting opts into cache rejection.
+    quality_score: float = 0.0
+    critique_verdict: str = ""
+    critique_issues: list[str] = field(default_factory=list)
+    # Per-axis 0-2 critic breakdown (keys == scene_critic.CRITIC_AXES). Empty on
+    # old cache rows and when no judgement was made; additive, so reuse behaviour
+    # is unchanged.
+    critique_breakdown: dict[str, float] = field(default_factory=dict)
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -155,6 +165,16 @@ class SceneBundle:
             cached=cached,
             video_path=str(payload.get("video_path", "")),
             storyboard=storyboard if isinstance(storyboard, dict) else None,
+            quality_score=float(payload.get("quality_score", 0.0) or 0.0),
+            critique_verdict=str(payload.get("critique_verdict", "")),
+            critique_issues=[str(i) for i in payload.get("critique_issues", [])]
+            if isinstance(payload.get("critique_issues"), list) else [],
+            critique_breakdown={
+                str(k): float(v)
+                for k, v in payload.get("critique_breakdown", {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            if isinstance(payload.get("critique_breakdown"), dict) else {},
         )
 
 
@@ -285,8 +305,16 @@ class LessonPlan:
             prerequisites=[str(p) for p in data.get("prerequisites", [])],
             objectives=[str(o) for o in data.get("objectives", [])],
             misconception=str(data.get("misconception", "")),
-            chapters=[LessonChapter.from_json(c) for c in data.get("chapters", []) if isinstance(c, dict)],
-            questions=[LessonQuestion.from_json(q) for q in data.get("questions", []) if isinstance(q, dict)],
+            chapters=[
+                LessonChapter.from_json(c)
+                for c in data.get("chapters", [])
+                if isinstance(c, dict)
+            ],
+            questions=[
+                LessonQuestion.from_json(q)
+                for q in data.get("questions", [])
+                if isinstance(q, dict)
+            ],
             model_name=str(data.get("model_name", "cached")),
             cached=bool(data.get("cached", cached)),
         )
@@ -304,6 +332,15 @@ class LessonBundle:
     video_path: str = ""
     status: str = "planned"  # planned | rendering | assembled | error
     cached: bool = False
+    # Start time (seconds) of each rendered chapter clip WITHIN the assembled
+    # video, accounting for intro/chapter title cards + crossfades. Used to seek
+    # the inline player and to time subtitles; empty for old caches / plain
+    # concats, where the UI falls back to a plain cumulative sum.
+    chapter_offsets: list[float] = field(default_factory=list)
+    # Plan-chapter indexes for chapter_scenes/chapter_offsets. A failed middle
+    # render leaves a gap in plan.chapters; this keeps surviving clips mapped to
+    # their original titles/narration/UI outline rows. Empty for old caches.
+    rendered_chapter_indexes: list[int] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return {
@@ -312,6 +349,8 @@ class LessonBundle:
             "video_path": self.video_path,
             "status": self.status,
             "cached": self.cached,
+            "chapter_offsets": list(self.chapter_offsets),
+            "rendered_chapter_indexes": list(self.rendered_chapter_indexes),
         }
 
     @classmethod
@@ -319,8 +358,22 @@ class LessonBundle:
         data = dict(payload)
         return cls(
             plan=LessonPlan.from_json(data.get("plan", {}), cached=cached),
-            chapter_scenes=[SceneBundle.from_json(s, cached=cached) for s in data.get("chapter_scenes", []) if isinstance(s, dict)],
+            chapter_scenes=[
+                SceneBundle.from_json(s, cached=cached)
+                for s in data.get("chapter_scenes", [])
+                if isinstance(s, dict)
+            ],
             video_path=str(data.get("video_path", "")),
             status=str(data.get("status", "planned")),
             cached=bool(data.get("cached", cached)),
+            chapter_offsets=[
+                float(x)
+                for x in data.get("chapter_offsets", [])
+                if isinstance(x, (int, float))
+            ],
+            rendered_chapter_indexes=[
+                int(x)
+                for x in data.get("rendered_chapter_indexes", [])
+                if isinstance(x, int)
+            ],
         )

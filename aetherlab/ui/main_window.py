@@ -9,12 +9,25 @@ bar at the bottom. Screens follow design/ui_kits/aetherlab-desktop/.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle, SolverResult
+from aetherlab.core.models import (
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+    SolverResult,
+)
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.pdf import compile_latex_to_pdf, export_derivation_to_latex, export_scene_code
+from aetherlab.services.pdf import (
+    compile_latex_to_pdf,
+    export_derivation_to_latex,
+    export_scene_code,
+)
 from aetherlab.ui import icons
+from aetherlab.ui.background_task import BackgroundTask
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
 from aetherlab.ui.style import AETHERLAB_QSS
 from aetherlab.ui.widgets import (
@@ -38,6 +51,33 @@ from aetherlab.ui.workers import LessonWorker, PipelineWorker
 require_qt()
 
 
+_FONTS_INSTALLED = False
+
+
+def _install_ui_fonts() -> None:
+    """Load bundled UI fonts so Qt renders text consistently offscreen/frozen."""
+    global _FONTS_INSTALLED
+    if _FONTS_INSTALLED:
+        return
+    candidates = []
+    for root in (
+        Path(__file__).resolve().parents[2],
+        Path(getattr(sys, "_MEIPASS", ".")),
+    ):
+        candidates.extend([
+            root / "assets" / "fonts" / "DejaVuSans.ttf",
+            root / "assets" / "fonts" / "DejaVuSans-Bold.ttf",
+        ])
+    loaded = False
+    for path in candidates:
+        if path.exists():
+            loaded = QtGui.QFontDatabase.addApplicationFont(str(path)) >= 0 or loaded
+    app = QtWidgets.QApplication.instance()
+    if app is not None and loaded:
+        app.setFont(QtGui.QFont("DejaVu Sans", 10))
+    _FONTS_INSTALLED = True
+
+
 # Workspace stack pages
 PAGE_EMPTY = 0
 PAGE_RUNNING = 1
@@ -58,9 +98,13 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def __init__(self, settings: AppSettings, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        _install_ui_fonts()
         self._settings = settings
+        self._provider_task: BackgroundTask | None = None
+        self._cloud_task: BackgroundTask | None = None
+        self._github_task: BackgroundTask | None = None
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(480)
+        self.setMinimumSize(420, 420)
         self.setStyleSheet(AETHERLAB_QSS)
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -90,9 +134,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
         from aetherlab.core.settings import load_app_config
 
+        app_config = load_app_config()
         self._preset_combo = QtWidgets.QComboBox()
         self._preset_combo.addItems(["Custom endpoint", "Local Ollama", "No AI (offline)"])
-        saved_preset = load_app_config().get("provider_preset", "")
+        saved_preset = app_config.get("provider_preset", "")
         self._preset_combo.setCurrentIndex(
             {"": 0, "custom": 0, "ollama": 1, "none": 2}.get(saved_preset, 0)
         )
@@ -102,7 +147,12 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         form.addLayout(self._labeled("Provider", self._preset_combo))
 
-        self._api_key_edit = QtWidgets.QLineEdit(settings.openai_api_key or "")
+        editable_key = (
+            app_config.get("api_key", "")
+            if str(getattr(settings, "api_key_source", "")).startswith("environment:")
+            else (settings.openai_api_key or "")
+        )
+        self._api_key_edit = QtWidgets.QLineEdit(editable_key)
         self._api_key_edit.setObjectName("MonoField")
         self._api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self._api_key_edit.setPlaceholderText("sk-…")
@@ -115,6 +165,23 @@ class SettingsDialog(QtWidgets.QDialog):
         self._model_edit = QtWidgets.QLineEdit(settings.llm_model)
         self._model_edit.setObjectName("MonoField")
         form.addLayout(self._labeled("Model", self._model_edit))
+
+        from aetherlab.ui.provider_status import ProviderStatusPanel
+
+        self._provider_status = ProviderStatusPanel(settings, self)
+        form.addWidget(self._provider_status)
+        self._model_edit.textChanged.connect(self._provider_status.set_model)
+
+        self._llm_timeout = QtWidgets.QSpinBox()
+        self._llm_timeout.setRange(5, 900)
+        self._llm_timeout.setSuffix(" s")
+        self._llm_timeout.setValue(int(settings.llm_timeout_seconds))
+        form.addLayout(self._labeled("Model timeout", self._llm_timeout))
+
+        self._llm_retries = QtWidgets.QComboBox()
+        self._llm_retries.addItems(["No automatic retries", "Retry once"])
+        self._llm_retries.setCurrentIndex(min(1, max(0, settings.llm_max_retries)))
+        form.addLayout(self._labeled("Timeout retries", self._llm_retries))
 
         # Test connection row
         test_row = QtWidgets.QHBoxLayout()
@@ -148,6 +215,62 @@ class SettingsDialog(QtWidgets.QDialog):
         self._quality_combo.setCurrentIndex({"l": 0, "m": 1, "h": 2}.get(saved_quality, 0))
         form.addLayout(self._labeled("Default quality", self._quality_combo))
 
+        self._render_mode_combo = QtWidgets.QComboBox()
+        self._render_mode_combo.addItems(["Local", "Cloud", "Auto"])
+        self._render_mode_combo.setCurrentIndex(
+            {"local": 0, "cloud": 1, "auto": 2}.get(getattr(settings, "render_mode", "local"), 0)
+        )
+        self._render_mode_combo.setToolTip(
+            "Local renders on this computer. Cloud uses GitHub Actions. Auto uses cloud only for heavy scenes."
+        )
+        form.addLayout(self._labeled("Render mode", self._render_mode_combo))
+
+        self._github_repo_edit = QtWidgets.QLineEdit(getattr(settings, "github_repo", "") or "")
+        self._github_repo_edit.setObjectName("MonoField")
+        self._github_repo_edit.setPlaceholderText("owner/render-repo")
+        form.addLayout(self._labeled("GitHub render repo", self._github_repo_edit))
+
+        self._github_token_edit = QtWidgets.QLineEdit(getattr(settings, "github_token", "") or "")
+        self._github_token_edit.setObjectName("MonoField")
+        self._github_token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._github_token_edit.setPlaceholderText("github_pat_…")
+        token_row = self._secret_row(self._github_token_edit)
+        self._get_token_btn = QtWidgets.QPushButton("Get token")
+        self._get_token_btn.setObjectName("SecondaryButton")
+        self._get_token_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._get_token_btn.clicked.connect(self._get_github_token)
+        token_row.addWidget(self._get_token_btn)
+        form.addLayout(self._labeled("GitHub token", token_row))
+
+        self._github_workflow_edit = QtWidgets.QLineEdit(getattr(settings, "github_workflow", "render.yml") or "render.yml")
+        self._github_workflow_edit.setObjectName("MonoField")
+        form.addLayout(self._labeled("Workflow file", self._github_workflow_edit))
+        self._github_branch_edit = QtWidgets.QLineEdit(getattr(settings, "github_branch", "renders") or "renders")
+        self._github_branch_edit.setObjectName("MonoField")
+        form.addLayout(self._labeled("Render branch", self._github_branch_edit))
+        self._cloud_threshold = QtWidgets.QDoubleSpinBox()
+        self._cloud_threshold.setRange(1.0, 5.0)
+        self._cloud_threshold.setSingleStep(0.25)
+        self._cloud_threshold.setValue(float(getattr(settings, "cloud_render_threshold", 3.0) or 3.0))
+        form.addLayout(self._labeled("Auto cloud threshold", self._cloud_threshold))
+        cloud_row = QtWidgets.QHBoxLayout()
+        cloud_row.setSpacing(8)
+        self._cloud_test_btn = QtWidgets.QPushButton("Test cloud render")
+        self._cloud_test_btn.setObjectName("SecondaryButton")
+        self._cloud_test_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._cloud_test_btn.clicked.connect(self._test_cloud_render)
+        cloud_row.addWidget(self._cloud_test_btn)
+        self._ledger_btn = QtWidgets.QPushButton("View render ledger")
+        self._ledger_btn.setObjectName("SecondaryButton")
+        self._ledger_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._ledger_btn.clicked.connect(self._open_render_ledger)
+        cloud_row.addWidget(self._ledger_btn)
+        self._cloud_result = QtWidgets.QLabel("")
+        self._cloud_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._cloud_result.setWordWrap(True)
+        cloud_row.addWidget(self._cloud_result, 1)
+        form.addLayout(cloud_row)
+
         # ── Vision · Critique (design v2 §8, new) ──
         form.addSpacing(4)
         form.addWidget(self._section("VISION · CRITIQUE"))
@@ -168,6 +291,22 @@ class SettingsDialog(QtWidgets.QDialog):
         vision_hint.setStyleSheet("color: #64748B; font-size: 11px;")
         vision_hint.setWordWrap(True)
         form.addWidget(vision_hint)
+
+        self._auto_tournament_check = QtWidgets.QCheckBox(
+            "Multi-candidate quality (auto): render extra takes only when the first is weak"
+        )
+        self._auto_tournament_check.setChecked(getattr(settings, "auto_tournament", True))
+        self._auto_tournament_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        form.addWidget(self._auto_tournament_check)
+        auto_hint = QtWidgets.QLabel(
+            "When a vision model is set, AetherLab renders one scene and only "
+            "generates more candidates (picking the best) if that first render "
+            "scores low — so most runs still cost a single render. No effect "
+            "without a vision model."
+        )
+        auto_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        auto_hint.setWordWrap(True)
+        form.addWidget(auto_hint)
 
         # ── References (design v3: web references) ──
         form.addSpacing(4)
@@ -238,7 +377,17 @@ class SettingsDialog(QtWidgets.QDialog):
         note.setWordWrap(True)
         form.addWidget(note)
 
-        layout.addWidget(body)
+        self._settings_scroll = QtWidgets.QScrollArea()
+        self._settings_scroll.setWidgetResizable(True)
+        self._settings_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._settings_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._settings_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+        self._settings_scroll.setWidget(body)
+        layout.addWidget(self._settings_scroll, 1)
         layout.addWidget(self._hairline())
 
         # Footer: Cancel / Save
@@ -257,6 +406,21 @@ class SettingsDialog(QtWidgets.QDialog):
         save_btn.clicked.connect(self.accept)
         footer_layout.addWidget(save_btn)
         layout.addWidget(footer)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            width = min(920, max(520, int(geo.width() * 0.68)))
+            height = min(780, max(420, int(geo.height() * 0.86)))
+            min_width = min(520, max(420, int(geo.width() * 0.45)))
+            min_height = min(480, max(360, int(geo.height() * 0.55)))
+        else:
+            width, height = 860, 720
+            min_width, min_height = 420, 420
+        self.setMinimumSize(min_width, min_height)
+        self.resize(width, height)
 
     def _hairline(self) -> QtWidgets.QFrame:
         line = QtWidgets.QFrame()
@@ -360,37 +524,234 @@ class SettingsDialog(QtWidgets.QDialog):
 
         from aetherlab.services.providers import test_connection
 
+        if self._provider_task and self._provider_task.is_running:
+            return
         self._test_btn.setEnabled(False)
         self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
         self._test_result.setText("Testing…")
-        QtWidgets.QApplication.processEvents()
         probe = replace(
             self._settings,
             openai_api_key=self._api_key_edit.text().strip() or None,
             openai_base_url=self._base_url_edit.text().strip() or None,
             llm_model=self._model_edit.text().strip() or self._settings.llm_model,
         )
-        ok, message = test_connection(probe)
+        self._provider_task = BackgroundTask(
+            lambda _cancel, _progress: test_connection(probe)
+        )
+        self._provider_task.succeeded.connect(self._on_provider_test_result)
+        self._provider_task.failed.connect(
+            lambda message: self._on_provider_test_result(
+                (False, f"Connection failed: {message}")
+            )
+        )
+        self._provider_task.finished.connect(lambda: self._test_btn.setEnabled(True))
+        self._provider_task.start()
+
+    def _on_provider_test_result(self, result: object) -> None:
+        ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
+            False,
+            "Connection test returned an invalid result.",
+        )
         self._test_result.setStyleSheet(
             f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;"
         )
-        self._test_result.setText(message)
-        self._test_btn.setEnabled(True)
+        self._test_result.setText(str(message))
+
+    def _open_render_ledger(self) -> None:
+        """Open the read-only render-farm dashboard for this data dir."""
+        from aetherlab.ui.ledger_panel import RenderLedgerPanel
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Render farm")
+        dialog.resize(780, 540)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(RenderLedgerPanel(self._settings.data_dir / "render_ledger.json", dialog))
+        dialog.exec()
+
+    def _test_cloud_render(self) -> None:
+        from dataclasses import replace
+
+        from aetherlab.services.render_backend import (
+            CloudRenderBackend,
+            GitHubActionsClient,
+            _mask,
+            provision_render_repo,
+        )
+
+        if self._cloud_task and self._cloud_task.is_running:
+            return
+        probe = replace(
+            self._settings,
+            render_mode={0: "local", 1: "cloud", 2: "auto"}.get(self._render_mode_combo.currentIndex(), "local"),
+            github_repo=self._github_repo_edit.text().strip(),
+            github_token=self._github_token_edit.text().strip(),
+            github_workflow=self._github_workflow_edit.text().strip() or "render.yml",
+            github_branch=self._github_branch_edit.text().strip() or "renders",
+            cloud_render_threshold=float(self._cloud_threshold.value()),
+        )
+        self._cloud_test_btn.setEnabled(False)
+        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setText("Setting up render repo…")
+
+        def setup_cloud(cancel, _progress):
+            backend = CloudRenderBackend(probe)
+            ok, message = backend.available()
+            if ok and not cancel.is_set():
+                try:
+                    client = GitHubActionsClient.from_settings(probe)
+                    client._request("GET", f"/repos/{client.owner}/{client.repo}")
+                    if cancel.is_set():
+                        return False, "Cloud setup cancelled."
+                    status = provision_render_repo(
+                        client,
+                        branch=probe.github_branch,
+                        workflow=probe.github_workflow,
+                    )
+                    message = f"Cloud rendering is ready — {status}"
+                except Exception as exc:  # noqa: BLE001
+                    ok = False
+                    message = f"Cloud setup failed: {_mask(str(exc))[:180]}"
+            return ok, message
+
+        self._cloud_task = BackgroundTask(setup_cloud)
+        self._cloud_task.succeeded.connect(self._on_cloud_test_result)
+        self._cloud_task.failed.connect(
+            lambda message: self._on_cloud_test_result(
+                (False, f"Cloud setup failed: {message}")
+            )
+        )
+        self._cloud_task.finished.connect(lambda: self._cloud_test_btn.setEnabled(True))
+        self._cloud_task.start()
+
+    def _on_cloud_test_result(self, result: object) -> None:
+        ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
+            False,
+            "Cloud setup returned an invalid result.",
+        )
+        self._cloud_result.setStyleSheet(
+            f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;"
+        )
+        self._cloud_result.setText(str(message))
+
+    def _get_github_token(self) -> None:
+        client_id = getattr(self._settings, "github_oauth_client_id", "") or ""
+        if not client_id:
+            self._cloud_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+            self._cloud_result.setText(
+                "Device login needs an AetherLab GitHub OAuth client id. Set AETHERLAB_GITHUB_CLIENT_ID or paste a fine-grained token."
+            )
+            return
+        if self._github_task and self._github_task.is_running:
+            return
+
+        def authorize(cancel, report):
+            import time
+
+            from aetherlab.services.render_backend import (
+                poll_github_device_token,
+                request_github_device_code,
+            )
+
+            device = request_github_device_code(client_id)
+            if not isinstance(device, dict):
+                raise RuntimeError("GitHub returned an invalid device-code response.")
+            device_code = str(device.get("device_code", ""))
+            user_code = str(device.get("user_code", ""))
+            url = str(device.get("verification_uri") or "https://github.com/login/device")
+            if not device_code or not user_code:
+                raise RuntimeError("GitHub device response omitted a required code.")
+            report((url, user_code))
+            interval = max(1, min(30, int(device.get("interval", 5) or 5)))
+            expires = max(1, int(device.get("expires_in", 900) or 900))
+            deadline = time.monotonic() + min(expires, 180)
+            while time.monotonic() < deadline:
+                if cancel.wait(interval):
+                    return None
+                token = poll_github_device_token(client_id, device_code)
+                if not isinstance(token, dict):
+                    raise RuntimeError("GitHub returned an invalid token response.")
+                access_token = token.get("access_token")
+                if access_token:
+                    return str(access_token)
+                error = str(token.get("error", ""))
+                if error == "slow_down":
+                    interval = min(60, interval + 5)
+                    continue
+                if error != "authorization_pending":
+                    raise RuntimeError(
+                        str(token.get("error_description") or error or "unknown error")
+                    )
+            raise TimeoutError("GitHub device login timed out.")
+
+        self._get_token_btn.setEnabled(False)
+        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setText("Requesting GitHub device code…")
+        self._github_task = BackgroundTask(authorize)
+        self._github_task.progress.connect(self._on_github_device_code)
+        self._github_task.succeeded.connect(self._on_github_token)
+        self._github_task.failed.connect(self._on_github_login_failed)
+        self._github_task.finished.connect(lambda: self._get_token_btn.setEnabled(True))
+        self._github_task.start()
+
+    def _on_github_device_code(self, payload: object) -> None:
+        import webbrowser
+
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        url, code = str(payload[0]), str(payload[1])
+        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setText(f"Enter code {code} at {url}. Waiting for authorization…")
+        webbrowser.open(url)
+
+    def _on_github_token(self, token: object) -> None:
+        if not token:
+            return
+        self._github_token_edit.setText(str(token))
+        self._cloud_result.setStyleSheet("color: #10B981; font-size: 11px;")
+        self._cloud_result.setText("GitHub token received.")
+
+    def _on_github_login_failed(self, message: str) -> None:
+        self._cloud_result.setStyleSheet("color: #F43F5E; font-size: 11px;")
+        self._cloud_result.setText(f"GitHub device login failed: {message[:160]}")
+
+    def _cancel_background_tasks(self) -> None:
+        for task in (self._provider_task, self._cloud_task, self._github_task):
+            if task is not None:
+                task.cancel()
+
+    def done(self, result: int) -> None:
+        self._cancel_background_tasks()
+        super().done(result)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        self._cancel_background_tasks()
+        super().closeEvent(event)
 
     def get_settings(self) -> dict:
         quality_map = {0: "l", 1: "m", 2: "h"}
         preset_map = {0: "custom", 1: "ollama", 2: "none"}
+        mode_map = {0: "local", 1: "cloud", 2: "auto"}
         return {
             "provider_preset": preset_map.get(self._preset_combo.currentIndex(), "custom"),
             "model": self._model_edit.text().strip(),
+            "llm_timeout_seconds": str(self._llm_timeout.value()),
+            "llm_max_retries": str(self._llm_retries.currentIndex()),
             "api_key": self._api_key_edit.text().strip() or None,
             "base_url": self._base_url_edit.text().strip() or None,
             "library_path": self._library_edit.text().strip(),
             "data_dir": self._data_edit.text().strip(),
             "default_quality": quality_map.get(self._quality_combo.currentIndex(), "l"),
+            "render_mode": mode_map.get(self._render_mode_combo.currentIndex(), "local"),
+            "github_repo": self._github_repo_edit.text().strip(),
+            "github_token": self._github_token_edit.text().strip() or None,
+            "github_workflow": self._github_workflow_edit.text().strip() or "render.yml",
+            "github_branch": self._github_branch_edit.text().strip() or "renders",
+            "cloud_render_threshold": str(float(self._cloud_threshold.value())),
             "vision_model": self._vision_edit.text().strip() or None,
             "web_references": self._web_refs_check.isChecked(),
             "narration_enabled": self._narration_check.isChecked(),
+            "auto_tournament": self._auto_tournament_check.isChecked(),
             "tts_voice": self._tts_voice_edit.text().strip() or None,
         }
 
@@ -416,11 +777,19 @@ class _OllamaProbe(QtCore.QThread):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, settings: AppSettings) -> None:
         super().__init__()
+        _install_ui_fonts()
         self.settings = settings
         self.worker: PipelineWorker | None = None
+        self._export_task: BackgroundTask | None = None
+        self._close_pending = False
         self._last_result: PipelineResult | None = None
         self._has_result = False
         self._timeline_started = False
+        from aetherlab.services.course_mode import CourseProgressStore
+
+        self.course_progress = CourseProgressStore(
+            self.settings.data_dir / "course_progress.json"
+        )
 
         self.setObjectName("MainWindow")
         self.setWindowTitle("AetherLab")
@@ -432,9 +801,13 @@ class MainWindow(QtWidgets.QMainWindow):
             geo = screen.availableGeometry()
             w = min(1500, int(geo.width() * 0.92))
             h = min(950, int(geo.height() * 0.92))
+            min_w = min(960, max(640, int(geo.width() * 0.72)))
+            min_h = min(640, max(460, int(geo.height() * 0.72)))
         else:
             w, h = 1500, 950
+            min_w, min_h = 720, 520
         self.resize(w, h)
+        self.setMinimumSize(min_w, min_h)
         self.setStyleSheet(AETHERLAB_QSS)
 
         # ── Components ──
@@ -469,7 +842,12 @@ class MainWindow(QtWidgets.QMainWindow):
         scene_layout.setSpacing(0)
         scene_layout.addWidget(self.simulation_panel, 1)
         self._param_side = QtWidgets.QFrame()
-        self._param_side.setFixedWidth(300)
+        self._param_side.setMinimumWidth(220)
+        self._param_side.setMaximumWidth(320)
+        self._param_side.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         self._param_side.setStyleSheet(
             "QFrame { background-color: #0D0D14; border-left: 1px solid #1E293B; }"
         )
@@ -560,6 +938,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._ollama_probe = _OllamaProbe(self)
             self._ollama_probe.found.connect(self._on_ollama_found)
             self._ollama_probe.start()
+        self._apply_responsive_layout()
 
     # ── wiring ──
 
@@ -591,6 +970,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.learn_requested.connect(self.start_lesson)
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
+        self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
+        self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
+        self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
         self.history_panel.prompt_selected.connect(self.start_pipeline)
@@ -625,6 +1007,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.simulation_panel.phase_toggled.connect(
             self.simulation_panel.toggle_phase
         )
+
+    def _apply_responsive_layout(self) -> None:
+        """Keep the scene drawer usable without letting it crowd the stage."""
+        if not hasattr(self, "_param_side"):
+            return
+        width = max(self.width(), self.minimumWidth())
+        side_width = max(220, min(320, int(width * 0.24)))
+        if width < 900:
+            side_width = 220
+        self._param_side.setFixedWidth(side_width)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        self._apply_responsive_layout()
+        super().resizeEvent(event)
 
     def _prefill_prompt(self, prompt: str) -> None:
         self.command_bar.input.setText(prompt)
@@ -692,6 +1088,7 @@ class MainWindow(QtWidgets.QMainWindow):
         elif index == 3:
             # Params: reveal the parameter side panel on the Scene page
             self._param_side.setVisible(not self._param_side.isVisible())
+            self._apply_responsive_layout()
             self._workspace.setCurrentIndex(PAGE_SCENE)
         elif index == 4:
             self._workspace.setCurrentIndex(PAGE_HISTORY)
@@ -715,6 +1112,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── exports (in-context, design: DerivationBlock / SceneView / VideoControls) ──
 
+    def _start_export_task(self, status: str, operation) -> bool:
+        if self._export_task and self._export_task.is_running:
+            self.statusBar().showMessage("An export is already running.")
+            return False
+        task = BackgroundTask(operation)
+        self._export_task = task
+        task.succeeded.connect(
+            lambda result: self.statusBar().showMessage(str(result)) if result else None
+        )
+        task.failed.connect(
+            lambda message: self.statusBar().showMessage(f"Export failed: {message}")
+        )
+        task.finished.connect(lambda: self._finish_export_task(task))
+        self.statusBar().showMessage(status)
+        task.start()
+        return True
+
+    def _finish_export_task(self, task: BackgroundTask) -> None:
+        if self._export_task is task:
+            self._export_task = None
+
     def _export_latex(self) -> None:
         if not self._last_result:
             self.statusBar().showMessage("No pipeline result to export.")
@@ -735,28 +1153,44 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._last_result:
             self.statusBar().showMessage("No pipeline result to export.")
             return
-        import tempfile
-        tmp_dir = Path(tempfile.gettempdir()) / "aetherlab_export"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp = tmp_dir / "derivation.tex"
-        solver = self._last_result.solver
-        export_derivation_to_latex(
-            solver.summary, solver.derivation_steps, solver.variables, tmp,
-            key_equations=getattr(solver, "key_equations", None),
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
         )
-        pdf = compile_latex_to_pdf(tmp)
-        if pdf and pdf.exists():
-            path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
-            )
-            if path:
-                import shutil
-                shutil.copy2(pdf, path)
-                self.statusBar().showMessage(f"PDF exported: {path}")
-        else:
-            self.statusBar().showMessage(
-                "pdflatex not found or compilation failed. LaTeX file saved instead."
-            )
+        if not path:
+            return
+        destination = Path(path)
+        solver = self._last_result.solver
+        summary = str(solver.summary)
+        steps = list(solver.derivation_steps)
+        variables = dict(solver.variables)
+        equations = list(getattr(solver, "key_equations", None) or [])
+
+        def export_pdf(cancel, _progress):
+            from tempfile import TemporaryDirectory
+
+            from aetherlab.core.atomic_file import atomic_copy_file
+
+            with TemporaryDirectory(prefix="aetherlab_export_") as tmp_name:
+                tex = Path(tmp_name) / "derivation.tex"
+                export_derivation_to_latex(
+                    summary,
+                    steps,
+                    variables,
+                    tex,
+                    key_equations=equations,
+                )
+                pdf = compile_latex_to_pdf(tex, cancel_check=cancel.is_set)
+                if pdf and pdf.exists():
+                    atomic_copy_file(pdf, destination, cancel_check=cancel.is_set)
+                    return f"PDF exported: {destination}"
+                fallback = destination.with_suffix(".tex")
+                atomic_copy_file(tex, fallback, cancel_check=cancel.is_set)
+                return (
+                    "pdflatex not found or compilation failed. "
+                    f"LaTeX saved instead: {fallback}"
+                )
+
+        self._start_export_task("Preparing PDF…", export_pdf)
 
     def _export_scene(self) -> None:
         if not self._last_result:
@@ -784,9 +1218,17 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        import shutil
-        shutil.copy2(video_path, path)
-        self.statusBar().showMessage(f"Video saved: {path}")
+        destination = Path(path)
+
+        def save_video(cancel, _progress):
+            from aetherlab.core.atomic_file import atomic_copy_file
+
+            atomic_copy_file(
+                video_path, destination, cancel_check=cancel.is_set
+            )
+            return f"Video saved: {destination}"
+
+        self._start_export_task("Saving video…", save_video)
 
     def _export_gif(self) -> None:
         """Export the rendered video as an animated GIF via ffmpeg (#17)."""
@@ -804,28 +1246,43 @@ class MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
 
-        self.statusBar().showMessage("Converting video to GIF…")
-        try:
-            from aetherlab.core.proc import subprocess_kwargs
+        destination = Path(path)
 
-            result = subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", str(video_path),
-                    "-vf", "fps=15,scale=480:-1:flags=lanczos",
-                    "-loop", "0", str(path),
-                ],
-                capture_output=True, text=True, timeout=120,
-                **subprocess_kwargs(),
-            )
-            if result.returncode == 0 and Path(path).exists():
-                size_mb = Path(path).stat().st_size / 1e6
-                self.statusBar().showMessage(f"GIF exported: {path} ({size_mb:.1f} MB)")
-            else:
-                self.statusBar().showMessage("GIF conversion failed. Is ffmpeg installed?")
-        except FileNotFoundError:
-            self.statusBar().showMessage("ffmpeg not found. Install ffmpeg to export GIFs.")
-        except subprocess.TimeoutExpired:
-            self.statusBar().showMessage("GIF conversion timed out.")
+        def export_gif(cancel, _progress):
+            import os
+
+            from aetherlab.core.atomic_file import unique_staging_path
+            from aetherlab.core.proc import run_process_tree, subprocess_kwargs
+
+            staging = unique_staging_path(destination)
+            try:
+                result = run_process_tree(
+                    [
+                        "ffmpeg", "-y", "-i", str(video_path),
+                        "-vf", "fps=15,scale=480:-1:flags=lanczos",
+                        "-loop", "0", str(staging),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    cancel_check=cancel.is_set,
+                    **subprocess_kwargs(),
+                )
+                if result.returncode != 0 or not staging.exists():
+                    return "GIF conversion failed. Is ffmpeg installed?"
+                os.replace(staging, destination)
+                size_mb = destination.stat().st_size / 1e6
+                return f"GIF exported: {destination} ({size_mb:.1f} MB)"
+            except FileNotFoundError:
+                return "ffmpeg not found. Install ffmpeg to export GIFs."
+            except subprocess.TimeoutExpired:
+                return "GIF conversion timed out."
+            finally:
+                staging.unlink(missing_ok=True)
+
+        self._start_export_task("Converting video to GIF…", export_gif)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)
@@ -833,38 +1290,44 @@ class MainWindow(QtWidgets.QMainWindow):
             vals = dialog.get_settings()
 
             # Persist to the app config so the values survive restarts.
-            from aetherlab.core.settings import save_app_config
+            from aetherlab.core.settings import load_settings, save_app_config
             save_app_config(
                 {
                     "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
+                    "llm_timeout_seconds": vals["llm_timeout_seconds"],
+                    "llm_max_retries": vals["llm_max_retries"],
                     "api_key": vals["api_key"],
                     "base_url": vals["base_url"],
                     "library_path": vals["library_path"],
                     "data_dir": vals["data_dir"],
                     "default_quality": vals["default_quality"],
+                    "render_mode": vals["render_mode"],
+                    "cloud_provider": "github_actions",
+                    "github_repo": vals["github_repo"],
+                    "github_token": vals["github_token"],
+                    "github_workflow": vals["github_workflow"],
+                    "github_branch": vals["github_branch"],
+                    "cloud_render_threshold": vals["cloud_render_threshold"],
                     "vision_model": vals["vision_model"],
                     "web_references": "1" if vals["web_references"] else "0",
                     "narration_enabled": "1" if vals["narration_enabled"] else "0",
+                    "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
                 }
             )
 
-            from dataclasses import replace
-            self.settings = replace(
-                self.settings,
-                llm_model=vals["model"] or self.settings.llm_model,
-                openai_api_key=vals["api_key"],
-                openai_base_url=vals["base_url"],
-                library_path=Path(vals["library_path"]) if vals["library_path"] else self.settings.library_path,
-                data_dir=Path(vals["data_dir"]) if vals["data_dir"] else self.settings.data_dir,
-                vision_model=vals["vision_model"],
-                web_references=vals["web_references"],
-                narration_enabled=vals["narration_enabled"],
-                tts_voice=vals["tts_voice"] or self.settings.tts_voice,
-            )
+            # Re-resolve the just-saved config through the canonical precedence
+            # chain. Direct replacement made a saved key appear active until
+            # restart even when an environment key actually shadows it.
+            self.settings = load_settings()
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")
+            from aetherlab.services.course_mode import CourseProgressStore
+
+            self.course_progress = CourseProgressStore(
+                self.settings.data_dir / "course_progress.json"
+            )
             self.library_panel.set_settings(self.settings)
             self.empty_view.set_status(
                 bool(self.settings.openai_api_key),
@@ -887,26 +1350,63 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.statusBar().showMessage("Cancelling pipeline…")
-            self.command_bar.set_busy(False)
+            self.command_bar.set_busy(True)
+            self.command_bar.cancel_button.setEnabled(False)
             self.stepper.set_cancellable(False)
-            self.toast.show_message("warning", "Run cancelled by user.")
-            self._workspace.setCurrentIndex(
-                PAGE_SOLVE if self._has_result else PAGE_EMPTY
-            )
+            self.running_view.set_stage_text("Cancelling pipeline…", "")
+        elif self.lesson_worker and self.lesson_worker.isRunning():
+            # Learn is cancellable too — the pipeline stops after the current
+            # chapter and returns whatever rendered (on_lesson_ready handles it).
+            self.lesson_worker.cancel()
+            self.statusBar().showMessage("Cancelling lesson… (stops after this chapter)")
+            self.toast.show_message("warning", "Cancelling lesson…")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        probe = getattr(self, "_ollama_probe", None)
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
-            self.worker.wait(5000)
         if self.lesson_worker and self.lesson_worker.isRunning():
-            self.lesson_worker.wait(5000)
+            self.lesson_worker.cancel()
+        if self._export_task and self._export_task.is_running:
+            self._export_task.cancel()
+        self.library_panel.request_background_cancel()
+
+        threads = [
+            thread
+            for thread in (probe, self.worker, self.lesson_worker)
+            if thread is not None and thread.isRunning()
+        ]
+        threads.extend(self.library_panel.active_workers())
+        lingering = [thread for thread in threads if not thread.wait(5000)]
+        if lingering:
+            event.ignore()
+            self.statusBar().showMessage("Cancelling pipeline…")
+            if not self._close_pending:
+                self._close_pending = True
+                for thread in lingering:
+                    thread.finished.connect(self._close_when_idle)
+            return
+
+        self._close_pending = False
         super().closeEvent(event)
+
+    def _close_when_idle(self) -> None:
+        threads = [
+            getattr(self, "_ollama_probe", None),
+            self.worker,
+            self.lesson_worker,
+        ]
+        threads.extend(self.library_panel.active_workers())
+        if any(thread is not None and thread.isRunning() for thread in threads):
+            return
+        self._close_pending = False
+        QtCore.QTimer.singleShot(0, self.close)
 
     # ── pipeline ──
 
     # ── topic explainer (Learn) ──
 
-    def start_lesson(self, topic: str) -> None:
+    def start_lesson(self, topic: str, regenerate: bool = False) -> None:
         if self.lesson_worker and self.lesson_worker.isRunning():
             self.statusBar().showMessage("A lesson is already being built.")
             return
@@ -914,8 +1414,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Finish or cancel the current run first.")
             return
 
+        self._last_lesson_topic = topic
         self.lesson_worker = LessonWorker(
-            topic, self.settings, quality=self.command_bar.get_render_quality()
+            topic, self.settings, quality=self.command_bar.get_render_quality(),
+            regenerate=regenerate,
         )
         self.lesson_worker.progress.connect(self._on_lesson_progress)
         self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
@@ -924,10 +1426,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.command_bar.set_busy(True)
         self.toast.hide()
-        self.running_view.set_stage_text("Building lesson…", topic[:80])
+        verb = "Rebuilding" if regenerate else "Building"
+        self.running_view.set_stage_text(f"{verb} lesson…", topic[:80])
+        # Learn is cancellable (Esc / the running view's Cancel button).
+        self.stepper.set_cancellable(True)
         self._workspace.setCurrentIndex(PAGE_RUNNING)
-        self.statusBar().showMessage(f"Building lesson: {topic}")
+        self.statusBar().showMessage(f"{verb} lesson: {topic}")
         self.lesson_worker.start()
+
+    def regenerate_lesson(self) -> None:
+        """Rebuild the current lesson from scratch (ignore plan + clip caches)."""
+        topic = getattr(self, "_last_lesson_topic", "")
+        if not topic:
+            self.statusBar().showMessage("No lesson to regenerate yet.")
+            return
+        self.start_lesson(topic, regenerate=True)
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
@@ -935,8 +1448,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_lesson_ready(self, bundle) -> None:
         self.command_bar.set_busy(False)
+        self.stepper.set_cancellable(False)
+
+        # A cancelled lesson may have partial/no video — never dump the student
+        # on a blank page with no explanation.
+        if bundle.status == "cancelled":
+            self._last_lesson = bundle
+            if bundle.video_path:
+                self.lesson_view.set_lesson(bundle)
+                self._refresh_course_summary(bundle)
+                self.lesson_view.set_video(bundle.video_path)
+                self._workspace.setCurrentIndex(PAGE_LESSON)
+                self.toast.show_message(
+                    "warning",
+                    "Lesson cancelled — showing the chapters that finished. "
+                    "Press Learn again to build the rest.",
+                )
+            else:
+                self._workspace.setCurrentIndex(PAGE_LESSON if self._last_lesson else PAGE_EMPTY)
+                self.toast.show_message(
+                    "warning", "Lesson cancelled before any chapter finished.",
+                )
+            self.statusBar().showMessage("Lesson cancelled.")
+            return
+
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
+        self._refresh_course_summary(bundle)
         if bundle.video_path:
             self.lesson_view.set_video(bundle.video_path)
         self._workspace.setCurrentIndex(PAGE_LESSON)
@@ -948,6 +1486,37 @@ class MainWindow(QtWidgets.QMainWindow):
             "success",
             f"Lesson '{bundle.plan.title}' built ({note}). "
             "Watch it, read the transcript, or try the questions.",
+        )
+
+    def _refresh_course_summary(self, bundle) -> None:
+        try:
+            summary = self.course_progress.summary(bundle.plan)
+            self.lesson_view.set_course_summary(
+                f"{summary.message} Next: {summary.next_topic}"
+            )
+        except Exception:  # noqa: BLE001
+            self.lesson_view.set_course_summary(
+                "Course progress is unavailable for this lesson."
+            )
+
+    def _record_lesson_quiz_answer(
+        self, question_index: int, correct: bool, choice: str
+    ) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if not bundle:
+            return
+        try:
+            summary = self.course_progress.record_quiz_answer(
+                bundle.plan, int(question_index), bool(correct), str(choice)
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"Could not save course progress: {exc}")
+            return
+        self.lesson_view.set_course_summary(
+            f"{summary.message} Next: {summary.next_topic}"
+        )
+        self.statusBar().showMessage(
+            f"Course progress saved · {summary.correct}/{summary.attempts}"
         )
 
     def _export_study_guide(self) -> None:
@@ -964,6 +1533,35 @@ class MainWindow(QtWidgets.QMainWindow):
 
         export_lesson_study_guide(bundle.plan, Path(path))
         self.statusBar().showMessage(f"Study guide exported: {path}")
+
+    def _export_lesson_bundle(self) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if not bundle or not getattr(bundle, "video_path", ""):
+            self.statusBar().showMessage("No assembled lesson to export yet.")
+            return
+        default_name = "aetherlab_lesson_bundle.zip"
+        title = getattr(getattr(bundle, "plan", None), "title", "")
+        if title:
+            import re
+
+            slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+            if slug:
+                default_name = f"{slug[:48]}_bundle.zip"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export lesson bundle", default_name, "ZIP Files (*.zip)"
+        )
+        if not path:
+            return
+        destination = Path(path)
+
+        def export_bundle(_cancel, _progress):
+            from aetherlab.services.share_export import export_lesson_bundle
+
+            summary = export_lesson_bundle(bundle, destination)
+            size_mb = summary.size_bytes / 1e6
+            return f"Lesson bundle exported: {summary.path} ({size_mb:.1f} MB)"
+
+        self._start_export_task("Exporting lesson bundle…", export_bundle)
 
     def start_pipeline(self, prompt: str) -> None:
         if self.worker and self.worker.isRunning():
@@ -1018,8 +1616,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
 
     def _on_worker_finished(self) -> None:
+        cancelled = bool(self.worker and self.worker._cancelled)
         self.command_bar.set_busy(False)
+        self.command_bar.cancel_button.setEnabled(True)
         self.stepper.set_cancellable(False)
+        if cancelled:
+            self.simulation_panel.hide_loading()
+            self.toast.show_message("warning", "Run cancelled by user.")
+            self._workspace.setCurrentIndex(
+                PAGE_SOLVE if self._has_result else PAGE_EMPTY
+            )
 
     def _on_progress(self, value: int, text: str = "") -> None:
         if value < 30:
@@ -1063,6 +1669,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_render_ready(self, scene: SceneBundle) -> None:
         self.simulation_panel.set_video(scene)
         self.stepper.set_stage(3, "complete")
+        if any("Cloud render unavailable; rendered locally." in d for d in scene.diagnostics):
+            self.statusBar().showMessage("Cloud render unavailable — rendered locally.")
+            self.toast.show_message("warning", "Cloud render unavailable — rendered locally.")
 
     def on_failure(self, error: PipelineError) -> None:
         self.simulation_panel.hide_loading()

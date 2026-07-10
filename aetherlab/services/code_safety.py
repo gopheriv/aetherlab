@@ -43,12 +43,18 @@ BANNED_NAMES: frozenset[str] = frozenset(
         "eval",
         "compile",
         "__import__",
+        "__builtins__",
         "open",
         "input",
         "breakpoint",
         "globals",
         "locals",
         "vars",
+        "getattr",
+        "setattr",
+        "delattr",
+        "dir",
+        "type",
     }
 )
 
@@ -58,11 +64,46 @@ BANNED_ATTRIBUTES: frozenset[str] = frozenset(
     {
         "__globals__",
         "__builtins__",
+        "__class__",
+        "__dict__",
         "__subclasses__",
         "__bases__",
         "__mro__",
         "__import__",
         "__code__",
+        "__getattribute__",
+        "__getattr__",
+        "__setattr__",
+        "__delattr__",
+        "__loader__",
+        "__spec__",
+    }
+)
+
+# ``numpy`` is a legitimate scientific import, but its file-I/O surface is an
+# arbitrary host read/write vector no real Manim scene needs: raw-array
+# read/write (``ndarray.tofile`` / ``numpy.fromfile`` / ``frombuffer``), text
+# load/save to an exact path (``savetxt`` / ``loadtxt`` / ``genfromtxt``),
+# pickle-bearing ``load``/``save``, memory-mapping, and ``DataSource`` URL
+# fetches. A raw ``tofile``/``savetxt`` to a Startup folder is arbitrary file
+# write -> code execution. None of these attribute names appear in legitimate
+# generated scenes, so any use of them is rejected as an attribute sink.
+BANNED_IO_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        "tofile",
+        "fromfile",
+        "frombuffer",
+        "fromstring",
+        "fromregex",
+        "save",
+        "savez",
+        "savez_compressed",
+        "savetxt",
+        "load",
+        "loadtxt",
+        "genfromtxt",
+        "memmap",
+        "DataSource",
     }
 )
 
@@ -126,6 +167,17 @@ def validate_code_safety(code: str) -> tuple[bool, list[str]]:
             if node.attr in BANNED_ATTRIBUTES:
                 issues.append(
                     f"Access to banned attribute '{node.attr}' (line {node.lineno})."
+                )
+            elif node.attr in BANNED_IO_ATTRIBUTES:
+                issues.append(
+                    f"Access to banned file-I/O method '{node.attr}' (line {node.lineno}): "
+                    "raw/host file read/write is not allowed in scene code."
+                )
+        # --- string-based dunder escape helpers -----------------------------
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in BANNED_ATTRIBUTES or node.value in BANNED_NAMES:
+                issues.append(
+                    f"Reference to banned runtime handle '{node.value}' (line {node.lineno})."
                 )
 
     return (not issues), issues

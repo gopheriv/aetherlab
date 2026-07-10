@@ -53,10 +53,10 @@ class Theme:
     text_faint: str = "#475569"
 
     # ── accent family ──
-    accent: str = "#06B6D4"
-    accent_hover: str = "#22D3EE"
+    accent: str = "#22D3EE"
+    accent_hover: str = "#67E8F9"
     accent_deep: str = "#0E7490"
-    accent_pressed: str = "#0891B2"
+    accent_pressed: str = "#06B6D4"
     accent_soft: str = "#164E63"    # checked/selected backgrounds
 
     # ── semantics ──
@@ -68,7 +68,7 @@ class Theme:
     error_text: str = "#FDA4AF"
 
     # ── data-viz curves (canvas + manim) ──
-    curve1: str = "#06B6D4"
+    curve1: str = "#22D3EE"
     curve2: str = "#10B981"
     curve3: str = "#8B5CF6"
     curve4: str = "#F59E0B"
