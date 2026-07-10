@@ -71,6 +71,28 @@ def check(fid: str, fn) -> None:
         print("\n".join("      " + ln for ln in tb.splitlines()[-4:]))
 
 
+def _ffmpeg_exe():
+    """Locate an ffmpeg binary for the assembly tests, or None.
+
+    Prefers a system ffmpeg (GitHub CI runners ship one), then imageio-ffmpeg's
+    bundled binary (the app's OPTIONAL ``narration`` extra). Returns None when
+    neither is available so callers skip render-driven assertions fail-soft —
+    exactly how the app degrades without an ffmpeg (assembly/narration are
+    fail-soft), and mirroring how t_f138 already skips when edge-tts is absent.
+    """
+    import shutil
+
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 — optional dep; degrade to skip
+        return None
+
+
 # ── Qt app (offscreen) for gui construction tests ──
 from aetherlab.ui.qt_compat import QtWidgets  # noqa: E402
 
@@ -2968,11 +2990,15 @@ def t_f143():
     assert plan.topic in _chapter_prompt(ch, plan)
     assert _chapter_key(ch, plan) != _chapter_key(plan.chapters[0], plan)
 
-    # A tiny real mp4 to drive assembly (imageio-ffmpeg is bundled with manim).
-    import imageio_ffmpeg
+    # A tiny real mp4 to drive the chapter-cache playability test. ffmpeg comes
+    # from a system binary or the optional 'narration' extra (imageio-ffmpeg); if
+    # neither exists, skip the render-driven checks fail-soft (the pure chapter
+    # logic above is already verified) — the app treats ffmpeg as optional too.
     import subprocess
 
-    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    ff = _ffmpeg_exe()
+    if not ff:
+        return "chapter solver/prompt/key verified; playable-video cache checks skipped (no ffmpeg) (F143)"
     clip = _TMP / "seg.mp4"
     subprocess.run([ff, "-y", "-f", "lavfi", "-i",
                     "testsrc=size=320x240:rate=30:duration=1", "-pix_fmt", "yuv420p", str(clip)],
@@ -3181,8 +3207,7 @@ def t_f147():
 def t_f148():
     # P1.2: produced lesson — PIL title cards + crossfaded assembly.
     import subprocess
-    import imageio_ffmpeg
-    import av
+
     from aetherlab.services.assembly import _segment_starts
     from aetherlab.services.cards import render_card_png
 
@@ -3202,7 +3227,15 @@ def t_f148():
                           title="The idea", subtitle="undergrad")
     assert png and png.exists() and png.stat().st_size > 1000
 
-    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    # Real crossfade assembly needs an ffmpeg binary (optional 'narration' extra
+    # or a system one). Absent both, skip render-driven assembly fail-soft — the
+    # BUG-6 segment-start math and PIL cards above are already verified.
+    ff = _ffmpeg_exe()
+    if not ff:
+        return ("produced-lesson BUG-6 segment-start math + PIL cards verified; "
+                "assembly render skipped (no ffmpeg) (F148)")
+    import av
+
     clips = []
     for i in range(2):
         c = _TMP / f"clip{i}.mp4"
