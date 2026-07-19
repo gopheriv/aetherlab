@@ -219,18 +219,81 @@ def _state_from_plot(
     )
 
 
+def _state_from_numeric(
+    title: str,
+    params: dict[str, float],
+    numeric_spec: dict,
+    phase_portrait: bool,
+) -> CanvasState:
+    """Build canvas state from the exact numerically-integrated trajectory.
+
+    Raises if scipy is missing or the spec is invalid so build_canvas_state can
+    fall back to the analytic plot payload.
+    """
+    from aetherlab.services.numeric import solve_numeric
+
+    sol = solve_numeric(numeric_spec, params)
+    if not sol.ok or not sol.t:
+        raise ValueError(sol.note or "numeric integration unavailable")
+
+    num_t = np.asarray(sol.t, dtype=float)
+    num_y = np.asarray(sol.series(), dtype=float)
+    if num_t.size < 2 or num_y.size != num_t.size:
+        raise ValueError("numeric solution too short to plot")
+
+    def x_fn(t: np.ndarray, p: dict[str, float]) -> np.ndarray:
+        return np.asarray(t, dtype=float)
+
+    def y_fn(t: np.ndarray, p: dict[str, float], _t=num_t, _y=num_y) -> np.ndarray:
+        return np.interp(np.asarray(t, dtype=float), _t, _y)
+
+    observe = sol.observe or "x"
+    curves = [
+        CurveSpec(
+            name=observe,
+            x_fn=x_fn,
+            y_fn=y_fn,
+            color="#06B6D4",
+            width=2.5,
+            t_range=(float(num_t[0]), float(num_t[-1])),
+            t_steps=min(max(num_t.size, 200), 800),
+        )
+    ]
+    if phase_portrait:
+        curves.append(_phase_overlay_for(y_fn, (float(num_t[0]), float(num_t[-1])), params))
+
+    return CanvasState(
+        title=title,
+        x_label="t",
+        y_label=observe,
+        x_range=(float(num_t[0]), float(num_t[-1])),
+        y_range=_auto_range(num_y),
+        params=dict(params),
+        curves=curves,
+        show_phase_portrait=phase_portrait,
+    )
+
+
 def build_canvas_state(
     title: str,
     params: dict[str, float],
     phase_portrait: bool = False,
     plot: dict | None = None,
+    numeric_spec: dict | None = None,
 ) -> CanvasState:
     """Build the canvas state.
 
-    Prefers the solver's own plot payload (compiled safely — see
-    services/plotting.py); any parse/compile problem falls back to the legacy
-    name-based curve families so the canvas never crashes on bad LLM output.
+    Prefers the exact numerically-integrated trajectory (services/numeric.py)
+    when the solver attached an ODE spec; otherwise the solver's own plot
+    payload (compiled safely — see services/plotting.py); any parse/compile
+    problem falls back to the legacy name-based curve families so the canvas
+    never crashes on bad LLM output.
     """
+    if numeric_spec is not None:
+        try:
+            return _state_from_numeric(title, params, numeric_spec, phase_portrait)
+        except Exception as exc:  # noqa: BLE001 — canvas must never crash
+            log.warning("Numeric integration rejected (%s); trying analytic plot.", exc)
     if plot is not None:
         try:
             return _state_from_plot(title, params, plot, phase_portrait)

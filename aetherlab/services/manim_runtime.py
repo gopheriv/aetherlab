@@ -67,11 +67,22 @@ class ManimRuntime:
         rag: RagResult,
         settings: "AppSettings | None" = None,
         max_retries: int = 1,
+        plan: object | None = None,
     ) -> SceneBundle:
-        """Generate a dynamic Manim scene using LLM, with retry on failure."""
+        """Generate a dynamic Manim scene, preferring curated components.
+
+        A curated, numeric-driven component (services/scene_components) is used
+        when one fits — it renders the real solution and is far more reliable
+        than free-form LLM code. Only when no component fits do we fall back to
+        LLM generation (with a key) or the static template.
+        """
         s = settings or self._settings
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
+
+        composed = self._compose_curated(class_name, solver, plan, diagnostics)
+        if composed is not None:
+            return composed
 
         if s and s.openai_api_key:
             generator = SceneGenerator(s)
@@ -110,15 +121,47 @@ class ManimRuntime:
             diagnostics=diagnostics,
         )
 
+    def _compose_curated(
+        self, class_name: str, solver: SolverResult, plan: object | None, diagnostics: list[str]
+    ) -> SceneBundle | None:
+        """Build a scene from the curated component library, if one fits."""
+        try:
+            from aetherlab.services.scene_components import compose_scene_code
+
+            code = compose_scene_code(class_name, solver, plan)
+        except Exception as exc:  # noqa: BLE001 — composition must never crash
+            diagnostics.append(f"Curated composition unavailable: {exc}")
+            return None
+        if not code:
+            return None
+        try:
+            compile(code, "<aetherlab-composed-scene>", "exec")
+        except SyntaxError as exc:
+            diagnostics.append(f"Composed scene failed to compile: {exc}")
+            return None
+        engine, _ = self.detect_engine()
+        diagnostics.append("Scene composed from curated component library (numeric-driven).")
+        return SceneBundle(
+            class_name=class_name,
+            code=code,
+            engine=engine,
+            status="compiled",
+            diagnostics=diagnostics,
+        )
+
     def generate_scene(
         self,
         request: ProblemRequest,
         solver: SolverResult,
         rag: RagResult,
+        plan: object | None = None,
     ) -> SceneBundle:
-        """Synchronous fallback — uses the static template."""
+        """Synchronous path — curated component first, else the static template."""
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
+        composed = self._compose_curated(class_name, solver, plan, diagnostics)
+        if composed is not None:
+            return composed
         code = self._build_scene_code(class_name, request, solver, rag)
         try:
             compile(code, "<aetherlab-generated-scene>", "exec")

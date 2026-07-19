@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -593,12 +594,36 @@ def t_f46():
 
 
 def t_f47():
-    from aetherlab.ui.widgets import StarterLibraryDialog
+    import dataclasses
+    from aetherlab.ui.widgets import StarterLibraryDialog, LibraryPanel
     d = StarterLibraryDialog()
     books = d.selected_books()
     assert len(books) >= 1  # defaults checked
     d.close()
-    return f"starter dialog: {len(books)} default-selected book(s)"
+
+    # BUG-6 regression: cancelling a starter download must NOT roll into
+    # indexing (that re-shows the strip Cancel just hid). Simulate a cancelled
+    # worker and assert no ingest worker starts and the strip stays hidden.
+    lib = _TMP / "lib47"
+    st = dataclasses.replace(
+        _settings(),
+        library_path=lib, data_dir=lib,
+        chroma_path=lib / "chroma", cache_path=lib / "cache.sqlite3",
+    )
+    lp = LibraryPanel()
+    lp.set_settings(st)
+
+    class _CancelledWorker:
+        def isInterruptionRequested(self):
+            return True
+
+    lp._downloader = _CancelledWorker()
+    lp._worker = None
+    lp._on_downloads_done(1, 0)  # 1 book landed before the user cancelled
+    assert lp._worker is None, "cancelled download must not auto-start indexing (BUG-6)"
+    assert lp._progress_strip.isHidden(), "cancel must leave the progress strip hidden"
+    lp.close()
+    return f"starter dialog: {len(books)} default book(s); cancel skips auto-index (BUG-6)"
 
 
 def t_f48():
@@ -625,8 +650,14 @@ def t_f48():
 
 def t_f49():
     from aetherlab.services.scene_generator import SceneGenerator, SCENE_GENERATION_SYSTEM_PROMPT
-    assert "max_tokens=16384" in inspect.getsource(SceneGenerator._generate_remote)
-    assert "temperature=0.4" in inspect.getsource(SceneGenerator._generate_remote)
+    gr = inspect.getsource(SceneGenerator._generate_remote)
+    # Assert the *intent* (a generous output budget for reasoning models that
+    # burn tokens on <think> blocks), not a brittle exact literal. The old test
+    # hardcoded max_tokens=16384; the code deliberately raised it to 32768 and
+    # the assertion silently rotted into a false PASS in the canonical results.
+    mt = re.search(r"max_tokens=(\d+)", gr)
+    assert mt and int(mt.group(1)) >= 16384, f"generous max_tokens expected, got {mt and mt.group(1)}"
+    assert "temperature=0.4" in gr
     # code extraction robustness
     sg = SceneGenerator(_settings())
     code = sg._extract_code("<think>plan</think>```python\nfrom manim import *\nclass X(Scene):\n    def construct(self):\n        pass\n```", "AetherLabScene")
@@ -1131,6 +1162,227 @@ def t_f100():
     a = _scene_name("X", "code A"); b = _scene_name("X", "code B")
     assert a != b and _scene_name("X", "code A") == a
     return "sanitize + stable per-code hashing"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign Phase 1 — planner + conditional outputs
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f101():
+    # Planner routes a prompt to the minimal useful set of output modalities.
+    from aetherlab.services.planner import Planner
+    from aetherlab.core.models import ProblemRequest, LessonPlan
+    p = Planner(_settings())
+    concept = p.heuristic_plan(ProblemRequest(prompt="Explain what entropy is conceptually"))
+    dyn = p.heuristic_plan(ProblemRequest(prompt="Simulate the damped harmonic oscillator"))
+    d3 = p.heuristic_plan(ProblemRequest(prompt="Visualize the electric field of a dipole in 3D"))
+    assert concept.enabled() == ["pdf"], concept.enabled()
+    assert dyn.needs_numeric and dyn.needs_animation and dyn.needs_2d
+    assert d3.needs_3d
+    # LessonPlan round-trips through json (cache/wire safe).
+    assert LessonPlan.from_json(dyn.to_json()).needs_animation
+    return f"planner routes: concept={concept.enabled()} dyn={dyn.enabled()} 3d={d3.enabled()}"
+
+
+def t_f102():
+    # Conditional pipeline: a conceptual prompt skips scene-gen + render.
+    import dataclasses
+    from aetherlab.services.pipeline import AetherLabPipeline
+    from aetherlab.core.models import ProblemRequest
+    st = dataclasses.replace(_settings(), openai_api_key=None)  # force deterministic path
+    res = asyncio.run(AetherLabPipeline(st).run(ProblemRequest(prompt="Explain what entropy is conceptually")))
+    assert res.plan is not None and not res.plan.needs_animation
+    assert res.scene.status == "skipped", res.scene.status
+    return f"conditional pipeline: plan={res.plan.enabled()} scene={res.scene.status}"
+
+
+def t_f103():
+    # Planner offline fallback is deterministic and self-labels.
+    import dataclasses
+    from aetherlab.services.planner import Planner
+    from aetherlab.core.models import ProblemRequest
+    st = dataclasses.replace(_settings(), openai_api_key=None)
+    p = Planner(st)
+    a = asyncio.run(p.plan(ProblemRequest(prompt="Simulate a pendulum")))
+    b = asyncio.run(p.plan(ProblemRequest(prompt="Simulate a pendulum")))
+    assert a.model_name == "heuristic-fallback"
+    assert a.to_json() == b.to_json(), "offline plan must be deterministic"
+    return f"offline planner deterministic: {a.enabled()}"
+
+
+def t_f104():
+    # UI gates the view pills by plan: pdf-only hides Canvas + Video.
+    from aetherlab.ui.widgets import SimulationPanel
+    from aetherlab.core.models import LessonPlan
+    sp = SimulationPanel()
+    byid = {sp._pill_group.id(b): b for b in sp._pill_group.buttons()}
+    sp.apply_plan(LessonPlan(needs_2d=False, needs_3d=False, needs_animation=False, needs_pdf=True))
+    assert byid[0].isHidden() and byid[1].isHidden() and not byid[2].isHidden(), "pdf-only hides canvas+video"
+    sp.apply_plan(LessonPlan(needs_2d=True, needs_animation=True))
+    assert not byid[0].isHidden() and not byid[1].isHidden(), "animation plan shows canvas+video"
+    sp.close()
+    return "view pills gated by plan (canvas/video hidden for pdf-only)"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign Phase 2 — numeric ground truth
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f105():
+    # Numeric ground truth matches the closed-form underdamped solution.
+    import math
+    import numpy as np
+    from aetherlab.services.numeric import solve_numeric, fallback_numeric_spec
+    variables = {"damping": 0.15, "stiffness": 1.0, "mass": 1.0}
+    sol = solve_numeric(fallback_numeric_spec(), variables, max_points=400)
+    assert sol.ok, sol.note
+    t = np.array(sol.t); x = np.array(sol.series("x"))
+    c = variables["damping"]; w0 = math.sqrt(variables["stiffness"] / variables["mass"])
+    wd = math.sqrt(w0 * w0 - c * c)
+    analytic = np.exp(-c * t) * (np.cos(wd * t) + (c / wd) * np.sin(wd * t))
+    max_err = float(np.max(np.abs(x - analytic)))
+    assert max_err < 1e-3, f"numeric vs analytic max_err={max_err}"
+    # Unsafe / invalid RHS degrades to ok=False (never eval'd, never raises).
+    bad = solve_numeric(
+        {"state": ["x"], "rhs": ["__import__('os').system('x')"], "initial": [0.0], "t_range": [0, 1]}, {}
+    )
+    assert not bad.ok
+    return f"numeric matches analytic (max_err={max_err:.2e}); unsafe rhs rejected"
+
+
+def t_f106():
+    # Canvas is driven by the exact numeric trajectory when a spec is present.
+    import numpy as np
+    from aetherlab.ui.live_canvas import build_canvas_state
+    from aetherlab.services.numeric import fallback_numeric_spec
+    variables = {"damping": 0.15, "stiffness": 1.0, "mass": 1.0}
+    state = build_canvas_state("test", variables, plot=None, numeric_spec=fallback_numeric_spec())
+    assert state.curves and state.curves[0].name == "x"
+    y0 = float(np.asarray(state.curves[0].y_fn(np.array([0.0]), variables)).reshape(-1)[0])
+    assert abs(y0 - 1.0) < 1e-6, f"x(0) should equal the initial condition, got {y0}"
+    # Bad spec + no plot must not crash — falls through to legacy curves.
+    fb = build_canvas_state("test", variables, plot=None, numeric_spec={"bad": 1})
+    assert fb.curves
+    return f"canvas driven by numeric (x(0)={y0:.3f}); bad spec falls back safely"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign Phase 3 — formal cited research PDF
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f107():
+    # Formal research PDF: numeric-driven figure + RAG citations, compiled.
+    from aetherlab.services.research import build_research_pdf, build_latex
+    from aetherlab.services.numeric import fallback_numeric_spec
+    from aetherlab.core.models import ProblemRequest, RagResult, RagHit
+    solver = _solver(numeric_spec=fallback_numeric_spec())
+    rag = RagResult(keywords=["oscillator"],
+                    hits=[RagHit("OpenStax Vol 1.pdf", 213, 0.9, "damped oscillations")],
+                    backend="test")
+    req = ProblemRequest(prompt="Derive the damped harmonic oscillator")
+    res = build_research_pdf(req, solver, rag, _TMP / "research107")
+    assert res.tex_path.exists()
+    assert res.pdf_path is not None and res.pdf_path.exists(), f"no pdf ({res.backend}): {res.note}"
+    assert res.backend in {"pdflatex", "matplotlib"}
+    assert res.citations == ["OpenStax Vol 1.pdf, p.213"], res.citations
+    assert res.verification, "research PDF should embed physics verification checks"
+    tex = build_latex(req, solver, rag, res.figure_path, verification=res.verification)
+    assert "OpenStax" in tex and "includegraphics" in tex and "Derivation" in tex and "Verification" in tex
+    return f"research pdf via {res.backend}, {len(res.citations)} citation(s), verified"
+
+
+def t_f108():
+    # pdflatex-free fallback: matplotlib renders a PDF + the numeric figure.
+    from aetherlab.services.research import _matplotlib_pdf, render_numeric_figure
+    from aetherlab.services.numeric import fallback_numeric_spec
+    from aetherlab.core.models import ProblemRequest
+    solver = _solver(numeric_spec=fallback_numeric_spec())
+    out = _TMP / "research108"; out.mkdir(parents=True, exist_ok=True)
+    fig = render_numeric_figure(solver, out / "fig.png")
+    assert fig and fig.exists(), "numeric figure should render"
+    pdf = _matplotlib_pdf(ProblemRequest(prompt="Derive the oscillator"),
+                          solver, ["Ref A, p.1"], fig, out / "fallback.pdf")
+    assert pdf and pdf.exists(), "matplotlib fallback PDF should be produced"
+    return f"matplotlib fallback pdf ok ({pdf.stat().st_size} bytes)"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign Phase 4 — curated Manim component library
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f109():
+    # Trajectory component composes a compilable, numeric-driven scene.
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    sv = _solver(numeric_spec=fallback_numeric_spec())
+    code = compose_scene_code("AetherLabScene", sv, None)
+    assert code is not None
+    compile(code, "<scene>", "exec")  # render-validated separately; must at least compile
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "MoveAlongPath" in code and "set_points_smoothly" in code  # driven by real samples
+    return f"trajectory component composes a compilable numeric-driven scene ({len(code)} chars)"
+
+
+def t_f110():
+    # 3-D surface is composed for needs_3d; nothing composes without a fit.
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.core.models import LessonPlan
+    sv = _solver()  # no numeric_spec
+    code = compose_scene_code("AetherLabScene", sv, LessonPlan(needs_3d=True, needs_animation=True))
+    assert code is not None and "ThreeDScene" in code
+    compile(code, "<scene>", "exec")
+    # No numeric + no 3-D -> None so the caller falls back to LLM/static.
+    assert compose_scene_code("X", sv, LessonPlan(needs_3d=False)) is None
+    return "3D surface composed for needs_3d; None otherwise"
+
+
+def t_f111():
+    # ManimRuntime prefers the curated component over LLM/static generation.
+    import dataclasses
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.numeric import fallback_numeric_spec
+    from aetherlab.core.models import ProblemRequest
+    st = dataclasses.replace(_settings(), openai_api_key=None)  # never hit the LLM in tests
+    sv = _solver(numeric_spec=fallback_numeric_spec())
+    bundle = asyncio.run(
+        ManimRuntime(st).generate_scene_async(ProblemRequest(prompt="oscillator"), sv, _rag(), st)
+    )
+    assert bundle.status == "compiled", bundle.status
+    assert any("curated component" in d for d in bundle.diagnostics), bundle.diagnostics
+    assert "set_points_smoothly" in bundle.code
+    return "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign Phase 5 — physics verifier
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f112():
+    # Verifier passes a physically-correct damped oscillator.
+    from aetherlab.services.verify import verify_solution
+    from aetherlab.services.numeric import fallback_numeric_spec
+    sv = _solver(numeric_spec=fallback_numeric_spec())
+    report = verify_solution(sv)
+    assert report.ok, report.summary
+    names = {c.name: c.passed for c in report.checks}
+    assert names.get("finite") and names.get("boundedness") and names.get("energy"), names
+    return f"verifier passes physical oscillator ({report.summary})"
+
+
+def t_f113():
+    # Verifier catches an unphysical result (anti-damped: energy grows).
+    from aetherlab.services.verify import verify_solution
+    from aetherlab.core.models import SolverResult
+    anti = {"state": ["x", "v"],
+            "rhs": ["v", "-(stiffness/mass)*x + (2*damping)*v"],  # sign flipped -> pumps energy
+            "initial": [1.0, 0.0], "t_range": [0.0, 20.0], "observe": "x"}
+    sv = SolverResult(summary="anti-damped", derivation_steps=[], keywords=["oscillator"],
+                      variables={"damping": 0.15, "stiffness": 1.0, "mass": 1.0},
+                      model_name="t", numeric_spec=anti)
+    report = verify_solution(sv)
+    failed = {c.name for c in report.checks if not c.passed}
+    assert "energy" in failed and "boundedness" in failed, [c.name for c in report.checks]
+    return f"verifier flags unphysical growth ({report.summary})"
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

@@ -21,7 +21,7 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=qwen3.6-plus data_dir set timeout=60.0"
+    "note": "model=gpt-5.5 data_dir set timeout=60.0"
   },
   "F07": {
     "status": "PASS",
@@ -185,11 +185,11 @@
   },
   "F47": {
     "status": "PASS",
-    "note": "starter dialog: 2 default-selected book(s)"
+    "note": "starter dialog: 3 default book(s); cancel skips auto-index (BUG-6)"
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=216722 + skip-existing"
+    "note": "URL fallback + free_disk_mb=244854 + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_zjhkmnuf/d.pdf') (None ok if no pdflatex)"
+    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_6p0hikvu/d.pdf') (None ok if no pdflatex)"
   },
   "F87": {
     "status": "PASS",
@@ -398,5 +398,57 @@
   "F100": {
     "status": "PASS",
     "note": "sanitize + stable per-code hashing"
+  },
+  "F101": {
+    "status": "PASS",
+    "note": "planner routes: concept=['pdf'] dyn=['numeric', '2d', 'animation', 'pdf'] 3d=['2d', '3d', 'animation', 'pdf']"
+  },
+  "F102": {
+    "status": "PASS",
+    "note": "conditional pipeline: plan=['pdf'] scene=skipped"
+  },
+  "F103": {
+    "status": "PASS",
+    "note": "offline planner deterministic: ['numeric', '2d', 'animation', 'pdf']"
+  },
+  "F104": {
+    "status": "PASS",
+    "note": "view pills gated by plan (canvas/video hidden for pdf-only)"
+  },
+  "F105": {
+    "status": "PASS",
+    "note": "numeric matches analytic (max_err=3.98e-07); unsafe rhs rejected"
+  },
+  "F106": {
+    "status": "PASS",
+    "note": "canvas driven by numeric (x(0)=1.000); bad spec falls back safely"
+  },
+  "F107": {
+    "status": "PASS",
+    "note": "research pdf via pdflatex, 1 citation(s), verified"
+  },
+  "F108": {
+    "status": "PASS",
+    "note": "matplotlib fallback pdf ok (60271 bytes)"
+  },
+  "F109": {
+    "status": "PASS",
+    "note": "trajectory component composes a compilable numeric-driven scene (3591 chars)"
+  },
+  "F110": {
+    "status": "PASS",
+    "note": "3D surface composed for needs_3d; None otherwise"
+  },
+  "F111": {
+    "status": "PASS",
+    "note": "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
+  },
+  "F112": {
+    "status": "PASS",
+    "note": "verifier passes physical oscillator (3/3 physics checks passed.)"
+  },
+  "F113": {
+    "status": "PASS",
+    "note": "verifier flags unphysical growth (1/3 physics checks passed.)"
   }
 }

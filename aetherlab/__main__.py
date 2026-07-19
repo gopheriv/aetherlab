@@ -32,11 +32,21 @@ async def _run_smoke(prompt: str) -> int:
 
     print("AetherLab smoke pipeline complete")
     print(f"Cache key: {result.cache_key}")
+    print(f"Plan ({result.plan.model_name}): {', '.join(result.plan.enabled()) or 'none'}")
     print(f"Solver model: {result.solver.model_name}")
     print(f"Keywords: {', '.join(result.solver.keywords) or 'none'}")
     print(f"RAG hits: {len(result.rag.hits)}")
     print(f"Scene engine: {result.scene.engine}")
     print(f"Scene status: {result.scene.status}")
+    try:
+        from aetherlab.services.verify import verify_solution
+
+        report = verify_solution(result.solver, result.request)
+        print(f"Verification: {report.summary}")
+        for line in report.as_lines():
+            print(f"  {line}")
+    except Exception:
+        pass
     return 0
 
 

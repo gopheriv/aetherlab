@@ -520,26 +520,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("No pipeline result to export.")
             return
         import tempfile
+
+        from aetherlab.services.research import build_research_pdf
+
         tmp_dir = Path(tempfile.gettempdir()) / "aetherlab_export"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp = tmp_dir / "derivation.tex"
-        solver = self._last_result.solver
-        export_derivation_to_latex(
-            solver.summary, solver.derivation_steps, solver.variables, tmp
+        result = self._last_result
+        self.statusBar().showMessage("Building research PDF…")
+        research = build_research_pdf(
+            result.request, result.solver, result.rag, tmp_dir
         )
-        pdf = compile_latex_to_pdf(tmp)
-        if pdf and pdf.exists():
+        if research.pdf_path and research.pdf_path.exists():
             path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
+                self, "Export research PDF", "research.pdf", "PDF Files (*.pdf)"
             )
             if path:
                 import shutil
-                shutil.copy2(pdf, path)
-                self.statusBar().showMessage(f"PDF exported: {path}")
+                shutil.copy2(research.pdf_path, path)
+                self.statusBar().showMessage(
+                    f"Research PDF exported via {research.backend} "
+                    f"({len(research.citations)} citation(s)): {path}"
+                )
         else:
-            self.statusBar().showMessage(
-                "pdflatex not found or compilation failed. LaTeX file saved instead."
+            # No PDF backend (no pdflatex, no matplotlib) — offer the LaTeX source.
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Export LaTeX (no PDF backend)", "research.tex", "LaTeX Files (*.tex)"
             )
+            if path:
+                import shutil
+                shutil.copy2(research.tex_path, path)
+                self.statusBar().showMessage(f"No PDF backend available; LaTeX saved: {path}")
 
     def _export_scene(self) -> None:
         if not self._last_result:
@@ -683,6 +692,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker is not None:
             try:
                 self.worker.status.disconnect()
+                self.worker.plan_ready.disconnect()
                 self.worker.solver_ready.disconnect()
                 self.worker.rag_ready.disconnect()
                 self.worker.scene_ready.disconnect()
@@ -702,6 +712,7 @@ class MainWindow(QtWidgets.QMainWindow):
             request=request, settings=self.settings, render_quality=render_quality
         )
         self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.plan_ready.connect(self.on_plan_ready)
         self.worker.solver_ready.connect(self.on_solver_ready)
         self.worker.rag_ready.connect(self.on_rag_ready)
         self.worker.scene_ready.connect(self.on_scene_ready)
@@ -749,6 +760,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "Pipeline complete" if value >= 100 else f"Running {label}…",
             text,
         )
+
+    def on_plan_ready(self, plan) -> None:
+        self._current_plan = plan
+        self.simulation_panel.apply_plan(plan)
+        enabled = ", ".join(plan.enabled()) or "none"
+        self.statusBar().showMessage(f"Plan: {enabled}")
 
     def on_solver_ready(self, solver: SolverResult) -> None:
         self.analysis_panel.set_solver_result(solver)

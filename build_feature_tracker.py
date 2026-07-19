@@ -469,6 +469,68 @@ FEATURES: list[tuple[str, str, str, str, str, str, str, str, str]] = [
      "As a user, scene files are uniquely and stably named per code.",
      "sanitize_scene_name title-cases alnum runs; _scene_name appends a 10-char sha256 of the code so identical scenes reuse caches and different prompts don't collide.",
      "services/manim_runtime.py", "headless", "Documented", ""),
+
+    # ── Redesign Phase 1: planner + conditional outputs ─────────────────────
+    ("F101", "Planner", "Prompt-to-modality routing",
+     "As a user, each problem only produces the outputs it actually needs.",
+     "Planner.plan() returns a LessonPlan{needs_numeric,needs_2d,needs_3d,needs_animation,needs_pdf,rationale} via one strict-JSON LLM call; the heuristic classifier routes 'explain X conceptually' to pdf-only, dynamics prompts to numeric+2d+animation, and 3-D field prompts to needs_3d. LessonPlan round-trips through JSON.",
+     "services/planner.py / core/models.py", "headless", "Documented", ""),
+    ("F102", "Planner", "Conditional pipeline (skip unplanned stages)",
+     "As a user, conceptual questions return fast instead of rendering a needless video.",
+     "AetherLabPipeline.run() and PipelineWorker gate scene generation + Manim render on plan.needs_animation; a non-animated plan yields a status='skipped' SceneBundle and no render. PipelineResult carries the plan.",
+     "services/pipeline.py / ui/workers.py", "headless", "Documented", ""),
+    ("F103", "Planner", "Deterministic offline planner fallback",
+     "As a user without an API key, planning still works and is reproducible.",
+     "Planner.plan() falls back to heuristic_plan() (model_name='heuristic-fallback') on missing key or any provider/parse error; identical prompts yield identical plans.",
+     "services/planner.py", "headless", "Documented", ""),
+    ("F104", "Planner", "UI view pills gated by plan",
+     "As a user, I only see the Canvas/Video tabs relevant to my problem.",
+     "SimulationPanel.apply_plan() hides the Canvas pill unless needs_2d or needs_3d, hides the Video pill unless needs_animation, keeps Code, and re-selects the first visible pill; MainWindow wires it via the worker's plan_ready signal.",
+     "ui/widgets.py / ui/main_window.py", "gui", "Documented", ""),
+
+    # ── Redesign Phase 2: numeric ground truth ──────────────────────────────
+    ("F105", "Numeric", "ODE ground-truth integration",
+     "As a user, my plots reflect the real solution, not a curve the model guessed.",
+     "solve_numeric() integrates a solver-attached ODE spec (state/rhs/initial/t_range/observe) via scipy solve_ivp; RHS expressions compile through the same AST allow-list (services/plotting) so model math is never eval'd. The damped-oscillator fallback matches the closed-form underdamped solution to <1e-3; invalid/unsafe specs return ok=False (scipy optional).",
+     "services/numeric.py / core/models.py", "headless", "Documented", ""),
+    ("F106", "Numeric", "Canvas driven by numeric trajectory",
+     "As a user, the live canvas animates the exact integrated trajectory.",
+     "build_canvas_state() prefers _state_from_numeric (interpolating the integrated series) over the analytic plot payload; x(0) equals the initial condition. A missing/failed integration falls back to the plot payload then legacy curves so the canvas never crashes.",
+     "ui/live_canvas.py", "headless", "Documented", ""),
+
+    # ── Redesign Phase 3: formal cited research PDF ─────────────────────────
+    ("F107", "Research", "Formal cited research PDF",
+     "As a user, I get a professional PDF write-up with a figure and real citations.",
+     "build_research_pdf() assembles a structured LaTeX document (problem, abstract, derivation, a matplotlib figure of the numeric ground truth, parameters, References from the RAG hits with page numbers) and compiles it via pdflatex. Every reference is a real RAG source; content is LaTeX-escaped.",
+     "services/research.py / ui/main_window.py", "headless", "Documented", ""),
+    ("F108", "Research", "PDF backend fallback (no pdflatex)",
+     "As a user without a LaTeX install, I still get a PDF.",
+     "When pdflatex is absent, build_research_pdf falls back to a matplotlib-rendered PDF (text + numeric figure) via PdfPages, then to .tex-only as a last resort. render_numeric_figure integrates the ODE (or the plot payload) into a PNG.",
+     "services/research.py", "headless", "Documented", ""),
+
+    # ── Redesign Phase 4: curated Manim component library ───────────────────
+    ("F109", "Scene", "Numeric-driven trajectory component",
+     "As a user, the animation shows the real solution and renders reliably.",
+     "scene_components.trajectory bakes the integrated (t, x) samples into a self-contained Manim Scene (Axes + smooth VMobject curve + MoveAlongPath tracer, manim+numpy only). Render-verified: composes and renders to MP4 in a few seconds, versus fragile free-form LLM scenes.",
+     "services/scene_components/trajectory.py", "headless", "Documented", ""),
+    ("F110", "Scene", "3-D surface component",
+     "As a user, inherently-3-D problems get a real rotating ThreeDScene.",
+     "scene_components.surface3d emits a ThreeDScene (ThreeDAxes + Surface + ambient camera rotation) when the plan flags needs_3d and no numeric trajectory applies; compose_scene_code returns None when neither fits so the LLM/static path takes over. Render-verified.",
+     "services/scene_components/surface3d.py", "headless", "Documented", ""),
+    ("F111", "Scene", "Curated composition preferred over raw LLM",
+     "As a user, scenes come from tested building blocks, not fragile generated code.",
+     "ManimRuntime.generate_scene(_async) calls _compose_curated first: a composed scene that compiles is used directly (diagnostics note 'curated component'); only when no component fits does it fall back to LLM generation (with a key) or the static template. Plan is threaded from the pipeline/worker.",
+     "services/manim_runtime.py", "headless", "Documented", ""),
+
+    # ── Redesign Phase 5: physics verifier ──────────────────────────────────
+    ("F112", "Verify", "Physics self-verification",
+     "As a user, the result is checked against its own numerics before I trust it.",
+     "verify_solution() integrates the ODE ground truth and runs concrete checks: finiteness, boundedness, energy behaviour (conserved when undamped, decaying when damped), and small-angle pendulum period vs 2*pi*sqrt(L/g). A physically-correct damped oscillator passes all checks; the report is surfaced in the smoke output and embedded in the research PDF.",
+     "services/verify.py", "headless", "Documented", ""),
+    ("F113", "Verify", "Catches unphysical results",
+     "As a user, a wrong derivation is flagged, not silently animated.",
+     "An anti-damped oscillator (flipped dissipation sign) makes energy and amplitude grow; verify_solution flags both the energy and boundedness checks as failures. This is the differentiator: the tool checks itself instead of emitting plausible-looking but wrong physics.",
+     "services/verify.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
@@ -578,6 +640,7 @@ DEFECTS: dict[str, str] = {
     "F36": "BUG-3: filesystem RAG score normalization (see F38).",
     "F10": "BUG-4: Settings 'Data path' field never persisted (save/load ignore data_dir).",
     "F06": "BUG-5: llm_context_window setting was defined but unused (dead config).",
+    "F47": "BUG-6: cancelling a starter download after >=1 book still auto-started indexing (re-showing the strip Cancel had just hidden); cancel now skips auto-index.",
 }
 
 

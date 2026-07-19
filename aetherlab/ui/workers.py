@@ -7,11 +7,19 @@ import traceback
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import PipelineError, PipelineResult, ProblemRequest, RagResult, SceneBundle
+from aetherlab.core.models import (
+    LessonPlan,
+    PipelineError,
+    PipelineResult,
+    ProblemRequest,
+    RagResult,
+    SceneBundle,
+)
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
 from aetherlab.services.manim_runtime import ManimRuntime
+from aetherlab.services.planner import Planner
 from aetherlab.services.rag import LocalVectorRag
 from aetherlab.ui.qt_compat import QtCore, require_qt
 
@@ -23,7 +31,19 @@ class _PipelineCancelled(Exception):
     pass
 
 
+def _skipped_scene(engine: str) -> SceneBundle:
+    """Placeholder scene for problems the planner marks as non-animated."""
+    return SceneBundle(
+        class_name="AetherLabScene",
+        code="",
+        engine=engine,
+        status="skipped",
+        diagnostics=["Animation not required for this problem (planner)."],
+    )
+
+
 class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
+    plan_ready = QtCore.pyqtSignal(object)
     solver_ready = QtCore.pyqtSignal(object)
     rag_ready = QtCore.pyqtSignal(object)
     scene_ready = QtCore.pyqtSignal(object)
@@ -71,6 +91,13 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         key = cache.ensure_request(self.request)
         cached = cache.get(key)
 
+        # Planner: decide which outputs this problem warrants (never raises).
+        self.progress.emit(3, "Planning outputs...")
+        plan = await Planner(self.settings).plan(self.request)
+        self.plan_ready.emit(plan)
+        self.status.emit(f"Plan: {', '.join(plan.enabled()) or 'none'}.")
+        self._check_cancelled()
+
         # ── Worker A: solve ──
         self.progress.emit(5, "Solving analytical scaffold\u2026")
         if cached and cached.solver and self._solver_cache_usable(cached.solver):
@@ -114,8 +141,8 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             ):
                 self.status.emit("Loaded generated Manim scene from SQLite cache.")
                 return cached.scene
-            self.status.emit("Worker C: generating dynamic Manim scene via LLM.")
-            scene = await manim.generate_scene_async(self.request, solver, rag, self.settings)
+            self.status.emit("Worker C: composing Manim scene (curated components / LLM).")
+            scene = await manim.generate_scene_async(self.request, solver, rag, self.settings, plan=plan)
             cache.store_scene(key, scene)
             return scene
 
@@ -123,6 +150,26 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self._check_cancelled()
         self.rag_ready.emit(rag)
         self.progress.emit(50, f"Found {len(rag.hits)} references")
+
+        if not plan.needs_animation:
+            # Planner: this problem doesn't warrant a rendered animation — skip
+            # scene generation and the (expensive) render entirely.
+            skipped = _skipped_scene(current_engine)
+            self.status.emit("Animation not required for this problem (planner).")
+            self.scene_ready.emit(skipped)
+            self.render_ready.emit(skipped)
+            self.progress.emit(100, "Pipeline complete")
+            self.pipeline_finished.emit(
+                PipelineResult(
+                    request=self.request,
+                    cache_key=key,
+                    solver=solver,
+                    rag=rag,
+                    scene=skipped,
+                    plan=plan,
+                )
+            )
+            return
 
         scene = await _do_scene(rag)
         self._check_cancelled()
@@ -157,6 +204,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 solver=solver,
                 rag=rag,
                 scene=rendered_scene,
+                plan=plan,
             )
         )
         self.progress.emit(100, "Pipeline complete")
