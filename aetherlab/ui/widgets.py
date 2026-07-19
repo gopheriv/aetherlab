@@ -1642,6 +1642,29 @@ class SimulationPanel(QtWidgets.QWidget):
         if self._stack.count() > target:
             self._stack.setCurrentIndex(target)
 
+    def apply_plan(self, plan) -> None:
+        """Show only the view pills the planner enabled for this problem.
+
+        Canvas is shown when a 2-D or 3-D graphic is warranted; Video only when
+        an animation is planned; Code is always available. If the active pill
+        gets hidden, fall back to the first visible one.
+        """
+        self._plan = plan
+        want = {
+            0: bool(getattr(plan, "needs_2d", True) or getattr(plan, "needs_3d", False)),
+            1: bool(getattr(plan, "needs_animation", True)),
+            2: True,
+        }
+        for btn in self._pill_group.buttons():
+            btn.setVisible(want.get(self._pill_group.id(btn), True))
+        checked = self._pill_group.checkedButton()
+        if checked is None or not checked.isVisible():
+            for btn in self._pill_group.buttons():
+                if btn.isVisible():
+                    btn.setChecked(True)
+                    self._switch_view(self._pill_group.id(btn))
+                    break
+
     def _build_video_player(self) -> QtWidgets.QWidget:
         from PyQt6.QtMultimedia import QMediaPlayer
         from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -1843,6 +1866,7 @@ class SimulationPanel(QtWidgets.QWidget):
             params=params,
             phase_portrait=self._phase_check.isChecked(),
             plot=getattr(self._solver, "plot", None),
+            numeric_spec=getattr(self._solver, "numeric_spec", None),
         )
         self._live_canvas.set_state(state)
 
@@ -1926,6 +1950,19 @@ class SimulationPanel(QtWidgets.QWidget):
 
     def set_scene_bundle(self, scene: SceneBundle) -> None:
         self._stack.setCurrentIndex(1)
+        if scene.status == "skipped":
+            # Planner decided this problem doesn't need an animation — present it
+            # as an intentional state, not an error, and point at the PDF.
+            self.status.setText("No animation needed — export the research PDF from Analysis.")
+            self.status.setObjectName("StatusReady")
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+            self.code.setPlainText(
+                "# No Manim animation was generated for this problem.\n"
+                "# The planner judged an animation unnecessary here.\n"
+                "# Use 'Export PDF' in the Analysis panel for the written result."
+            )
+            return
         self.status.setText(f"Engine: {scene.engine} | Status: {scene.status}")
         if scene.status == "compiled":
             self.status.setObjectName("StatusReady")

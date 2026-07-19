@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import PipelineResult, ProblemRequest
+from aetherlab.core.models import OutputPlan, PipelineResult, ProblemRequest, SceneBundle
 from aetherlab.core.settings import AppSettings, load_settings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
 from aetherlab.services.manim_runtime import ManimRuntime
+from aetherlab.services.planner import Planner
 from aetherlab.services.rag import LocalVectorRag
 
 
@@ -25,6 +26,9 @@ class AetherLabPipeline:
     async def run(self, request: ProblemRequest) -> PipelineResult:
         key = self.cache.ensure_request(request)
         cached = self.cache.get(key)
+
+        # Planner decides which outputs this problem warrants (never raises).
+        plan = await Planner(self.settings).plan(request)
 
         # Auto-ingest library into ChromaDB on first run
         await self._ensure_ingested()
@@ -42,29 +46,35 @@ class AetherLabPipeline:
 
         manim = self.manim
         current_engine, _ = manim.detect_engine()
-        scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
-        if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
-            tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
-            if tournament_enabled(self.settings):
-                scene = await manim.generate_render_tournament(
-                    request, solver, rag, self.settings, brief=request.prompt
+
+        if not plan.needs_animation:
+            # Planner: this problem doesn't warrant a rendered animation — skip
+            # scene generation and the (expensive) Manim render entirely.
+            scene = _skipped_scene(current_engine)
+        else:
+            scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
+            if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
+                tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
+                if tournament_enabled(self.settings):
+                    scene = await manim.generate_render_tournament(
+                        request, solver, rag, self.settings, brief=request.prompt
+                    )
+                else:
+                    scene = await manim.generate_scene_async(request, solver, rag, self.settings, plan=plan)
+                self.cache.store_scene(key, scene)
+
+            if scene.status == "rendered" and not _video_exists(scene.video_path):
+                scene.diagnostics.append("Cached rendered video missing; re-rendering.")
+                scene.status = "compiled"
+                scene.video_path = ""
+
+            # Render to MP4 (skip if a valid cached video already exists);
+            # render-time API errors get a bounded LLM self-repair pass.
+            if scene.status == "compiled":
+                scene = await manim.render_scene_with_repair(
+                    scene, self.settings, brief=request.prompt
                 )
-            else:
-                scene = await manim.generate_scene_async(request, solver, rag, self.settings)
-            self.cache.store_scene(key, scene)
-
-        if scene.status == "rendered" and not _video_exists(scene.video_path):
-            scene.diagnostics.append("Cached rendered video missing; re-rendering.")
-            scene.status = "compiled"
-            scene.video_path = ""
-
-        # Render to MP4 (skip if a valid cached video already exists);
-        # render-time API errors get a bounded LLM self-repair pass.
-        if scene.status == "compiled":
-            scene = await manim.render_scene_with_repair(
-                scene, self.settings, brief=request.prompt
-            )
-            self.cache.store_scene(key, scene)
+                self.cache.store_scene(key, scene)
 
         return PipelineResult(
             request=request,
@@ -72,6 +82,7 @@ class AetherLabPipeline:
             solver=solver,
             rag=rag,
             scene=scene,
+            plan=plan,
         )
 
     async def _ensure_ingested(self) -> None:
@@ -137,6 +148,17 @@ def _video_exists(video_path: str) -> bool:
         return size > 1024
     except Exception:  # noqa: BLE001
         return False
+
+
+def _skipped_scene(engine: str) -> SceneBundle:
+    """A placeholder scene for problems the planner marks as non-animated."""
+    return SceneBundle(
+        class_name="AetherLabScene",
+        code="",
+        engine=engine,
+        status="skipped",
+        diagnostics=["Animation not required for this problem (planner)."],
+    )
 
 
 async def _merge_web_references(rag, keywords, settings):

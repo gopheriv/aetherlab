@@ -1164,33 +1164,33 @@ class MainWindow(QtWidgets.QMainWindow):
         steps = list(solver.derivation_steps)
         variables = dict(solver.variables)
         equations = list(getattr(solver, "key_equations", None) or [])
+        request = self._last_result.request
+        rag = self._last_result.rag
 
         def export_pdf(cancel, _progress):
             from tempfile import TemporaryDirectory
 
             from aetherlab.core.atomic_file import atomic_copy_file
+            from aetherlab.services.research import build_research_pdf
 
             with TemporaryDirectory(prefix="aetherlab_export_") as tmp_name:
-                tex = Path(tmp_name) / "derivation.tex"
-                export_derivation_to_latex(
-                    summary,
-                    steps,
-                    variables,
-                    tex,
-                    key_equations=equations,
-                )
-                pdf = compile_latex_to_pdf(tex, cancel_check=cancel.is_set)
-                if pdf and pdf.exists():
-                    atomic_copy_file(pdf, destination, cancel_check=cancel.is_set)
-                    return f"PDF exported: {destination}"
+                # Cited research PDF: numeric-ground-truth figure + RAG
+                # citations + physics verification (services/research.py).
+                research = build_research_pdf(request, solver, rag, Path(tmp_name))
+                if research.pdf_path and research.pdf_path.exists():
+                    atomic_copy_file(research.pdf_path, destination, cancel_check=cancel.is_set)
+                    return (
+                        f"Research PDF exported via {research.backend} "
+                        f"({len(research.citations)} citation(s)): {destination}"
+                    )
                 fallback = destination.with_suffix(".tex")
-                atomic_copy_file(tex, fallback, cancel_check=cancel.is_set)
+                atomic_copy_file(research.tex_path, fallback, cancel_check=cancel.is_set)
                 return (
-                    "pdflatex not found or compilation failed. "
+                    "No PDF backend available. "
                     f"LaTeX saved instead: {fallback}"
                 )
 
-        self._start_export_task("Preparing PDF…", export_pdf)
+        self._start_export_task("Preparing research PDF…", export_pdf)
 
     def _export_scene(self) -> None:
         if not self._last_result:
@@ -1572,6 +1572,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker is not None:
             try:
                 self.worker.status.disconnect()
+                self.worker.plan_ready.disconnect()
                 self.worker.solver_ready.disconnect()
                 self.worker.rag_ready.disconnect()
                 self.worker.scene_ready.disconnect()
@@ -1591,6 +1592,7 @@ class MainWindow(QtWidgets.QMainWindow):
             request=request, settings=self.settings, render_quality=render_quality
         )
         self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.plan_ready.connect(self.on_plan_ready)
         self.worker.solver_ready.connect(self.on_solver_ready)
         self.worker.rag_ready.connect(self.on_rag_ready)
         self.worker.scene_ready.connect(self.on_scene_ready)
@@ -1646,6 +1648,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "Pipeline complete" if value >= 100 else f"Running {label}…",
             text,
         )
+
+    def on_plan_ready(self, plan) -> None:
+        self._current_plan = plan
+        self.simulation_panel.apply_plan(plan)
+        enabled = ", ".join(plan.enabled()) or "none"
+        self.statusBar().showMessage(f"Plan: {enabled}")
 
     def on_solver_ready(self, solver: SolverResult) -> None:
         self.analysis_panel.set_solver_result(solver)

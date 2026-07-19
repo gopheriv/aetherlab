@@ -134,7 +134,13 @@ class AsyncLLMCoordinator:
                         "variables, numeric literals, + - * / ** ( ), the functions "
                         "sin cos tan sinh cosh tanh arcsin arccos arctan exp log log10 "
                         "sqrt abs sign, and constants pi, e. For explicit kind, x is t. "
-                        "Omit plot if no curve captures the result."
+                        "Omit plot if no curve captures the result. "
+                        "When the problem is governed by an ODE, also add an ode key "
+                        "for the numerical ground truth: {\"state\": [names...], "
+                        "\"rhs\": [expr per state], \"initial\": [numbers], "
+                        "\"t_range\": [t0, t1], \"observe\": name}. Each rhs expr may use "
+                        "the state names, the variables, t, the same functions/constants, "
+                        "and defines that state's time derivative. Omit ode if not an ODE."
                     ),
                 },
                 {"role": "user", "content": request.prompt},
@@ -144,6 +150,7 @@ class AsyncLLMCoordinator:
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)
         plot = payload.get("plot")
+        numeric_spec = payload.get("ode") or payload.get("numeric_spec")
         equations = payload.get("key_equations")
         return SolverResult(
             summary=str(payload.get("summary", "")).strip() or "Remote solver completed.",
@@ -155,6 +162,7 @@ class AsyncLLMCoordinator:
             # Kept as the raw dict; validation happens at canvas build so the
             # cached payload stays faithful to what the model returned.
             plot=plot if isinstance(plot, dict) else None,
+            numeric_spec=numeric_spec if isinstance(numeric_spec, dict) else None,
             key_equations=[str(e) for e in equations][:4] if isinstance(equations, list) else [],
         )
 
@@ -183,6 +191,7 @@ class AsyncLLMCoordinator:
             f"steps and {len(variables)} simulation variables."
         )
         awaitable_pause()
+        from aetherlab.services.numeric import fallback_numeric_spec
         from aetherlab.services.plotting import fallback_plot_payload
         from aetherlab.services.scene_templates import detect_domain
 
@@ -196,6 +205,8 @@ class AsyncLLMCoordinator:
             raw_response=note,
             # Exercises the full expression-compile pipeline even without a key.
             plot=fallback_plot_payload(),
+            # Ground-truth ODE so the offline canvas/PDF integrate a real system.
+            numeric_spec=fallback_numeric_spec(),
             key_equations=FALLBACK_EQUATIONS.get(domain, FALLBACK_EQUATIONS["oscillator"]),
         )
 
