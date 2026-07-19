@@ -18,7 +18,6 @@ import base64
 import json
 import logging
 import os
-import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -90,6 +89,7 @@ class Critique:
     #   ""              — no breakdown at all (skipped, empty)
     breakdown: dict[str, float] = field(default_factory=dict)
     breakdown_source: str = ""
+    retried: bool = False
 
     @property
     def should_revise(self) -> bool:
@@ -270,7 +270,10 @@ async def critique_video(
     try:
         from openai import AsyncOpenAI
 
-        from aetherlab.services.model_policy import openai_client_kwargs
+        from aetherlab.services.model_policy import (
+            non_thinking_request_kwargs,
+            openai_client_kwargs,
+        )
 
         client = AsyncOpenAI(**openai_client_kwargs(settings))
         response = await client.chat.completions.create(
@@ -281,6 +284,7 @@ async def critique_video(
             ],
             temperature=0.2,
             max_tokens=2048,
+            **non_thinking_request_kwargs(settings.vision_model),
         )
         from aetherlab.services.model_json import load_model_json
 
@@ -300,6 +304,31 @@ async def critique_video(
     except Exception as exc:  # noqa: BLE001 — critique must never break renders
         log.info("Visual critique unavailable (%s); shipping render as-is.", exc)
         return Critique(verdict="skipped")
+
+
+async def critique_video_with_retry(
+    video_path: str | Path,
+    brief: str,
+    settings: "AppSettings",
+    frame_count: int = 6,
+) -> Critique:
+    """Retry one configured transient skip with a smaller image payload."""
+    critique = await critique_video(video_path, brief, settings, frame_count=frame_count)
+    if (
+        critique.verdict != "skipped"
+        or not settings.openai_api_key
+        or not settings.vision_model
+    ):
+        return critique
+    retry_frames = max(1, min(int(frame_count or 1), 3))
+    critique = await critique_video(
+        video_path,
+        brief,
+        settings,
+        frame_count=retry_frames,
+    )
+    critique.retried = True
+    return critique
 
 
 # ── Learned keyless quality proxy (Quality Flywheel "Prove It", F182) ────────

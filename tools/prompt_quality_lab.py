@@ -260,12 +260,13 @@ async def run_prompt_lab(
     out_dir: Path,
     *,
     allow_provider: bool,
+    settings_override: Any | None = None,
 ) -> dict[str, Any]:
     from aetherlab.core.settings import load_settings
     from aetherlab.services.lesson_pipeline import LessonPipeline
     from aetherlab.services.pipeline import AetherLabPipeline
 
-    settings = load_settings()
+    settings = settings_override or load_settings()
     if not allow_provider:
         settings = replace(
             settings,
@@ -331,6 +332,28 @@ def _isolate_arm_env(arm_dir: Path, *, tournament: bool, allow_provider: bool) -
     os.environ["AETHERLAB_AUTO_TOURNAMENT"] = "1" if tournament else "0"
 
 
+def _settings_for_ab_arm(configured: Any, arm_dir: Path, *, tournament: bool) -> Any:
+    """Preserve provider configuration while isolating all mutable arm state.
+
+    The app-native settings file lives below ``data_dir``. Loading settings only
+    after changing that directory loses its model, endpoint, vision, and key
+    configuration, so provider-backed A/B arms must derive from the settings
+    captured before isolation.
+    """
+    data_dir = arm_dir / "data"
+    return replace(
+        configured,
+        data_dir=data_dir,
+        cache_path=data_dir / "cache.sqlite3",
+        chroma_path=data_dir / "chroma",
+        library_path=data_dir / "library",
+        render_mode="local",
+        github_repo="",
+        github_token="",
+        auto_tournament=tournament,
+    )
+
+
 def _count_extra_renders(arm_dir: Path) -> int:
     """Renders the tournament spent beyond one-per-prompt, read from the arm's
     own ledger (each tournament's candidates past the first are the extra cost)."""
@@ -341,6 +364,101 @@ def _count_extra_renders(arm_dir: Path) -> int:
         return sum(max(0, len(j.get("candidates") or []) - 1) for j in jobs if j.get("candidates"))
     except Exception:  # noqa: BLE001 — a cost estimate must never fail the run
         return 0
+
+
+def _ab_arm_order(index: int) -> tuple[str, str]:
+    """Counterbalance provider drift by alternating which arm runs first."""
+    return ("on", "off") if index % 2 == 0 else ("off", "on")
+
+
+def _provider_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    """Summarise whether solve scores came from the configured vision model."""
+    solves = [c for c in report.get("cases", []) if c.get("mode") == "solve"]
+    passed = [c for c in solves if c.get("status") == "pass"]
+    vision = [
+        c
+        for c in passed
+        if (c.get("critic") or {}).get("breakdown_source") == "vision"
+        and (c.get("critic") or {}).get("verdict") != "skipped"
+    ]
+    return {
+        "solve_cases": len(solves),
+        "passed": len(passed),
+        "vision_scored": len(vision),
+        "static_or_skipped": len(passed) - len(vision),
+        "failures": len(solves) - len(passed),
+    }
+
+
+def _tournament_evidence(arm_dir: Path) -> dict[str, int]:
+    """Count real-vs-static candidate judgements in an arm ledger."""
+    try:
+        from tools.ledger_report import load_jobs
+
+        jobs = [j for j in load_jobs(arm_dir / "data" / "render_ledger.json") if j.get("candidates")]
+        candidates = [c for job in jobs for c in (job.get("candidates") or [])]
+        vision = [
+            c
+            for c in candidates
+            if str(c.get("verdict", "")) in {"ship", "revise"}
+            and bool(c.get("breakdown"))
+        ]
+        return {
+            "tournaments": len(jobs),
+            "candidates": len(candidates),
+            "vision_scored": len(vision),
+            "static_or_skipped": len(candidates) - len(vision),
+        }
+    except Exception:  # noqa: BLE001 - evidence failure invalidates, never crashes, a run
+        return {
+            "tournaments": 0,
+            "candidates": 0,
+            "vision_scored": 0,
+            "static_or_skipped": 0,
+        }
+
+
+def _with_provider_evidence(
+    pairing: dict[str, Any],
+    on: dict[str, Any],
+    off: dict[str, Any],
+    *,
+    allow_provider: bool,
+) -> dict[str, Any]:
+    """Attach an honesty gate to a paired provider measurement."""
+    result = dict(pairing)
+    result["provider_requested"] = bool(allow_provider)
+    if not allow_provider:
+        result["measurement_valid"] = True
+        return result
+    evidence = {"on": _provider_evidence(on), "off": _provider_evidence(off)}
+    tournament = dict(on.get("tournament_evidence") or {})
+    evidence["on"]["tournament"] = tournament
+    result["provider_evidence"] = evidence
+    final_scores_valid = all(
+        arm["solve_cases"] > 0
+        and arm["vision_scored"] == arm["solve_cases"]
+        and arm["failures"] == 0
+        for arm in (evidence["on"], evidence["off"])
+    )
+    tournament_valid = bool(
+        tournament
+        and tournament.get("tournaments") == evidence["on"]["solve_cases"]
+        and tournament.get("candidates", 0) > 0
+        and tournament.get("vision_scored") == tournament.get("candidates")
+        and tournament.get("static_or_skipped") == 0
+    )
+    valid = final_scores_valid and tournament_valid
+    result["measurement_valid"] = valid
+    if not valid:
+        result["raw_verdict"] = result.get("verdict", "")
+        result["verdict"] = (
+            "INVALID provider measurement: every solve in both arms must carry a "
+            "real vision score, and every ON-arm tournament candidate must be "
+            "vision-ranked. Static/skipped scores or failed renders cannot be "
+            "used to ratchet the flywheel."
+        )
+    return result
 
 
 def pair_ab_reports(on: dict[str, Any], off: dict[str, Any]) -> dict[str, Any]:
@@ -419,22 +537,78 @@ def _ab_verdict(n: int, mean_lift: float, wins: int, losses: int, extra: int) ->
 
 def run_ab(prompt_set: list[dict[str, Any]], out_dir: Path, *, allow_provider: bool) -> int:
     """Run both arms, write the paired report, and print the verdict."""
+    from aetherlab.core.settings import load_settings
+
+    # Capture before _isolate_arm_env redirects the app-native config path.
+    configured_settings = load_settings()
+    if allow_provider and (
+        not configured_settings.openai_api_key or not configured_settings.vision_model
+    ):
+        print(
+            "Provider A/B requires both a configured API key and vision model; "
+            "no measurement was started."
+        )
+        return 2
+
+    arm_dirs: dict[str, Path] = {}
+    arm_settings: dict[str, Any] = {}
     arms: dict[str, dict[str, Any]] = {}
+    started = datetime.now(timezone.utc)
     for arm, on in (("on", True), ("off", False)):
         arm_dir = out_dir / f"ab_{arm}"
         arm_dir.mkdir(parents=True, exist_ok=True)
         _isolate_arm_env(arm_dir, tournament=on, allow_provider=allow_provider)
-        print(f"== A/B arm: tournament {'ON' if on else 'OFF'} ==", flush=True)
-        started = datetime.now(timezone.utc)
-        report = asyncio.run(run_prompt_lab(prompt_set, arm_dir, allow_provider=allow_provider))
-        report["started_at"] = started.isoformat(timespec="seconds")
-        report["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        report["auto_tournament"] = on
-        report["extra_renders"] = _count_extra_renders(arm_dir)
-        write_outputs(arm_dir, report)
-        arms[arm] = report
+        arm_dirs[arm] = arm_dir
+        arm_settings[arm] = _settings_for_ab_arm(
+            configured_settings, arm_dir, tournament=on
+        )
+        arms[arm] = {
+            "schema": "aetherlab.prompt_quality_lab.v1",
+            "allow_provider": allow_provider,
+            "cases": [],
+            "summary": summarize_cases([]),
+            "started_at": started.isoformat(timespec="seconds"),
+            "auto_tournament": on,
+            "ab_execution": "paired-counterbalanced",
+        }
 
-    pairing = pair_ab_reports(arms["on"], arms["off"])
+    # Run each prompt as a pair, alternating the first arm. This prevents a
+    # long-lived quota/rate/provider incident from being perfectly confounded
+    # with ON or OFF, and checkpoints both reports after every completed case.
+    for index, prompt in enumerate(prompt_set):
+        order = _ab_arm_order(index)
+        print(
+            f"== A/B pair {index + 1}/{len(prompt_set)}: {prompt['id']} "
+            f"({order[0].upper()} then {order[1].upper()}) ==",
+            flush=True,
+        )
+        for arm in order:
+            one = asyncio.run(
+                run_prompt_lab(
+                    [prompt],
+                    arm_dirs[arm],
+                    allow_provider=allow_provider,
+                    settings_override=arm_settings[arm],
+                )
+            )
+            arms[arm]["cases"].extend(one["cases"])
+            arms[arm]["summary"] = summarize_cases(arms[arm]["cases"])
+            arms[arm]["finished_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            arms[arm]["extra_renders"] = _count_extra_renders(arm_dirs[arm])
+            if arm == "on":
+                arms[arm]["tournament_evidence"] = _tournament_evidence(
+                    arm_dirs[arm]
+                )
+            write_outputs(arm_dirs[arm], arms[arm])
+
+    pairing = _with_provider_evidence(
+        pair_ab_reports(arms["on"], arms["off"]),
+        arms["on"],
+        arms["off"],
+        allow_provider=allow_provider,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "ab_summary.json").write_text(
         json.dumps(pairing, indent=2), encoding="utf-8", newline="\n"
@@ -449,7 +623,7 @@ def run_ab(prompt_set: list[dict[str, Any]], out_dir: Path, *, allow_provider: b
     render_failed = any(
         c.get("status") == "fail" for report in arms.values() for c in report.get("cases", [])
     )
-    return 1 if render_failed else 0
+    return 1 if render_failed or not pairing.get("measurement_valid", True) else 0
 
 
 def render_ab_markdown(pairing: dict[str, Any]) -> str:
@@ -461,12 +635,20 @@ def render_ab_markdown(pairing: dict[str, Any]) -> str:
         f"(**lift {pairing['mean_lift']:+}**)",
         f"- Win / tie / loss: {pairing['wins']} / {pairing['ties']} / {pairing['losses']}",
         f"- Extra renders (tournament cost): {pairing['extra_renders']}",
+        f"- Measurement valid: {pairing.get('measurement_valid', True)}",
         "",
         f"**Verdict:** {pairing['verdict']}",
         "",
         "| Prompt | ON | OFF | Delta |",
         "|---|---:|---:|---:|",
     ]
+    evidence = pairing.get("provider_evidence")
+    if evidence:
+        lines[7:7] = [
+            "- Provider vision coverage: "
+            f"ON {evidence['on']['vision_scored']}/{evidence['on']['solve_cases']}; "
+            f"OFF {evidence['off']['vision_scored']}/{evidence['off']['solve_cases']}",
+        ]
     for p in pairing["per_prompt"]:
         lines.append(f"| {p['id']} | {p['on']} | {p['off']} | {p['delta']:+} |")
     return "\n".join(lines) + "\n"

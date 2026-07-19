@@ -1198,14 +1198,40 @@ def t_f105():
 
 def t_f106():
     from aetherlab.services.scene_validation import (
-        validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
-        motion_contract_issues, repair_unknown_color_constants, scene_hygiene_warnings,
+        check_latex_strings, estimate_duration, frame_rebuild_issues,
+        lint_manim_names, motion_contract_issues, repair_unknown_color_constants,
+        scene_hygiene_warnings, validate_scene,
     )
     bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
     issues = lint_manim_names(bad)
     assert any("ShowCreation" in i for i in issues), issues
     tex_bad = 'from manim import *\nclass S(Scene):\n    def construct(self):\n        e = MathTex(r"\\frac{a}{b")\n'
     assert check_latex_strings(tex_bad), "unclosed brace must be flagged"
+    # BUG-64: Tex-family construction in a per-frame callback can turn a
+    # 20-second scene into a 14-minute timeout. Static formulas and live
+    # DecimalNumber readouts remain valid.
+    tex_redraw = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        t=ValueTracker(0)\n"
+        "        x=always_redraw(lambda: MathTex(f'{t.get_value():.1f}'))\n"
+        "        self.play(t.animate.set_value(1))\n"
+    )
+    named_updater = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        x=MathTex('x')\n"
+        "        def update(m): m.become(Tex('slow'))\n"
+        "        x.add_updater(update)\n        self.play(x.animate.shift(RIGHT))\n"
+    )
+    assert "TEX_PER_FRAME" in frame_rebuild_issues(tex_redraw)[0]
+    assert "TEX_PER_FRAME" in frame_rebuild_issues(named_updater)[0]
+    safe_live_number = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        formula=MathTex('x=1')\n        value=DecimalNumber(0)\n"
+        "        value.add_updater(lambda m: m.set_value(1))\n"
+        "        self.play(value.animate.shift(RIGHT))\n"
+    )
+    assert not frame_rebuild_issues(safe_live_number)
+    assert not validate_scene(tex_redraw, require_motion=True)[0]
     messy = """from manim import *
 class S(Scene):
     def construct(self):
@@ -1265,7 +1291,10 @@ class AetherLabScene(Scene):
     mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
     assert mr_src.count("validate_scene") >= 2 and "estimate_duration" in mr_src
     assert "scene_hygiene_warnings" in mr_src
-    return "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
+    return (
+        "lint+LaTeX+per-frame-Tex+color repair+motion contract+hygiene wired "
+        "(BUG-40/41/64, F106)"
+    )
 
 
 def t_f102():
@@ -1374,7 +1403,11 @@ def t_f108():
     from dataclasses import replace
     from aetherlab.core.models import SceneBundle
     from aetherlab.services.model_json import load_model_json
-    from aetherlab.services.scene_critic import Critique, _sample_indices, critique_video, extract_frames
+    from aetherlab.services.model_policy import non_thinking_request_kwargs
+    from aetherlab.services.scene_critic import (
+        Critique, _sample_indices, critique_video, critique_video_with_retry,
+        extract_frames,
+    )
     no_vlm = replace(_settings(), vision_model=None)
     crit = asyncio.run(critique_video("missing.mp4", "brief", no_vlm))
     assert crit.verdict == "skipped" and not crit.should_revise
@@ -1384,6 +1417,67 @@ def t_f108():
     repaired = load_model_json(raw)
     assert repaired["issues"] == [r"Move \omega and \theta away from {edge}"], repaired
     assert Critique(verdict="revise").should_revise
+    # BUG-59: qwen3.7-plus is hybrid-thinking. The bounded, non-streaming
+    # structured vision critic must disable thinking just like scene codegen.
+    assert non_thinking_request_kwargs("qwen3.7-plus") == {
+        "extra_body": {"enable_thinking": False}
+    }
+    assert non_thinking_request_kwargs("qwen3-coder-plus") == {}
+
+    from types import SimpleNamespace
+    from unittest import mock
+
+    from aetherlab.services import scene_critic as critic_module
+
+    frame = _TMP / "critic-thinking-frame.png"
+    frame.write_bytes(b"not-decoded-by-fake-client")
+    seen_request = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            seen_request.update(kwargs)
+            message = SimpleNamespace(
+                content='{"verdict":"ship","score":8,"issues":[],"strengths":[]}'
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    qwen_vision = replace(
+        _settings(), openai_api_key="sk-test", vision_model="qwen3.7-plus"
+    )
+    with (
+        mock.patch("openai.AsyncOpenAI", FakeAsyncOpenAI),
+        mock.patch.object(critic_module, "extract_frames", return_value=[frame]),
+    ):
+        qwen_crit = asyncio.run(critique_video("fake.mp4", "brief", qwen_vision))
+    assert qwen_crit.verdict == "ship"
+    assert seen_request.get("extra_body") == {"enable_thinking": False}
+    retry_calls = []
+
+    async def transient_final(*_args, **kwargs):
+        retry_calls.append(kwargs["frame_count"])
+        if len(retry_calls) == 1:
+            return Critique(verdict="skipped")
+        return Critique(
+            verdict="ship",
+            score=7.0,
+            breakdown={"legibility": 2.0},
+            breakdown_source="vision",
+        )
+
+    original_retry_target = critic_module.critique_video
+    critic_module.critique_video = transient_final
+    try:
+        retried_final = asyncio.run(
+            critique_video_with_retry("fake.mp4", "brief", qwen_vision, frame_count=6)
+        )
+    finally:
+        critic_module.critique_video = original_retry_target
+    assert retry_calls == [6, 3]
+    assert retried_final.verdict == "ship" and retried_final.retried
     # storyboard round-trips through the scene cache
     sb = SceneBundle.from_json(SceneBundle(
         class_name="X", code="c", engine="e", status="rendered",
@@ -1396,12 +1490,11 @@ def t_f108():
     src = inspect.getsource(__import__(
         "aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]
     ).ManimRuntime.render_scene_with_repair)
-    assert "critique_video" in src and ".revise(" in src and "max_revisions" in src
+    assert "critique_video_with_retry" in src and ".revise(" in src and "max_revisions" in src
     assert "keeping previous cut" in src, "revisions must never downgrade a shipped render"
 
     # BUG-38: a weaker reviser may emit code that fails static validation. The
     # revision must get one targeted repair before the previous cut is kept.
-    from aetherlab.services import scene_critic as critic_module
     from aetherlab.services.manim_runtime import ManimRuntime
     from aetherlab.services.scene_generator import SceneGenerator
 
@@ -1419,9 +1512,13 @@ def t_f108():
 
     async def fake_critique(*args, **kwargs):
         calls["critique"] += 1
-        if calls["critique"] == 1:
+        if calls["critique"] <= 2:
             return Critique(verdict="revise", score=4.0, issues=["fix layout"])
-        return Critique(verdict="ship", score=8.0)
+        return Critique(
+            verdict="ship",
+            score=8.0,
+            breakdown={"legibility": 2.0, "composition": 2.0},
+        )
 
     async def fake_revise(self, code, critique, class_name):
         return (
@@ -1467,7 +1564,10 @@ def t_f108():
         SceneGenerator.revise = original_revise
         SceneGenerator.repair = original_repair
     assert recovered.status == "rendered" and "GREEN_SCREEN" not in recovered.code
-    assert calls == {"critique": 2, "repair": 2, "render": 2}, calls
+    assert calls == {"critique": 3, "repair": 3, "render": 3}, calls
+    assert recovered.quality_score == 8.0 and recovered.critique_verdict == "ship"
+    assert recovered.critique_breakdown == {"legibility": 2.0, "composition": 2.0}
+    assert any("Final visual critique" in d for d in recovered.diagnostics)
     assert any("Applied repaired visual revision" in d for d in recovered.diagnostics)
     import pathlib
     import tempfile
@@ -1480,7 +1580,10 @@ def t_f108():
         frames = extract_frames(vids[-1], count=3)
         assert len(frames) >= 1, "PyAV should sample frames from a real render"
         note = f"sampled {len(frames)} frames via PyAV"
-    return f"critique loop wired + fail-soft + final-frame sampling; {note} (F108)"
+    return (
+        f"critique disables Qwen thinking + scores the final repaired revision; "
+        f"{note} (BUG-59/61/65, F108)"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -4774,10 +4877,53 @@ def t_f171():
         assert c.scene.video_path == f"/fake/cand{c.index}.mp4", (c.index, c.scene.video_path)
         assert c.score > 0, "static proxy must score keyless candidates for ranking"
 
+    # BUG-63: configured tournaments must not let one transient critic skip turn
+    # into a static 10/10 that suppresses escalation. Retry once, bounded to
+    # three frames, before the fail-soft proxy is considered.
+    from aetherlab.services import scene_critic as critic_module
+    from aetherlab.services.scene_critic import Critique
+
+    provider_settings = replace(
+        s, openai_api_key="key", vision_model="vision", visual_critic_keyframes=6
+    )
+    provider_runtime = ManimRuntime(provider_settings)
+    provider_runtime._render_once = fake_render_once  # type: ignore[assignment]
+    original_critique = critic_module.critique_video
+    critic_calls = []
+
+    async def transient_critique(*_args, **kwargs):
+        critic_calls.append(kwargs["frame_count"])
+        if len(critic_calls) == 1:
+            return Critique(verdict="skipped")
+        return Critique(
+            verdict="ship",
+            score=7.0,
+            breakdown={"legibility": 2.0, "composition": 1.0},
+            breakdown_source="vision",
+        )
+
+    critic_module.critique_video = transient_critique
+    try:
+        retried = _asyncio.run(
+            provider_runtime._render_and_score_candidates(
+                [SceneCandidate(index=0, scene=replace(sb), storyboard=None)],
+                provider_settings,
+                None,
+            )
+        )
+    finally:
+        critic_module.critique_video = original_critique
+    assert critic_calls == [6, 3], critic_calls
+    assert retried[0].score == 7.0 and retried[0].verdict == "ship"
+    assert any("retrying once" in d for d in retried[0].scene.diagnostics)
+
     # A manual live-smoke script exists for the real GitHub end-to-end path.
     smoke = Path("tools/cloud_tournament_smoke.py").read_text(encoding="utf-8")
     assert "cloud_job_id" in smoke and "variant" in smoke and "asyncio.gather" in smoke
-    return "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
+    return (
+        "candidate fan-out isolates artifacts, serializes branch PUTs, and retries "
+        "transient vision skips (BUG-36/63, F171)"
+    )
 
 
 def t_f172():
@@ -5445,7 +5591,93 @@ def t_f180():
     ab_src = inspect.getsource(lab.run_ab)
     assert "ab_" in ab_src and "extra_renders" in ab_src
     assert "AETHERLAB_AUTO_TOURNAMENT" in inspect.getsource(lab._isolate_arm_env)
-    return "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+
+    # BUG-60: provider settings live under the configured data directory. The
+    # A/B harness used to redirect that directory before load_settings(), which
+    # silently changed the model/base URL and removed the vision critic.
+    from dataclasses import replace
+
+    configured = replace(
+        _settings(),
+        openai_api_key="coding-plan-secret",
+        openai_base_url="https://coding.example/v1",
+        llm_model="qwen3-coder-plus",
+        vision_model="qwen3.7-plus",
+        render_mode="auto",
+        github_repo="owner/cloud",
+        github_token="cloud-secret",
+    )
+    arm_dir = _TMP / "ab-provider-settings"
+    isolated = lab._settings_for_ab_arm(configured, arm_dir, tournament=False)
+    assert isolated.llm_model == "qwen3-coder-plus"
+    assert isolated.vision_model == "qwen3.7-plus"
+    assert isolated.openai_base_url == "https://coding.example/v1"
+    assert isolated.openai_api_key == "coding-plan-secret"
+    assert isolated.data_dir == arm_dir / "data"
+    assert isolated.render_mode == "local" and not isolated.auto_tournament
+    assert not isolated.github_repo and not isolated.github_token
+    assert "load_settings()" in ab_src and "_settings_for_ab_arm" in ab_src
+    # BUG-62: a long provider run must not execute all ON cases before all OFF
+    # cases, and mixed vision/static scores must never become a keyed ratchet.
+    assert lab._ab_arm_order(0) == ("on", "off")
+    assert lab._ab_arm_order(1) == ("off", "on")
+    vision_case = {
+        "id": "a",
+        "mode": "solve",
+        "status": "pass",
+        "score": 8.0,
+        "critic": {"verdict": "ship", "breakdown_source": "vision"},
+    }
+    static_case = {
+        **vision_case,
+        "critic": {"verdict": "skipped", "breakdown_source": "static"},
+    }
+    valid_report = {
+        "cases": [vision_case],
+        "tournament_evidence": {
+            "tournaments": 1,
+            "candidates": 1,
+            "vision_scored": 1,
+            "static_or_skipped": 0,
+        },
+    }
+    invalid_report = {"cases": [static_case]}
+    provider_valid = lab._with_provider_evidence(
+        lab.pair_ab_reports(valid_report, valid_report),
+        valid_report,
+        valid_report,
+        allow_provider=True,
+    )
+    assert provider_valid["measurement_valid"]
+    provider_invalid = lab._with_provider_evidence(
+        lab.pair_ab_reports(valid_report, invalid_report),
+        valid_report,
+        invalid_report,
+        allow_provider=True,
+    )
+    assert not provider_invalid["measurement_valid"]
+    assert "INVALID provider measurement" in provider_invalid["verdict"]
+    static_tournament = {
+        **valid_report,
+        "tournament_evidence": {
+            "tournaments": 1,
+            "candidates": 1,
+            "vision_scored": 0,
+            "static_or_skipped": 1,
+        },
+    }
+    invalid_tournament = lab._with_provider_evidence(
+        lab.pair_ab_reports(static_tournament, valid_report),
+        static_tournament,
+        valid_report,
+        allow_provider=True,
+    )
+    assert not invalid_tournament["measurement_valid"]
+    assert "paired-counterbalanced" in ab_src and "write_outputs" in ab_src
+    return (
+        "tournament A/B harness: paired lift + provider-preserving isolated arms "
+        "+ counterbalanced validity gate (BUG-60/62, F180)"
+    )
 
 
 def t_f181():

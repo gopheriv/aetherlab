@@ -5,7 +5,7 @@ hallucinated API names, invalid constructor kwargs, broken LaTeX — all pass it
 and die (or misbehave) at render time. This battery catches those *before* the
 expensive render, converting crash-repair cycles into first-try successes.
 
-Three checks, all AST-based and conservative (they only flag what is provably
+Four checks, all AST-based and conservative (they only flag what is provably
 wrong against the *installed* Manim, never guesses):
 
 1. ``lint_manim_names``  — unknown top-level names (classic ManimGL leftovers
@@ -18,12 +18,15 @@ wrong against the *installed* Manim, never guesses):
 Plus ``estimate_duration`` — an advisory beat-sum of play/wait run_times so the
 pipeline can compare against its 15–22s contract without rendering.
 
+4. ``frame_rebuild_issues`` rejects Tex-family mobjects rebuilt by an updater
+   or ``always_redraw`` (a per-frame LaTeX compile/cache storm).
+
 ``scene_hygiene_warnings`` adds NIMA-inspired layout/readability heuristics:
 repeated same-coordinate placement without cleanup, object accumulation,
 stale copies, abrupt ``self.clear()``, and dominant unstyled grids. These are
 advisory because some advanced scenes intentionally keep ghost overlays/trails.
 
-``validate_scene`` bundles the three hard checks into one verdict. Duration and
+``validate_scene`` bundles the four hard checks into one verdict. Duration and
 scene hygiene are advisory-only (fallback templates are deliberately short).
 
 Leaf module: stdlib + (lazily) the installed manim for ground truth.
@@ -369,6 +372,54 @@ def check_latex_strings(code: str) -> list[str]:
 # ── 4. advisory duration estimate ───────────────────────────────────────────
 
 
+def frame_rebuild_issues(code: str) -> list[str]:
+    """Reject Tex-family mobjects reconstructed by frame callbacks.
+
+    ``always_redraw`` and ``add_updater`` execute on every rendered frame.
+    Recreating MathTex/Tex there can launch or cache hundreds of LaTeX builds,
+    turning a 20-second scene into a multi-minute timeout. Static formulas are
+    fine; changing numbers should use DecimalNumber.set_value().
+    """
+    tree = _parse(code)
+    if tree is None:
+        return []
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    issues: list[str] = []
+    seen: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callback_kind = _call_name(node.func).split(".")[-1]
+        if callback_kind not in {"always_redraw", "add_updater"} or not node.args:
+            continue
+        callback = node.args[0]
+        callback_tree: ast.AST | None = callback
+        if isinstance(callback, ast.Name):
+            callback_tree = functions.get(callback.id)
+        if callback_tree is None:
+            continue
+        for inner in ast.walk(callback_tree):
+            if not isinstance(inner, ast.Call):
+                continue
+            tex_name = _call_name(inner.func).split(".")[-1]
+            if tex_name not in _TEX_CALLS:
+                continue
+            marker = (node.lineno, tex_name)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            issues.append(
+                f"[PERF:TEX_PER_FRAME] {callback_kind} at line {node.lineno} "
+                f"rebuilds {tex_name} every frame; create formulas once and use "
+                "DecimalNumber.set_value() for changing numeric readouts."
+            )
+    return issues
+
+
 _INTRO_ANIMS = {
     "Create", "Write", "FadeIn", "GrowFromCenter", "GrowArrow",
     "DrawBorderThenFill", "ShowCreation",
@@ -572,7 +623,12 @@ def estimate_duration(code: str) -> DurationEstimate:
 def validate_scene(code: str, *, require_motion: bool = False) -> tuple[bool, list[str]]:
     """Run the three hard gates. Returns (ok, issues). Duration is not part of
     the verdict — callers surface it as an advisory diagnostic."""
-    issues = lint_manim_names(code) + lint_constructor_kwargs(code) + check_latex_strings(code)
+    issues = (
+        lint_manim_names(code)
+        + lint_constructor_kwargs(code)
+        + check_latex_strings(code)
+        + frame_rebuild_issues(code)
+    )
     if require_motion:
         issues.extend(motion_contract_issues(code))
     return (not issues), issues

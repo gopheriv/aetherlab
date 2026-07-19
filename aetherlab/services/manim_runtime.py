@@ -610,7 +610,7 @@ class ManimRuntime:
     ) -> list[SceneCandidate]:
         import json as _json
 
-        from aetherlab.services.scene_critic import critique_video
+        from aetherlab.services.scene_critic import critique_video_with_retry
 
         limit = max(1, min(
             int(getattr(settings, "scene_candidate_concurrency", 2) or 2),
@@ -637,7 +637,14 @@ class ManimRuntime:
                 if draft.status != "rendered" or not draft.video_path:
                     return None
                 brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
-                crit = await critique_video(draft.video_path, brief, settings, frame_count=frame_count)
+                crit = await critique_video_with_retry(
+                    draft.video_path, brief, settings, frame_count=frame_count
+                )
+                if crit.retried:
+                    draft.diagnostics.append(
+                        "Candidate vision critique unavailable; retrying once with "
+                        f"{max(1, min(frame_count, 3))} keyframe(s)."
+                    )
                 if crit.verdict == "skipped":
                     # No vision judgement (keyless/offline). Instead of dropping
                     # the candidate — which would leave the tournament with no
@@ -968,7 +975,7 @@ class ManimRuntime:
             import json as _json
 
             from aetherlab.services.code_safety import validate_code_safety
-            from aetherlab.services.scene_critic import critique_video
+            from aetherlab.services.scene_critic import critique_video_with_retry
             from aetherlab.services.scene_generator import SceneGenerator
             from aetherlab.services.scene_validation import validate_scene
 
@@ -980,12 +987,19 @@ class ManimRuntime:
             )
             revision_limit = int(getattr(s, "visual_critic_max_passes", max_revisions) or max_revisions)
             frame_count = int(getattr(s, "visual_critic_keyframes", 6) or 6)
+            final_needs_critique = False
             for round_no in range(1, revision_limit + 1):
-                crit = await critique_video(scene_bundle.video_path, board_brief, s, frame_count=frame_count)
+                crit = await critique_video_with_retry(
+                    scene_bundle.video_path,
+                    board_brief,
+                    s,
+                    frame_count=frame_count,
+                )
                 scene_bundle.quality_score = float(crit.score or 0.0)
                 scene_bundle.critique_verdict = str(crit.verdict or "")
                 scene_bundle.critique_issues = list(crit.issues)
                 scene_bundle.critique_breakdown = dict(crit.breakdown)
+                final_needs_critique = False
                 if crit.verdict == "skipped":
                     break
                 scene_bundle.diagnostics.append(
@@ -1059,6 +1073,7 @@ class ManimRuntime:
                 if trial.status == "rendered":
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
+                    final_needs_critique = True
                 else:
                     render_error = (
                         trial.diagnostics[-1]
@@ -1093,12 +1108,30 @@ class ManimRuntime:
                             f"Applied repaired visual revision {round_no}."
                         )
                         scene_bundle = retry_trial
+                        final_needs_critique = True
                     else:
                         scene_bundle.diagnostics.append(
                             f"Visual revision {round_no} did not render after repair; "
                             "keeping previous cut."
                         )
                         break
+
+            # A revision adopted in the last allowed round has not yet been
+            # watched. Score that exact shipped cut without opening another
+            # revision round, so ledgers/reports never substitute a static
+            # proxy or record HQ=0 for an uncritiqued final render.
+            if final_needs_critique:
+                crit = await critique_video_with_retry(
+                    scene_bundle.video_path, board_brief, s, frame_count=frame_count
+                )
+                scene_bundle.quality_score = float(crit.score or 0.0)
+                scene_bundle.critique_verdict = str(crit.verdict or "")
+                scene_bundle.critique_issues = list(crit.issues)
+                scene_bundle.critique_breakdown = dict(crit.breakdown)
+                scene_bundle.diagnostics.append(
+                    f"Final visual critique: {crit.verdict} (score {crit.score:.1f})"
+                    + (" — " + "; ".join(crit.issues[:3]) if crit.issues else "")
+                )
 
         # ── Narration↔visual sync (manim-bot decision) ───────────────────
         # Derive a voiceover from the FINAL code and fit it to the rendered

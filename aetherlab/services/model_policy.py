@@ -17,7 +17,7 @@ MIN_LLM_TIMEOUT_SECONDS = 5.0
 MAX_LLM_TIMEOUT_SECONDS = 900.0
 MAX_LLM_RETRIES = 1
 
-_HYBRID_QWEN_RE = re.compile(r"^qwen3\.[567]-(?:plus|max|flash)(?:$|-)" )
+_HYBRID_QWEN_RE = re.compile(r"^qwen3\.[567]-(?:plus|max|flash)(?:$|-)")
 _THINKING_ONLY_MODELS = {
     "qwen3.7-max-preview",
     "qwen3.7-max-2026-05-17",
@@ -73,7 +73,12 @@ def is_hybrid_qwen_model(model: str | None) -> bool:
 
 def codegen_request_kwargs(settings: "AppSettings") -> dict[str, Any]:
     """Disable default-on Qwen thinking for non-streaming scene codegen."""
-    if is_hybrid_qwen_model(settings.llm_model):
+    return non_thinking_request_kwargs(settings.llm_model)
+
+
+def non_thinking_request_kwargs(model: str | None) -> dict[str, Any]:
+    """Disable hybrid Qwen thinking for bounded structured-output calls."""
+    if is_hybrid_qwen_model(model):
         return {"extra_body": {"enable_thinking": False}}
     return {}
 

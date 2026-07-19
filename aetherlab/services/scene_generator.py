@@ -48,6 +48,10 @@ friend. Correctness is the floor. Wonder is the target.
 0.8  Honor EVERY requested on-screen object, label, comparison, and physical
      relationship from the user's prompt. Before output, audit the prompt noun
      by noun and confirm each requested element is created and shown in code.
+0.9  NEVER construct MathTex, Tex, or SingleStringMathTex inside always_redraw
+     or an updater; those callbacks run every frame and can compile LaTeX
+     hundreds of times. Create formulas once. For changing numbers, create one
+     DecimalNumber and update it with set_value().
 
 ════════════════════════════════════════════════════════════════════════
 §1 · WRITE THE SCENARIO FIRST  (the #1 lever on creativity)
@@ -248,7 +252,10 @@ HARD CONSTRAINTS (violating any ruins the render):
     multiple labels/equations; avoid `.copy()` unless the original is transformed
     or removed nearby; prefer `set_color_by_tex()`/`get_part_by_tex()` over deep
     MathTex indexing like `eq[0][3]`; keep NumberPlane/Axes as subtle background
-    scaffolding with low stroke opacity."""
+    scaffolding with low stroke opacity.
+12. Never create MathTex/Tex/SingleStringMathTex inside always_redraw or an
+    updater. Create formulas once; animate changing numeric readouts with one
+    DecimalNumber whose updater calls set_value()."""
 
 
 SCENE_REVISE_SYSTEM_PROMPT = """You are the AetherLab scene reviser. A rendered Manim scene was reviewed by
@@ -268,7 +275,9 @@ Rules:
    grids.
 6. Preserve visible physical motion in every act and a living ending whose last
    sampled frames differ; do not "fix" a critique by freezing or deleting a
-   requested object."""
+   requested object.
+7. Never rebuild MathTex/Tex/SingleStringMathTex in always_redraw or an updater;
+   keep formulas static and use DecimalNumber.set_value() for live numbers."""
 
 
 SCENE_REPAIR_SYSTEM_PROMPT = """You are the AetherLab Manim repair engineer. A Manim Community scene you
@@ -288,6 +297,8 @@ Rules:
    same anchor.
 6. Keep every requested object and visible-motion beat; never repair a crash by
    reducing the scene to static text/axes.
+7. Never rebuild MathTex/Tex/SingleStringMathTex in always_redraw or an updater;
+   keep formulas static and use DecimalNumber.set_value() for live numbers.
 """
 
 SCENE_REPAIR_USER_TEMPLATE = """## Render error
