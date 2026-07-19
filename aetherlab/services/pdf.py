@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,6 +75,7 @@ def export_derivation_to_latex(
     derivation_steps: list[str],
     variables: dict[str, float],
     output_path: Path,
+    key_equations: list[str] | None = None,
 ) -> Path:
     """Write a standalone LaTeX document from solver results."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +90,13 @@ def export_derivation_to_latex(
         for step in derivation_steps
     ) or r"  \item No derivation steps available."
 
+    # key_equations are already LaTeX — emitted verbatim in display math,
+    # NOT escaped (escaping would destroy them).
+    equations_block = ""
+    if key_equations:
+        rows = "\n".join(f"\\[ {eq} \\]" for eq in key_equations)
+        equations_block = f"\n\\section*{{Key Equations}}\n{rows}\n"
+
     latex = rf"""\documentclass[11pt]{{article}}
 \usepackage[margin=2.5cm]{{geometry}}
 \usepackage{{amsmath,amssymb}}
@@ -102,6 +110,7 @@ def export_derivation_to_latex(
 
 \section*{{Summary}}
 {_latex_escape(summary)}
+{equations_block}
 
 \section*{{Derivation Steps}}
 \begin{{enumerate}}
@@ -121,19 +130,35 @@ def export_derivation_to_latex(
     return output_path
 
 
-def compile_latex_to_pdf(tex_path: Path) -> Path | None:
+def compile_latex_to_pdf(
+    tex_path: Path,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> Path | None:
     """Compile a .tex file to PDF using pdflatex. Returns PDF path or None."""
+    from aetherlab.core.proc import (
+        ProcessCancelledError,
+        run_process_tree,
+        subprocess_kwargs,
+    )
+
+    pdf_path = tex_path.with_suffix(".pdf")
+    pdf_path.unlink(missing_ok=True)
     try:
-        result = subprocess.run(
+        result = run_process_tree(
             ["pdflatex", "-interaction=nonstopmode", "-output-directory", str(tex_path.parent), str(tex_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
-            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            cancel_check=cancel_check,
+            **subprocess_kwargs(),
         )
-        pdf_path = tex_path.with_suffix(".pdf")
-        if pdf_path.exists():
+        if result.returncode == 0 and pdf_path.exists():
             return pdf_path
+    except ProcessCancelledError:
+        raise
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return None
@@ -143,6 +168,86 @@ def export_scene_code(code: str, output_path: Path) -> Path:
     """Save generated Manim scene code to a .py file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(code, encoding="utf-8")
+    return output_path
+
+
+def export_lesson_study_guide(plan, output_path: Path) -> Path:
+    """Write a printable LaTeX study guide from a LessonPlan (topic explainer).
+
+    Sections: objectives, the misconception, per-chapter summaries with their
+    typeset key equations and citations, and a self-check with answers. Returns
+    the .tex path (compile with compile_latex_to_pdf, as the derivation export
+    does). key_equations are emitted verbatim in display math (already LaTeX).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def items(xs: list[str]) -> str:
+        return "\n".join(f"  \\item {_latex_escape(str(x))}" for x in xs) or r"  \item —"
+
+    objectives = items(plan.objectives)
+    prereqs = items(plan.prerequisites)
+
+    chapter_blocks = []
+    for i, ch in enumerate(plan.chapters, 1):
+        eqs = "\n".join(f"\\[ {eq} \\]" for eq in ch.key_equations)
+        cites = ""
+        if ch.citations:
+            cites = "\n\\textit{Sources: " + _latex_escape("; ".join(ch.citations)) + "}\n"
+        chapter_blocks.append(
+            f"\\subsection*{{{i}. {_latex_escape(ch.title)}}}\n"
+            f"{_latex_escape(ch.goal)}\n\n"
+            f"{_latex_escape(ch.narration)}\n{eqs}\n{cites}"
+        )
+    chapters = "\n\n".join(chapter_blocks)
+
+    q_blocks = []
+    for i, q in enumerate(plan.questions, 1):
+        choices = ""
+        if q.choices:
+            choices = "\n\\begin{itemize}\n" + "\n".join(
+                f"  \\item {_latex_escape(c)}" for c in q.choices
+            ) + "\n\\end{itemize}"
+        why = f" — {_latex_escape(q.why)}" if q.why else ""
+        q_blocks.append(
+            f"\\item {_latex_escape(q.q)}{choices}\n\n"
+            f"\\textbf{{Answer:}} {_latex_escape(q.answer)}{why}"
+        )
+    questions = "\n".join(q_blocks) or r"\item —"
+
+    latex = rf"""\documentclass[11pt]{{article}}
+\usepackage[margin=2.3cm]{{geometry}}
+\usepackage{{amsmath,amssymb}}
+
+\title{{{_latex_escape(plan.title)}}}
+\date{{Study guide · AetherLab}}
+
+\begin{{document}}
+\maketitle
+
+\section*{{Learning objectives}}
+\begin{{itemize}}
+{objectives}
+\end{{itemize}}
+
+\section*{{Prerequisites}}
+\begin{{itemize}}
+{prereqs}
+\end{{itemize}}
+
+\section*{{Watch out for}}
+{_latex_escape(plan.misconception) or "—"}
+
+\section*{{Chapters}}
+{chapters}
+
+\section*{{Check yourself}}
+\begin{{enumerate}}
+{questions}
+\end{{enumerate}}
+
+\end{{document}}
+"""
+    output_path.write_text(latex, encoding="utf-8")
     return output_path
 
 

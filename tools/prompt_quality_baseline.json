@@ -1,0 +1,1052 @@
+{
+  "schema": "aetherlab.prompt_quality_lab.v1",
+  "allow_provider": false,
+  "cases": [
+    {
+      "id": "pendulum",
+      "mode": "solve",
+      "prompt": "Explain the small-angle pendulum and render the period dependence.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\pendulum_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.5,
+        "fps": 30.0,
+        "frame_count": 195,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 13,
+        "static_ratio": 0.0667,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.267,
+            "rms": 4.202
+          },
+          {
+            "time": 0.3,
+            "rms": 4.304
+          },
+          {
+            "time": 0.333,
+            "rms": 4.337
+          },
+          {
+            "time": 0.367,
+            "rms": 4.369
+          },
+          {
+            "time": 0.4,
+            "rms": 4.33
+          },
+          {
+            "time": 0.433,
+            "rms": 4.29
+          },
+          {
+            "time": 0.467,
+            "rms": 4.231
+          },
+          {
+            "time": 1.1,
+            "rms": 4.062
+          }
+        ],
+        "final_frame": {
+          "time": 6.467,
+          "mean": 13.3,
+          "std": 14.356
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.483
+    },
+    {
+      "id": "kepler_orbit",
+      "mode": "solve",
+      "prompt": "Visualize Kepler's equal-area law for an elliptical orbit.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\kepler_orbit_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.5,
+        "fps": 30.0,
+        "frame_count": 165,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0727,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.9,
+            "rms": 1.583
+          },
+          {
+            "time": 2.067,
+            "rms": 1.595
+          },
+          {
+            "time": 2.1,
+            "rms": 1.604
+          },
+          {
+            "time": 2.533,
+            "rms": 1.79
+          },
+          {
+            "time": 2.567,
+            "rms": 1.612
+          },
+          {
+            "time": 2.7,
+            "rms": 1.578
+          },
+          {
+            "time": 3.0,
+            "rms": 1.575
+          },
+          {
+            "time": 3.033,
+            "rms": 1.579
+          }
+        ],
+        "final_frame": {
+          "time": 5.467,
+          "mean": 12.653,
+          "std": 13.116
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.459
+    },
+    {
+      "id": "standing_wave",
+      "mode": "solve",
+      "prompt": "Show a standing wave forming from two travelling waves on a string.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\standing_wave_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.0,
+        "fps": 30.0,
+        "frame_count": 180,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0667,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.533,
+            "rms": 2.622
+          },
+          {
+            "time": 1.733,
+            "rms": 2.506
+          },
+          {
+            "time": 1.767,
+            "rms": 2.515
+          },
+          {
+            "time": 1.8,
+            "rms": 2.5
+          },
+          {
+            "time": 3.5,
+            "rms": 2.681
+          },
+          {
+            "time": 3.533,
+            "rms": 2.701
+          },
+          {
+            "time": 3.767,
+            "rms": 2.511
+          },
+          {
+            "time": 5.5,
+            "rms": 2.6
+          }
+        ],
+        "final_frame": {
+          "time": 5.967,
+          "mean": 12.878,
+          "std": 13.744
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.483
+    },
+    {
+      "id": "fourier_series",
+      "mode": "solve",
+      "prompt": "Build intuition for Fourier series by adding sine harmonics.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\fourier_series_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.0,
+        "fps": 30.0,
+        "frame_count": 180,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 13,
+        "static_ratio": 0.0722,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.533,
+            "rms": 2.622
+          },
+          {
+            "time": 1.733,
+            "rms": 2.506
+          },
+          {
+            "time": 1.767,
+            "rms": 2.515
+          },
+          {
+            "time": 1.8,
+            "rms": 2.5
+          },
+          {
+            "time": 3.5,
+            "rms": 2.681
+          },
+          {
+            "time": 3.533,
+            "rms": 2.701
+          },
+          {
+            "time": 3.767,
+            "rms": 2.511
+          },
+          {
+            "time": 5.5,
+            "rms": 2.606
+          }
+        ],
+        "final_frame": {
+          "time": 5.967,
+          "mean": 12.749,
+          "std": 13.492
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.461
+    },
+    {
+      "id": "em_field",
+      "mode": "solve",
+      "prompt": "Animate electric field lines around a dipole.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\em_field_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.1,
+        "fps": 30.0,
+        "frame_count": 183,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 21,
+        "static_ratio": 0.1148,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.4,
+            "rms": 0.66
+          },
+          {
+            "time": 0.433,
+            "rms": 0.73
+          },
+          {
+            "time": 0.467,
+            "rms": 0.748
+          },
+          {
+            "time": 0.5,
+            "rms": 0.672
+          },
+          {
+            "time": 2.333,
+            "rms": 0.557
+          },
+          {
+            "time": 2.433,
+            "rms": 0.585
+          },
+          {
+            "time": 2.5,
+            "rms": 0.557
+          },
+          {
+            "time": 2.533,
+            "rms": 0.556
+          }
+        ],
+        "final_frame": {
+          "time": 6.067,
+          "mean": 12.972,
+          "std": 13.32
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.291
+    },
+    {
+      "id": "projectile",
+      "mode": "solve",
+      "prompt": "Show the parabolic trajectory of a projectile and its range.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\projectile_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 29,
+        "static_ratio": 0.1933,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.731
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.787
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.699,
+          "std": 13.392
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 4.977
+    },
+    {
+      "id": "collision",
+      "mode": "solve",
+      "prompt": "Illustrate an elastic collision between two masses on a track.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\collision_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 32,
+        "static_ratio": 0.2133,
+        "static_ranges": [
+          {
+            "start": 4.067,
+            "end": 5.0,
+            "duration": 0.933
+          }
+        ],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.731
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.787
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.7,
+          "std": 13.384
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 4.897
+    },
+    {
+      "id": "doppler",
+      "mode": "solve",
+      "prompt": "Visualize the Doppler effect for a moving sound source.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\doppler_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 30,
+        "static_ratio": 0.2,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.732
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.787
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.636,
+          "std": 13.285
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 4.95
+    },
+    {
+      "id": "interference",
+      "mode": "solve",
+      "prompt": "Show two-source interference producing a fringe pattern.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\interference_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 6.0,
+        "fps": 30.0,
+        "frame_count": 180,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0667,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.533,
+            "rms": 2.619
+          },
+          {
+            "time": 1.733,
+            "rms": 2.506
+          },
+          {
+            "time": 1.767,
+            "rms": 2.515
+          },
+          {
+            "time": 1.8,
+            "rms": 2.5
+          },
+          {
+            "time": 3.5,
+            "rms": 2.681
+          },
+          {
+            "time": 3.533,
+            "rms": 2.701
+          },
+          {
+            "time": 3.767,
+            "rms": 2.511
+          },
+          {
+            "time": 5.5,
+            "rms": 2.595
+          }
+        ],
+        "final_frame": {
+          "time": 5.967,
+          "mean": 12.684,
+          "std": 13.391
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.483
+    },
+    {
+      "id": "rc_circuit",
+      "mode": "solve",
+      "prompt": "Animate the charging curve of an RC circuit over time.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\rc_circuit_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.0,
+        "fps": 30.0,
+        "frame_count": 150,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 29,
+        "static_ratio": 0.1933,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 0.633,
+            "rms": 0.731
+          },
+          {
+            "time": 0.7,
+            "rms": 0.726
+          },
+          {
+            "time": 0.733,
+            "rms": 0.801
+          },
+          {
+            "time": 0.8,
+            "rms": 0.767
+          },
+          {
+            "time": 2.067,
+            "rms": 0.787
+          },
+          {
+            "time": 2.1,
+            "rms": 0.767
+          },
+          {
+            "time": 3.433,
+            "rms": 0.737
+          },
+          {
+            "time": 3.467,
+            "rms": 0.798
+          }
+        ],
+        "final_frame": {
+          "time": 4.967,
+          "mean": 12.592,
+          "std": 13.118
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 4.977
+    },
+    {
+      "id": "escape_velocity",
+      "mode": "solve",
+      "prompt": "Explain escape velocity by launching a body from a planet's surface.",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0,
+        "duration_s": 0.0,
+        "has_hero_frame": false
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "class_name": "AetherLabScene",
+        "engine": "manim-community"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/AetherLabScene.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\escape_velocity_contact.jpg",
+        "width": 854,
+        "height": 480,
+        "duration": 5.5,
+        "fps": 30.0,
+        "frame_count": 165,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 12,
+        "static_ratio": 0.0727,
+        "static_ranges": [],
+        "transitions": [
+          {
+            "time": 1.9,
+            "rms": 1.583
+          },
+          {
+            "time": 2.067,
+            "rms": 1.595
+          },
+          {
+            "time": 2.1,
+            "rms": 1.604
+          },
+          {
+            "time": 2.533,
+            "rms": 1.79
+          },
+          {
+            "time": 2.567,
+            "rms": 1.612
+          },
+          {
+            "time": 2.7,
+            "rms": 1.578
+          },
+          {
+            "time": 3.0,
+            "rms": 1.575
+          },
+          {
+            "time": 3.033,
+            "rms": 1.579
+          }
+        ],
+        "final_frame": {
+          "time": 5.467,
+          "mean": 12.887,
+          "std": 13.579
+        },
+        "subtitle": null,
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 5.459
+    },
+    {
+      "id": "lesson_kepler",
+      "mode": "lesson",
+      "prompt": "Kepler orbit",
+      "quality": "l",
+      "status": "pass",
+      "storyboard": {
+        "present": false,
+        "act_count": 0
+      },
+      "critic": {
+        "score": 0.0,
+        "verdict": "skipped",
+        "issues": []
+      },
+      "artifact": {
+        "video_path": "<render-cache>/lesson.mp4"
+      },
+      "metrics": {
+        "video_path": "<render-cache>/lesson.mp4",
+        "contact_sheet": ".analysis\\pq-baseline\\lesson_kepler_contact.jpg",
+        "width": 1280,
+        "height": 720,
+        "duration": 15.167,
+        "fps": 30.0,
+        "frame_count": 455,
+        "blank_frame_count": 0,
+        "blank_ratio": 0.0,
+        "blank_ranges": [],
+        "static_frame_count": 282,
+        "static_ratio": 0.6198,
+        "static_ranges": [
+          {
+            "start": 0.2,
+            "end": 2.633,
+            "duration": 2.433
+          },
+          {
+            "start": 3.033,
+            "end": 4.433,
+            "duration": 1.4
+          },
+          {
+            "start": 5.4,
+            "end": 6.833,
+            "duration": 1.433
+          },
+          {
+            "start": 10.2,
+            "end": 11.633,
+            "duration": 1.433
+          },
+          {
+            "start": 13.267,
+            "end": 15.167,
+            "duration": 1.9
+          }
+        ],
+        "transitions": [
+          {
+            "time": 4.767,
+            "rms": 20.531
+          },
+          {
+            "time": 5.367,
+            "rms": 19.483
+          },
+          {
+            "time": 7.167,
+            "rms": 20.584
+          },
+          {
+            "time": 7.767,
+            "rms": 19.487
+          },
+          {
+            "time": 9.567,
+            "rms": 20.584
+          },
+          {
+            "time": 10.167,
+            "rms": 19.542
+          },
+          {
+            "time": 11.967,
+            "rms": 20.665
+          },
+          {
+            "time": 12.567,
+            "rms": 19.148
+          }
+        ],
+        "final_frame": {
+          "time": 15.133,
+          "mean": 19.832,
+          "std": 35.957
+        },
+        "subtitle": {
+          "path": "<render-cache>/lesson.srt",
+          "cue_count": 4,
+          "cues": [
+            {
+              "index": 1,
+              "start": 4.801,
+              "end": 5.801,
+              "duration": 1.0,
+              "nearest_transition_delta": 0.034,
+              "text_sample": "What keeps a planet from either flying away or falling into the star?"
+            },
+            {
+              "index": 2,
+              "start": 7.2,
+              "end": 8.2,
+              "duration": 1.0,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "Gravity constantly bends the planet's straight-line motion into a closed curve \u2014 a perpetu"
+            },
+            {
+              "index": 3,
+              "start": 9.6,
+              "end": 10.6,
+              "duration": 1.0,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "An inverse-square force F = -GMm/r\u00b2 gives an ellipse r(\u03c6) = p/(1 + e cos \u03c6), with equal ar"
+            },
+            {
+              "index": 4,
+              "start": 12.0,
+              "end": 13.0,
+              "duration": 1.0,
+              "nearest_transition_delta": 0.033,
+              "text_sample": "Gravity plus sideways motion makes a stable ellipse; Kepler's laws describe its shape and "
+            }
+          ],
+          "warnings": []
+        },
+        "warnings": []
+      },
+      "quality_failures": [],
+      "score": 4.75
+    }
+  ],
+  "summary": {
+    "case_count": 12,
+    "pass_count": 12,
+    "fail_count": 0,
+    "mean_score": 5.223,
+    "quality_failure_count": 0
+  },
+  "baseline_note": "Quality Flywheel Phase 0 golden-set baseline (keyless). Regenerate only after a genuine, reviewed quality improvement: run the lab and copy summary.json here."
+}

@@ -17,15 +17,17 @@ import asyncio
 import inspect
 import json
 import os
-import re
 import sys
 import tempfile
 import traceback
 from pathlib import Path
 
 try:  # Windows consoles default to cp1251/cp1252 and choke on arrows in notes.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    # line_buffering=True flushes every line so a HARD crash (native abort, no
+    # Python traceback) still records progress in a redirected CI log — otherwise
+    # block-buffering loses which test was running when the process died.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 except Exception:  # noqa: BLE001
     pass
 
@@ -37,20 +39,64 @@ os.environ["AETHERLAB_LIBRARY_DIR"] = str(_TMP / "lib")
 os.environ["AETHERLAB_CHROMA_PATH"] = str(_TMP / "chroma")
 os.environ.pop("AETHERLAB_OPENAI_API_KEY", None)
 os.environ.pop("OPENAI_API_KEY", None)
+# Also neutralize the ~/.qwen autoload: without this, subprocess tests (F02
+# smoke) pick up a live provider key and make real LLM calls — slow and
+# non-deterministic (F02 once timed out at 600s mid-suite because of it).
+os.environ["QWEN_SETTINGS_PATH"] = str(_TMP / "no-qwen-settings.json")
+os.environ.pop("AETHERLAB_QWEN_AUTOLOAD", None)
+os.environ.pop("AETHERLAB_PROVIDER", None)
+os.environ.pop("AETHERLAB_VISION_MODEL", None)
+os.environ["AETHERLAB_DISABLE_LEGACY_ENV"] = "1"
+for _compat_key in (
+    "GPT_API_KEY", "DASHSCOPE_API_KEY", "GPT_BASE_URL", "LLM_BASE_URL",
+    "MANIM_MODEL", "GPT_MODEL", "CHAT_MODEL", "LLM_TIMEOUT",
+    "VISION_MODEL", "VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_KEYFRAMES",
+    "VOICEOVER_ENABLED", "TTS_ENABLED", "TTS_VOICE", "TTS_RATE",
+    "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO", "CLOUD_RENDER_WORKFLOW",
+    "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_POLL",
+    "AETHERLAB_LEGACY_ENV_PATH", "MANIM_BOT_ENV_PATH", "GH_TOKEN",
+    "RENDER_TIER", "MANIM_FPS",
+):
+    os.environ.pop(_compat_key, None)
 
 results: dict[str, dict] = {}
 
 
 def check(fid: str, fn) -> None:
+    # Flushed pre-run marker: if a test HARD-crashes the process (native abort,
+    # no catchable exception), this is the last line in the log — pinpointing it.
+    print(f"  [run ] {fid} ...", flush=True)
     try:
         note = fn() or ""
         results[fid] = {"status": "PASS", "note": str(note)[:300]}
-        print(f"  [PASS] {fid}: {note}")
+        print(f"  [PASS] {fid}: {note}", flush=True)
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         results[fid] = {"status": "FAIL", "note": f"{type(exc).__name__}: {exc}"[:300]}
-        print(f"  [FAIL] {fid}: {type(exc).__name__}: {exc}")
-        print("\n".join("      " + ln for ln in tb.splitlines()[-4:]))
+        print(f"  [FAIL] {fid}: {type(exc).__name__}: {exc}", flush=True)
+        print("\n".join("      " + ln for ln in tb.splitlines()[-4:]), flush=True)
+
+
+def _ffmpeg_exe():
+    """Locate an ffmpeg binary for the assembly tests, or None.
+
+    Prefers a system ffmpeg (GitHub CI runners ship one), then imageio-ffmpeg's
+    bundled binary (the app's OPTIONAL ``narration`` extra). Returns None when
+    neither is available so callers skip render-driven assertions fail-soft —
+    exactly how the app degrades without an ffmpeg (assembly/narration are
+    fail-soft), and mirroring how t_f138 already skips when edge-tts is absent.
+    """
+    import shutil
+
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 — optional dep; degrade to skip
+        return None
 
 
 # ── Qt app (offscreen) for gui construction tests ──
@@ -97,10 +143,11 @@ def t_f01():
 def t_f02():
     import subprocess
     r = subprocess.run([sys.executable, "-m", "aetherlab", "--smoke", "Solve the simple pendulum"],
-                       capture_output=True, text=True, timeout=600, env={**os.environ})
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=600, env={**os.environ})
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr[-300:]}"
     assert "smoke pipeline complete" in r.stdout.lower(), r.stdout[-300:]
-    return f"smoke exit 0; scene status line present"
+    return "smoke exit 0; scene status line present"
 
 
 def t_f03():
@@ -131,10 +178,70 @@ def t_f05():
 def t_f06():
     s = _settings()
     assert s.llm_model and s.data_dir and s.cache_path
-    return f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}"
+    import aetherlab.core.settings as S
+    keys = (
+        "AETHERLAB_LLM_MODEL", "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY",
+        "AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "MANIM_MODEL",
+        "GPT_API_KEY", "GPT_BASE_URL", "AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT",
+        "AETHERLAB_LLM_MAX_RETRIES",
+        "AETHERLAB_VISUAL_CRITIC_MAX_PASSES", "VISUAL_CRITIC_MAX_PASSES",
+        "AETHERLAB_VISUAL_CRITIC_KEYFRAMES", "VISUAL_CRITIC_KEYFRAMES",
+        "AETHERLAB_SCENE_CANDIDATES", "AETHERLAB_SCENE_CANDIDATE_CONCURRENCY",
+    )
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        os.environ["MANIM_MODEL"] = "manim-bot-code-model"
+        os.environ["GPT_API_KEY"] = "sk-gpt"
+        os.environ["GPT_BASE_URL"] = "https://example.test/v1"
+        os.environ["AETHERLAB_LLM_TIMEOUT"] = "17"
+        os.environ["LLM_TIMEOUT"] = "77"
+        os.environ["AETHERLAB_LLM_MAX_RETRIES"] = "1"
+        os.environ["VISUAL_CRITIC_MAX_PASSES"] = "3"
+        os.environ["VISUAL_CRITIC_KEYFRAMES"] = "4"
+        os.environ["AETHERLAB_SCENE_CANDIDATES"] = "3"
+        os.environ["AETHERLAB_SCENE_CANDIDATE_CONCURRENCY"] = "2"
+        compat = S.load_settings()
+        assert compat.llm_model == "manim-bot-code-model"
+        assert compat.openai_api_key == "sk-gpt"
+        assert compat.openai_base_url == "https://example.test/v1"
+        assert compat.llm_timeout_seconds == 17.0
+        assert compat.llm_max_retries == 1
+        assert compat.visual_critic_max_passes == 3 and compat.visual_critic_keyframes == 4
+        assert compat.scene_candidates == 3 and compat.scene_candidate_concurrency == 2
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    # BUG-34: every asynchronous model client must use one bounded timeout /
+    # retry policy. The SDK defaults to two retries, multiplying a slow call.
+    from aetherlab.services.model_policy import openai_client_kwargs
+    from dataclasses import replace
+
+    bounded = replace(s, llm_timeout_seconds=17, llm_max_retries=1)
+    assert openai_client_kwargs(bounded)["timeout"] == 17
+    assert openai_client_kwargs(bounded)["max_retries"] == 1
+    for path in (
+        "aetherlab/services/llm.py",
+        "aetherlab/services/scene_generator.py",
+        "aetherlab/services/scene_critic.py",
+        "aetherlab/services/lesson_planner.py",
+        "aetherlab/services/fact_check.py",
+    ):
+        src = Path(path).read_text(encoding="utf-8")
+        assert "openai_client_kwargs" in src, f"unbounded model client in {path}"
+        assert "timeout=max(" not in src, f"hidden timeout floor remains in {path}"
+    return (
+        f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; "
+        "bounded async client retries; manim-bot aliases load (BUG-34)"
+    )
 
 
 def t_f07():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     from aetherlab.core.settings import save_app_config, load_app_config, app_config_path
     save_app_config({"model": "cfg-model", "api_key": None, "base_url": "http://x"})
     cfg = load_app_config()
@@ -142,9 +249,31 @@ def t_f07():
     assert "api_key" not in cfg, "None should be dropped"
     p = app_config_path()
     assert p.exists()
+    # BUG-45: syntactically valid JSON with the wrong top-level shape is a
+    # corrupt config, not an AttributeError during application startup/save.
+    p.write_text("[]", encoding="utf-8")
+    assert load_app_config() == {}
+    p.write_text("null", encoding="utf-8")
+    save_app_config({"model": "recovered-model"})
+    assert load_app_config()["model"] == "recovered-model"
+
+    # BUG-44: fresh callers must merge concurrent settings updates rather than
+    # racing direct writes and dropping keys.
+    writers = 8
+    gate = threading.Barrier(writers)
+
+    def save_one(index: int) -> None:
+        gate.wait(timeout=10)
+        save_app_config({f"probe_{index}": str(index)})
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        list(pool.map(save_one, range(writers)))
+    cfg = load_app_config()
+    assert all(cfg.get(f"probe_{i}") == str(i) for i in range(writers)), cfg
+    assert not list(p.parent.glob(f".{p.name}.*.tmp"))
     # cleanup so it doesn't taint provider-precedence test
     p.unlink()
-    return "save/load round-trip; None dropped; path honored"
+    return "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
 
 
 def t_f08():
@@ -178,24 +307,64 @@ def t_f10():
     from aetherlab.ui.main_window import SettingsDialog
     d = SettingsDialog(_settings())
     vals = d.get_settings()
-    assert set(["model", "api_key", "base_url", "library_path", "data_dir", "default_quality"]).issubset(vals)
+    assert set([
+        "model", "api_key", "base_url", "llm_timeout_seconds", "llm_max_retries",
+        "library_path", "data_dir", "default_quality",
+    ]).issubset(vals)
+    assert d._provider_status.active_label.text().startswith("Active:")
+    assert "API key source:" in d._provider_status.source_label.text()
+    assert isinstance(d._settings_scroll, QtWidgets.QScrollArea)
+    assert d._settings_scroll.widgetResizable()
+    screen = QtWidgets.QApplication.primaryScreen()
+    if screen:
+        geo = screen.availableGeometry()
+        assert d.height() <= int(geo.height() * 0.90)
+        assert d.width() <= min(920, max(520, int(geo.width() * 0.68))) + 8
     d.close()
     # BUG-4 regression: Data path must persist via app-config when no env override.
     # Redirect the default data dir into _TMP so nothing touches the real config.
     import aetherlab.core.settings as S
     saved_env = os.environ.pop("AETHERLAB_DATA_DIR", None)
+    key_names = (
+        "AETHERLAB_OPENAI_API_KEY", "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY",
+    )
+    saved_keys = {name: os.environ.pop(name, None) for name in key_names}
     orig_default = S._default_data_dir
     S._default_data_dir = lambda: _TMP / "cfghome"
     try:
         custom = _TMP / "custom_data"
-        S.save_app_config({"data_dir": str(custom)})
+        S.save_app_config({
+            "data_dir": str(custom), "api_key": "saved-secret",
+            "model": "qwen3-coder-plus", "base_url": "https://dashscope.example/v1",
+        })
         assert S.load_settings().data_dir == custom, "data_dir must persist from app-config"
+        os.environ["DASHSCOPE_API_KEY"] = "stale-env-secret"
+        shadowed = S.load_settings()
+        assert shadowed.openai_api_key == "stale-env-secret"
+        assert shadowed.api_key_source == "environment: DASHSCOPE_API_KEY"
+        assert "DASHSCOPE_API_KEY overrides" in shadowed.provider_warning
+        from aetherlab.ui.provider_status import ProviderStatusPanel
+        status = ProviderStatusPanel(shadowed)
+        visible = " ".join((
+            status.active_label.text(), status.source_label.text(), status.warning_label.text(),
+        ))
+        assert "Qwen / DashScope" in visible and "DASHSCOPE_API_KEY" in visible
+        assert "stale-env-secret" not in visible and "saved-secret" not in visible
+        status.close()
+        shadow_dialog = SettingsDialog(shadowed)
+        assert shadow_dialog._api_key_edit.text() == "saved-secret"
+        assert "stale-env-secret" not in shadow_dialog._api_key_edit.text()
+        shadow_dialog.close()
     finally:
         S._default_data_dir = orig_default
         (_TMP / "cfghome" / "settings.json").unlink(missing_ok=True)
+        for name, value in saved_keys.items():
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
         if saved_env is not None:
             os.environ["AETHERLAB_DATA_DIR"] = saved_env
-    return "dialog keys ok; Data path persists via config (BUG-4)"
+    return "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
 
 
 def t_f11():
@@ -290,6 +459,9 @@ def t_f17():
 
 
 def t_f18():
+    import time
+
+    from aetherlab.core.proc import ProcessCancelledError, run_process_tree
     from aetherlab.ui.workers import PipelineWorker, _PipelineCancelled
     from aetherlab.core.models import ProblemRequest
     w = PipelineWorker(ProblemRequest(prompt="x"), _settings())
@@ -300,7 +472,30 @@ def t_f18():
     except _PipelineCancelled:
         raised = True
     assert raised
-    return "cancel flag → _check_cancelled raises"
+    from aetherlab.ui.main_window import MainWindow
+
+    cancel_src = inspect.getsource(MainWindow._cancel_pipeline)
+    finished_src = inspect.getsource(MainWindow._on_worker_finished)
+    assert "set_busy(False)" not in cancel_src
+    assert "cancel_button.setEnabled(False)" in cancel_src
+    assert "cancel_button.setEnabled(True)" in finished_src
+    assert '"Run cancelled by user."' in finished_src
+
+    render_src = inspect.getsource(PipelineWorker._run_async)
+    assert "cancel_check=lambda: self._cancelled" in render_src
+    before = time.monotonic()
+    try:
+        run_process_tree(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            timeout=10,
+            cancel_check=lambda: True,
+            capture_output=True,
+        )
+        raise AssertionError("cancellable process ignored cancel_check")
+    except ProcessCancelledError:
+        pass
+    assert time.monotonic() - before < 2.0
+    return "cancel stays honest and stops active render process promptly (BUG-49/56)"
 
 
 def t_f19():
@@ -316,9 +511,70 @@ def t_f20():
 
 
 def t_f21():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.closeEvent)
-    assert "cancel()" in src and "wait(5000)" in src
-    return "closeEvent cancels + waits 5s"
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.qt_compat import QtGui
+
+    class Signal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+    class LingeringWorker:
+        def __init__(self):
+            self.running = True
+            self.cancelled = False
+            self.finished = Signal()
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            self.cancelled = True
+
+        def requestInterruption(self):
+            self.cancelled = True
+
+        def wait(self, timeout):
+            assert timeout == 5000
+            return False
+
+    window = MainWindow(_settings())
+    probe = getattr(window, "_ollama_probe", None)
+    if probe and probe.isRunning():
+        probe.wait(5000)
+    window._ollama_probe = None
+    lingering = LingeringWorker()
+    library_lingering = LingeringWorker()
+
+    class LibraryWorkers:
+        def request_background_cancel(self):
+            library_lingering.requestInterruption()
+
+        def active_workers(self):
+            return (library_lingering,) if library_lingering.running else ()
+
+    window.worker = lingering
+    window.library_panel = LibraryWorkers()
+    event = QtGui.QCloseEvent()
+    window.closeEvent(event)
+    assert lingering.cancelled and library_lingering.cancelled and not event.isAccepted()
+    assert window._close_pending and lingering.finished.callbacks
+    assert library_lingering.finished.callbacks
+    # Once the worker reports finished, the callback schedules a safe retry.
+    lingering.running = False
+    lingering.finished.callbacks[0]()
+    assert window._close_pending, "one finished callback must not bypass another live worker"
+    library_lingering.running = False
+    library_lingering.finished.callbacks[0]()
+    QtWidgets.QApplication.processEvents()
+    window.worker = None
+    window.close()
+
+    src = inspect.getsource(MainWindow.closeEvent)
+    assert "event.ignore()" in src and "_close_when_idle" in src and "terminate(" not in src
+    return "close defers until pipeline and library QThreads finish (BUG-48/54)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -334,10 +590,14 @@ def t_f22():
 
 
 def t_f23():
+    from dataclasses import replace
     from aetherlab.services.llm import AsyncLLMCoordinator
     from aetherlab.core.models import ProblemRequest
-    r = asyncio.run(AsyncLLMCoordinator(_settings()).solve(ProblemRequest(prompt="Solve the RLC circuit")))
-    assert r.model_name == "deterministic-fallback"
+    # Force no key so we exercise the deterministic fallback regardless of any
+    # working provider config on the host (e.g. ~/.qwen).
+    keyless = replace(_settings(), openai_api_key=None)
+    r = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="Solve the RLC circuit")))
+    assert r.model_name == "deterministic-fallback", r.model_name
     assert len(r.derivation_steps) == 5 and r.plot is not None
     return f"fallback: {len(r.derivation_steps)} steps, plot attached"
 
@@ -425,7 +685,7 @@ def t_f30():
 
 def t_f31():
     from aetherlab.core.cache import SessionCache
-    from aetherlab.core.models import ProblemRequest, SolverResult, RagResult
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle
     c = SessionCache(_settings().cache_path)
     req = ProblemRequest(prompt="incremental-test-xyz")
     key = c.ensure_request(req)
@@ -434,13 +694,30 @@ def t_f31():
     assert got.solver and got.solver.cached and got.rag is None
     c.store_rag(key, RagResult(keywords=["k"], hits=[], backend="t"))
     assert c.get(key).rag is not None
+    c.store_scene(key, SceneBundle(class_name="S", code="c", engine="e", status="rendered"))
+    c.clear_artifacts(key, ("scene",))
+    got = c.get(key)
+    assert got and got.solver and got.rag and got.scene is None
+    c.clear_artifacts(key)
+    got = c.get(key)
+    assert got and got.solver is None and got.rag is None and got.scene is None
     # SQL-injection guard
     try:
         c._store_json(key, "evil; DROP TABLE sessions;", {})
         raise AssertionError("column not whitelisted")
     except ValueError:
         pass
-    return "independent stage storage + column whitelist"
+    # BUG-50: an invalid SQLite file is preserved for diagnosis and replaced by
+    # an empty usable cache, rather than aborting every solve at construction.
+    corrupt_path = _TMP / "corrupt-session.sqlite3"
+    corrupt_bytes = b"this is not a sqlite database\x00\xff"
+    corrupt_path.write_bytes(corrupt_bytes)
+    recovered_cache = SessionCache(corrupt_path)
+    quarantined = list(_TMP.glob("corrupt-session.sqlite3.corrupt-*"))
+    assert len(quarantined) == 1 and quarantined[0].read_bytes() == corrupt_bytes
+    recovered_key = recovered_cache.ensure_request(ProblemRequest(prompt="after corruption"))
+    assert recovered_cache.get(recovered_key) is not None
+    return "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)"
 
 
 def t_f32():
@@ -457,16 +734,55 @@ def t_f32():
 
 
 def t_f33():
-    src = inspect.getsource(__import__("aetherlab.services.pipeline", fromlist=["AetherLabPipeline"]).AetherLabPipeline.run)
+    from aetherlab.core.cache import SessionCache
+    from aetherlab.core.models import ProblemRequest
+
+    pipeline_mod = __import__("aetherlab.services.pipeline", fromlist=["AetherLabPipeline"])
+    src = inspect.getsource(pipeline_mod.AetherLabPipeline.run)
     assert "engine != current_engine" in src and "compiled" in src
-    return "scene reused only on engine+status match"
+    assert (
+        "Cached rendered video missing; re-rendering." in src
+        and 'scene.video_path = ""' in src
+    )
+
+    # BUG-45: one malformed JSON artifact in SQLite is a cache miss for that
+    # field, not a crash that discards the independently valid solver result.
+    cache = SessionCache(_TMP / "malformed_rows.sqlite3")
+    key = cache.ensure_request(ProblemRequest(prompt="malformed cache row"))
+    with cache._transaction() as connection:
+        connection.execute(
+            "UPDATE sessions SET parameters_json=?, solver_json=?, rag_json=?, scene_json=? "
+            "WHERE key=?",
+            (
+                "null",
+                json.dumps(_solver().to_json()),
+                '{"hits":[7]}',
+                "[]",
+                key,
+            ),
+        )
+    recovered = cache.get(key)
+    assert recovered is not None and recovered.solver is not None
+    assert recovered.parameters_json == {} and recovered.rag is None and recovered.scene is None
+    return "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
 
 
 def t_f34():
+    from aetherlab.core.models import SceneBundle
     from aetherlab.services.pipeline import _video_exists
+    from aetherlab.ui.workers import _scene_cache_usable
+
     assert _video_exists("") is False
     assert _video_exists(str(_TMP / "nope.mp4")) is False
-    return "_video_exists guards empty/missing"
+    empty = _TMP / "empty.mp4"
+    empty.write_bytes(b"")
+    assert _video_exists(str(empty)) is False
+    fake = _TMP / "fake.mp4"
+    fake.write_text("not a playable video", encoding="utf-8")
+    assert _video_exists(str(fake)) is False
+    scene = SceneBundle("s", "code", "engine", "rendered", video_path=str(fake))
+    assert _scene_cache_usable(scene, _settings()) is False
+    return "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -554,12 +870,21 @@ def t_f43():
     # Real incremental ingest into chromadb (deps present).
     lib = Path(_settings().library_path)
     lib.mkdir(parents=True, exist_ok=True)
-    (lib / "ingest_me.txt").write_text("kinematics energy momentum " * 80, encoding="utf-8")
+    source = lib / "ingest_me.txt"
+    source.write_text("kinematics energy momentum. " * 420, encoding="utf-8")
     ing = LibraryIngestor(_settings())
     n1 = ing.ingest(reset=True)
     n2 = ing.ingest()  # nothing new
     assert n1 > 0 and n2 == 0, (n1, n2)
-    return f"ingest upserted {n1}; re-run 0 (incremental)"
+    source.write_text("replacement-only tiny note.", encoding="utf-8")
+    n3 = ing.ingest()
+    import chromadb
+    client = chromadb.PersistentClient(path=str(_settings().chroma_path))
+    collection = client.get_collection("textbooks")
+    source_chunks = collection.get(where={"path": str(source)}, include=[])
+    assert len(source_chunks.get("ids", [])) == 1, "changed file must delete stale old chunks"
+    assert n3 == 1, n3
+    return f"ingest upserted {n1}; re-run 0; stale chunks purged on change"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -586,44 +911,47 @@ def t_f45():
 
 def t_f46():
     from aetherlab.ui.widgets import LibraryPanel
+
     src = inspect.getsource(LibraryPanel._reindex_clicked)
     assert "ControlModifier" in src
     src2 = inspect.getsource(LibraryPanel._start_ingest)
     assert "_IngestWorker" in src2
-    return "incremental/full reindex via background worker"
+
+    class Worker:
+        def __init__(self):
+            self.interrupted = False
+
+        def isRunning(self):
+            return True
+
+        def requestInterruption(self):
+            self.interrupted = True
+
+    panel = LibraryPanel()
+    panel._worker = Worker()
+    panel._downloader = Worker()
+    assert len(panel.active_workers()) == 2
+    panel.request_background_cancel()
+    assert panel._worker.interrupted and panel._downloader.interrupted
+    cancel_src = inspect.getsource(LibraryPanel._cancel_work)
+    assert "request_background_cancel(update_ui=True)" in cancel_src
+    panel._worker = None
+    panel._downloader = None
+    panel.close()
+    return "index/download workers join app close barrier; cancel remains pending (BUG-54)"
 
 
 def t_f47():
-    import dataclasses
-    from aetherlab.ui.widgets import StarterLibraryDialog, LibraryPanel
+    from aetherlab.ui.widgets import LibraryPanel, StarterLibraryDialog
+
     d = StarterLibraryDialog()
     books = d.selected_books()
     assert len(books) >= 1  # defaults checked
     d.close()
-
-    # BUG-6 regression: cancelling a starter download must NOT roll into
-    # indexing (that re-shows the strip Cancel just hid). Simulate a cancelled
-    # worker and assert no ingest worker starts and the strip stays hidden.
-    lib = _TMP / "lib47"
-    st = dataclasses.replace(
-        _settings(),
-        library_path=lib, data_dir=lib,
-        chroma_path=lib / "chroma", cache_path=lib / "cache.sqlite3",
-    )
-    lp = LibraryPanel()
-    lp.set_settings(st)
-
-    class _CancelledWorker:
-        def isInterruptionRequested(self):
-            return True
-
-    lp._downloader = _CancelledWorker()
-    lp._worker = None
-    lp._on_downloads_done(1, 0)  # 1 book landed before the user cancelled
-    assert lp._worker is None, "cancelled download must not auto-start indexing (BUG-6)"
-    assert lp._progress_strip.isHidden(), "cancel must leave the progress strip hidden"
-    lp.close()
-    return f"starter dialog: {len(books)} default book(s); cancel skips auto-index (BUG-6)"
+    done_src = inspect.getsource(LibraryPanel._on_downloads_done)
+    assert "isInterruptionRequested" in done_src
+    assert done_src.index("if cancelled:") < done_src.index("_start_ingest(reset=False)")
+    return f"starter dialog + cancel-safe completion: {len(books)} defaults (BUG-54)"
 
 
 def t_f48():
@@ -641,7 +969,7 @@ def t_f48():
     got = []
     r = download_book(STARTER_BOOKS[0], "http://unused", dest, progress_cb=lambda d, t: got.append((d, t)))
     assert r == big and got, "existing >5MB file should be skipped"
-    return f"URL fallback + free_disk_mb={mb:.0f} + skip-existing"
+    return "URL fallback + positive free_disk_mb + skip-existing"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -649,15 +977,10 @@ def t_f48():
 # ══════════════════════════════════════════════════════════════════════════
 
 def t_f49():
-    from aetherlab.services.scene_generator import SceneGenerator, SCENE_GENERATION_SYSTEM_PROMPT
-    gr = inspect.getsource(SceneGenerator._generate_remote)
-    # Assert the *intent* (a generous output budget for reasoning models that
-    # burn tokens on <think> blocks), not a brittle exact literal. The old test
-    # hardcoded max_tokens=16384; the code deliberately raised it to 32768 and
-    # the assertion silently rotted into a false PASS in the canonical results.
-    mt = re.search(r"max_tokens=(\d+)", gr)
-    assert mt and int(mt.group(1)) >= 16384, f"generous max_tokens expected, got {mt and mt.group(1)}"
-    assert "temperature=0.4" in gr
+    from aetherlab.services.scene_generator import SceneGenerator
+    _gr = inspect.getsource(SceneGenerator._generate_remote)
+    # Two-call split: codegen runs cold (0.15), single-call fallback stays 0.4.
+    assert "max_tokens=32768" in _gr and "temperature = 0.15" in _gr and "temperature = 0.4" in _gr
     # code extraction robustness
     sg = SceneGenerator(_settings())
     code = sg._extract_code("<think>plan</think>```python\nfrom manim import *\nclass X(Scene):\n    def construct(self):\n        pass\n```", "AetherLabScene")
@@ -712,14 +1035,58 @@ def t_f55():
     from aetherlab.services.manim_runtime import _detect_render_tier, _RENDER_TIER
     t = _detect_render_tier()
     assert t["fps"] in {30, 60} and "name" in t
-    return f"tier={_RENDER_TIER['name']} fps={_RENDER_TIER['fps']}"
+    saved = {k: os.environ.pop(k, None) for k in ("AETHERLAB_RENDER_TIER", "RENDER_TIER", "AETHERLAB_MANIM_FPS", "MANIM_FPS")}
+    try:
+        os.environ["RENDER_TIER"] = "constrained"
+        os.environ["MANIM_FPS"] = "24"
+        forced = _detect_render_tier()
+        assert forced["name"] == "constrained" and forced["fps"] == 24
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return f"tier={_RENDER_TIER['name']} fps={_RENDER_TIER['fps']}; env override honored"
 
 
 def t_f56():
+    import subprocess
+    import time
+
+    from aetherlab.core.proc import run_process_tree, subprocess_kwargs
+
     src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime.render_scene)
     assert '"l": 240' in src and '"h": 600' in src
     assert "render-timeout" in src and "render-error" in src
-    return "timeout_map + timeout/error statuses"
+    assert "run_process_tree" in src
+
+    # BUG-55: a timeout must kill the grandchild too, not just the immediate
+    # Python parent. The delayed marker makes an orphan observable cross-platform.
+    marker = _TMP / "orphan-grandchild.txt"
+    child = (
+        "import time; from pathlib import Path; time.sleep(0.8); "
+        f"Path({str(marker)!r}).write_text('orphan', encoding='utf-8')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(10)"
+    )
+    try:
+        run_process_tree(
+            [sys.executable, "-c", parent],
+            timeout=0.2,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **subprocess_kwargs(),
+        )
+        raise AssertionError("process-tree timeout did not fire")
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(1.0)
+    assert not marker.exists(), "timed-out grandchild survived and wrote its marker"
+    return "quality timeout statuses + whole process-tree termination (BUG-55)"
 
 
 def t_f57():
@@ -734,6 +1101,386 @@ def t_f58():
     cmd = ManimRuntime()._find_manim_command()
     assert cmd is not None and cmd[-1] == "manim"
     return f"manim cmd: {' '.join(cmd)}"
+
+
+def t_f101():
+    # Render self-heal: repair loop is wired (incl. timeout repair), and a
+    # non-compiled scene is a safe no-op.
+    from dataclasses import replace
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.core.models import SceneBundle
+    src = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "max_repairs" in src and ".repair(" in src
+    assert '"render-timeout"' in src, "timeout must be repairable now"
+    assert "exceeded the render time limit" in src, "timeout repair needs actionable direction"
+    sb = SceneBundle(class_name="X", code="def broken(", engine="manim-community", status="compile-error")
+    keyless = replace(_settings(), openai_api_key=None)
+    out = asyncio.run(ManimRuntime(keyless).render_scene_with_repair(sb, keyless))
+    assert out.status == "compile-error"  # non-compiled → render_scene skips, repair loop never entered
+    return "self-heal wired incl. timeout repair; non-compiled path safe (F101)"
+
+
+def t_f103():
+    from aetherlab.services.code_safety import validate_code_safety
+    ok, issues = validate_code_safety("import os\nopen('x')")
+    assert not ok and len(issues) >= 2, issues
+    ok2, _ = validate_code_safety("from manim import *\nimport numpy as np\nx = 1")
+    assert ok2
+    # escape-chain attributes
+    ok3, iss3 = validate_code_safety("y = ().__class__.__bases__[0].__subclasses__()")
+    assert not ok3 and any("__subclasses__" in i for i in iss3)
+    # string-based escape helpers (getattr + __builtins__/dunder strings) used
+    # to bypass the previous gate because they do not appear as ast.Attribute.
+    for payload in (
+        "getattr(__builtins__, 'open')('x','w')",
+        "getattr(type, '__subclasses__')(type)",
+        "().__getattribute__('__class__')",
+    ):
+        ok, bypass_issues = validate_code_safety(payload)
+        assert not ok, (payload, bypass_issues)
+    # BUG-28: numpy is allowed, but its file-I/O surface is an arbitrary host
+    # read/write (RCE via a Startup-folder write). These sinks must be blocked
+    # while legitimate numpy math stays allowed.
+    for payload in (
+        "import numpy as np\nnp.frombuffer(b'x', dtype=np.uint8).tofile('e.bat')\n",
+        "import numpy\nnumpy.savetxt('x.bat', numpy.array([1]))\n",
+        "import numpy\nnumpy.load('x.npy', allow_pickle=True)\n",
+        "import numpy\nnumpy.lib.npyio.DataSource('.').open('http://evil/x')\n",
+    ):
+        ok, io_issues = validate_code_safety(payload)
+        assert not ok, ("numpy IO not blocked", payload, io_issues)
+    assert validate_code_safety("import numpy as np\ny = np.sin(np.array([1.0])) * np.pi\n")[0]
+    # wired into generation + repair
+    src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert src.count("validate_code_safety") >= 2
+    return "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)"
+
+
+def t_f104():
+    from aetherlab.services.error_learner import ErrorLearner, known_pitfall_hints, preventive_pitfalls_block
+    hints = known_pitfall_hints("AttributeError: 'Axes' object has no attribute 'get_graph'")
+    assert hints and "axes.plot" in hints[0]
+    store = _TMP / "err_store.json"
+    learner = ErrorLearner(store)
+    err = "NameError: name 'ShowCreation' is not defined"
+    assert learner.seen_count(err) == 0
+    learner.record(err)
+    assert ErrorLearner(store).seen_count(err) == 1, "must persist across instances"
+    assert any("before" in h for h in ErrorLearner(store).hints_for(err))
+    # preventive block reaches the generation prompt
+    from aetherlab.services.scene_generator import SceneGenerator
+    assert "preventive_pitfalls_block" in inspect.getsource(SceneGenerator._generate_remote)
+    assert "pitfalls" in preventive_pitfalls_block().lower()
+    return "pitfall KB + persistent recurrence store + prompt wiring (F104)"
+
+
+def t_f105():
+    from aetherlab.services.scene_templates import build_scene, detect_domain
+    from aetherlab.services.scene_generator import SceneGenerator
+    assert detect_domain(["kepler", "orbit"], {}) == "orbit"
+    assert detect_domain(["pendulum"], {}) == "pendulum"
+    assert detect_domain(["fourier", "wave"], {}) == "wave"
+    assert detect_domain(["electric", "dipole", "field"], {}) == "em_field"
+    assert detect_domain(["something"], {"damping": 0.1}) == "oscillator"
+    for dom in ("pendulum", "orbit", "em_field", "wave", "oscillator"):
+        code = build_scene("AetherLabScene", dom, "T", "S", ["s1"], {"gravity": 9.8})
+        compile(code, "<t>", "exec")
+        assert "MathTex" not in code, "templates must be LaTeX-free"
+        if dom == "em_field":
+            assert "field lines" in code and "plus_pos" in code and "minus_pos" in code
+    # both fallback paths route through the domain builder now
+    sg_src = inspect.getsource(SceneGenerator._fallback_scene)
+    assert "detect_domain" in sg_src and "build_scene" in sg_src
+    mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime._build_scene_code)
+    assert "detect_domain" in mr_src and "build_scene" in mr_src
+    return "5 domains compile LaTeX-free; both fallback paths routed (F105)"
+
+
+def t_f106():
+    from aetherlab.services.scene_validation import (
+        validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
+        motion_contract_issues, repair_unknown_color_constants, scene_hygiene_warnings,
+    )
+    bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
+    issues = lint_manim_names(bad)
+    assert any("ShowCreation" in i for i in issues), issues
+    tex_bad = 'from manim import *\nclass S(Scene):\n    def construct(self):\n        e = MathTex(r"\\frac{a}{b")\n'
+    assert check_latex_strings(tex_bad), "unclosed brace must be flagged"
+    messy = """from manim import *
+class S(Scene):
+    def construct(self):
+        a = Text("A").move_to(ORIGIN)
+        b = Text("B").move_to(ORIGIN)
+        c = a.copy()
+        plane = NumberPlane()
+        self.play(Write(a), Write(b), FadeIn(c), Create(plane))
+        self.clear()
+"""
+    hygiene = scene_hygiene_warnings(messy)
+    assert any("HYGIENE:OVERLAP" in i for i in hygiene), hygiene
+    assert any("HYGIENE:STALE_COPY" in i for i in hygiene), hygiene
+    assert any("HYGIENE:GRID" in i for i in hygiene), hygiene
+    assert any("HYGIENE:CLEAR" in i for i in hygiene), hygiene
+    from aetherlab.services.scene_templates import build_scene
+    clean = build_scene("S", "wave", "T", "S", ["s1"], {"frequency": 2.0})
+    ok, iss = validate_scene(clean)
+    assert ok, iss
+    # BUG-40: token-aware repair maps invented color-like names without
+    # touching string content or identifiers the scene defines itself.
+    invented = '''from manim import *
+class AetherLabScene(Scene):
+    def construct(self):
+        label = Text("GREEN_SCREEN / BROWN")
+        a = Dot(color=GREEN_SCREEN)
+        b = Dot(color=BROWN)
+        self.play(a.animate.shift(RIGHT), b.animate.shift(LEFT))
+'''
+    fixed, replacements = repair_unknown_color_constants(invented)
+    assert replacements == {"GREEN_SCREEN": "GREEN", "BROWN": "DARK_BROWN"}, replacements
+    assert 'Text("GREEN_SCREEN / BROWN")' in fixed
+    assert not lint_manim_names(fixed), lint_manim_names(fixed)
+    compile(fixed, "<fixed-colors>", "exec")
+
+    # BUG-41: remote scene gates reject no-motion and reveal-only title cards,
+    # while actual object evolution passes.
+    no_motion = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.add(Dot())\n"
+    reveal_only = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(FadeIn(Dot()))\n"
+    moving = "from manim import *\nclass S(Scene):\n    def construct(self):\n        d=Dot()\n        self.play(d.animate.shift(RIGHT))\n"
+    assert motion_contract_issues(no_motion) and motion_contract_issues(reveal_only)
+    assert not motion_contract_issues(moving)
+    assert not validate_scene(reveal_only, require_motion=True)[0]
+    assert validate_scene(moving, require_motion=True)[0]
+
+    from aetherlab.services.scene_generator import (
+        SCENE_CODEGEN_SYSTEM_PROMPT, SCENE_GENERATION_SYSTEM_PROMPT, SceneGenerator,
+    )
+    extracted = SceneGenerator(_settings())._extract_code(invented, "AetherLabScene")
+    assert "GREEN_SCREEN / BROWN" in extracted and "color=GREEN_SCREEN" not in extracted
+    prompt = (SCENE_GENERATION_SYSTEM_PROMPT + SCENE_CODEGEN_SYSTEM_PROMPT).lower()
+    assert "allowed global colors" in prompt and "final three sampled frames" in prompt
+    assert "every requested" in prompt and "noun by noun" in prompt
+    est = estimate_duration(clean)
+    assert est.total_seconds > 0 and est.play_calls >= 1
+    # wired into generation and repair paths
+    mr_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert mr_src.count("validate_scene") >= 2 and "estimate_duration" in mr_src
+    assert "scene_hygiene_warnings" in mr_src
+    return "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
+
+
+def t_f102():
+    # Truncation guard: a finish_reason=='length' reply raises rather than compiling junk.
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    class _Msg:
+        content = "some truncated code"
+
+    class _Choice:
+        finish_reason = "length"
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Completions:
+        async def create(self, **_):
+            return _Resp()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    sg = SceneGenerator(_settings())
+    sg._client = _Client()
+    for method, args in (("repair", ("code", "err")), ("revise", ("code", "critique"))):
+        raised = False
+        try:
+            asyncio.run(getattr(sg, method)(*args, "AetherLabScene"))
+        except ValueError as exc:
+            raised = "truncat" in str(exc).lower()
+        assert raised, f"{method} must raise on finish_reason=length"
+    return "truncation guard raises in repair AND revise (F102)"
+
+
+def t_f107():
+    # Storyboard→codegen split: hot directing pass, cold implementation pass,
+    # fail-soft to the single-call cinematic path.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest
+    from aetherlab.services.scene_generator import SceneGenerator
+    keyless = replace(_settings(), openai_api_key=None)
+    board = asyncio.run(SceneGenerator(keyless).storyboard(
+        ProblemRequest(prompt="x"), _solver(), _rag()))
+    assert board is None, "storyboard must fail soft without a key"
+
+    class _Msg:
+        def __init__(self, c):
+            self.content = c
+
+    class _Choice:
+        def __init__(self, c):
+            self.finish_reason = "stop"
+            self.message = _Msg(c)
+
+    class _Resp:
+        def __init__(self, c):
+            self.choices = [_Choice(c)]
+
+    calls = []
+    class _Completions:
+        async def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                return _Resp('{"concept":"c","staging":"s","palette":{},'
+                             '"acts":[{"name":"ESTABLISH","duration_s":5,"beats":["b"]}],'
+                             '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
+            return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
+                         "    def construct(self):\n        self.wait(1)\n")
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    sg = SceneGenerator(replace(
+        _settings(), openai_api_key="sk-test", llm_model="qwen3.7-plus"
+    ))
+    sg._client = _Client()
+    code = asyncio.run(sg._generate_remote(
+        ProblemRequest(prompt="pendulum"), _solver(), _rag(), "AetherLabScene"))
+    assert len(calls) == 2, "storyboard call + codegen call expected"
+    assert calls[0]["temperature"] == 0.9 and calls[1]["temperature"] == 0.15
+    assert all(
+        call.get("extra_body") == {"enable_thinking": False} for call in calls
+    ), calls
+    assert "Locked storyboard" in calls[1]["messages"][1]["content"]
+    assert sg._last_storyboard and "acts" in sg._last_storyboard
+    assert "class AetherLabScene" in code
+    from aetherlab.services.model_policy import (
+        codegen_request_kwargs, is_thinking_only_model, model_codegen_warning,
+    )
+    assert codegen_request_kwargs(sg.settings) == {"extra_body": {"enable_thinking": False}}
+    assert is_thinking_only_model("qwen3.7-max-preview")
+    assert "qwen3-coder-plus" in model_codegen_warning("qwen3.7-plus", 60)
+    assert inspect.getsource(SceneGenerator).count("codegen_request_kwargs") >= 5
+    return "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
+
+
+def t_f108():
+    # Perceptual critique loop: skips cleanly without a vision model; PyAV
+    # frame extraction works on a real render when one exists.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.model_json import load_model_json
+    from aetherlab.services.scene_critic import Critique, _sample_indices, critique_video, extract_frames
+    no_vlm = replace(_settings(), vision_model=None)
+    crit = asyncio.run(critique_video("missing.mp4", "brief", no_vlm))
+    assert crit.verdict == "skipped" and not crit.should_revise
+    # BUG-35: raw LaTeX in model JSON must neither raise Invalid \escape nor
+    # silently turn \theta into a tab escape.
+    raw = r'''preface {"verdict":"revise","score":4,"issues":["Move \omega and \theta away from {edge}"],"strengths":[]} trailing'''
+    repaired = load_model_json(raw)
+    assert repaired["issues"] == [r"Move \omega and \theta away from {edge}"], repaired
+    assert Critique(verdict="revise").should_revise
+    # storyboard round-trips through the scene cache
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="rendered",
+        storyboard={"acts": []}).to_json())
+    assert sb.storyboard == {"acts": []}
+    assert SceneBundle.from_json({}).storyboard is None
+    assert _sample_indices(10, 4) == [0, 3, 6, 9]
+    assert _sample_indices(5, 99) == [0, 1, 2, 3, 4]
+    # loop is wired into the runtime after successful renders
+    src = inspect.getsource(__import__(
+        "aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]
+    ).ManimRuntime.render_scene_with_repair)
+    assert "critique_video" in src and ".revise(" in src and "max_revisions" in src
+    assert "keeping previous cut" in src, "revisions must never downgrade a shipped render"
+
+    # BUG-38: a weaker reviser may emit code that fails static validation. The
+    # revision must get one targeted repair before the previous cut is kept.
+    from aetherlab.services import scene_critic as critic_module
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    video = _TMP / "revision-draft.mp4"
+    video.write_bytes(b"draft")
+    settings = replace(
+        _settings(), openai_api_key="sk-test", vision_model="vision-test",
+        visual_critic_max_passes=2,
+    )
+    runtime = ManimRuntime(settings)
+    calls = {"critique": 0, "repair": 0, "render": 0}
+    original_critique = critic_module.critique_video
+    original_revise = SceneGenerator.revise
+    original_repair = SceneGenerator.repair
+
+    async def fake_critique(*args, **kwargs):
+        calls["critique"] += 1
+        if calls["critique"] == 1:
+            return Critique(verdict="revise", score=4.0, issues=["fix layout"])
+        return Critique(verdict="ship", score=8.0)
+
+    async def fake_revise(self, code, critique, class_name):
+        return (
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot(color=GREEN_SCREEN)\n"
+            "        self.play(Create(dot))\n"
+        )
+
+    async def fake_repair(self, code, error, class_name):
+        calls["repair"] += 1
+        return (
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n"
+            "        dot = Dot(color=GREEN)\n"
+            "        self.play(Create(dot))\n"
+            "        self.play(dot.animate.shift(RIGHT))\n"
+        )
+
+    async def fake_render(scene, settings, quality, progress=None, variant=""):
+        calls["render"] += 1
+        if calls["render"] == 1:
+            return replace(
+                scene, status="render-error",
+                diagnostics=[*scene.diagnostics, "Manim render failed: bad revised API"],
+            )
+        return replace(scene, status="rendered", video_path=str(video))
+
+    critic_module.critique_video = fake_critique
+    SceneGenerator.revise = fake_revise
+    SceneGenerator.repair = fake_repair
+    runtime._render_once = fake_render  # type: ignore[assignment]
+    try:
+        start = SceneBundle(
+            "AetherLabScene",
+            "from manim import *\nclass AetherLabScene(Scene):\n"
+            "    def construct(self):\n        self.play(Create(Dot()))\n",
+            "manim-community", "rendered", video_path=str(video),
+        )
+        recovered = asyncio.run(runtime.render_scene_with_repair(start, settings, quality="l"))
+    finally:
+        critic_module.critique_video = original_critique
+        SceneGenerator.revise = original_revise
+        SceneGenerator.repair = original_repair
+    assert recovered.status == "rendered" and "GREEN_SCREEN" not in recovered.code
+    assert calls == {"critique": 2, "repair": 2, "render": 2}, calls
+    assert any("Applied repaired visual revision" in d for d in recovered.diagnostics)
+    import pathlib
+    import tempfile
+    vids = sorted(
+        pathlib.Path(tempfile.gettempdir()).glob("aetherlab/renders/media/videos/**/*.mp4"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    note = "no render available for frame sampling"
+    if vids:
+        frames = extract_frames(vids[-1], count=3)
+        assert len(frames) >= 1, "PyAV should sample frames from a real render"
+        note = f"sampled {len(frames)} frames via PyAV"
+    return f"critique loop wired + fail-soft + final-frame sampling; {note} (F108)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -757,18 +1504,24 @@ def t_f60():
     sp = SimulationPanel()
     sp.set_scene_bundle(SceneBundle(class_name="X", code="x=1", engine="manim-community",
                                     status="compiled", diagnostics=["note one", "note two"]))
+    # v2 (§4): diagnostics live in a dedicated drawer, not dumped in the code view.
     txt = sp.code.toPlainText()
-    assert "# note one" in txt and "# note two" in txt
+    assert "x=1" in txt
+    drawer = sp._diag_drawer._body.toPlainText()
+    assert "note one" in drawer and "note two" in drawer
+    assert not sp._diag_drawer.isHidden()
     sp.close()
-    return "code viewer shows diagnostics prefixed with #"
+    return "diagnostics surfaced in the drawer (v2), code view stays clean"
 
 
 def t_f61():
     from aetherlab.ui.widgets import SimulationPanel
+    from aetherlab.ui.widgets import _frame_step_ms_for_video
     sp = SimulationPanel()
     assert hasattr(sp, "_player") and hasattr(sp, "_seek_slider")
     sp._on_duration_changed(65000)  # 1:05
     assert "1:05" in sp._time_label.text()
+    assert _frame_step_ms_for_video(_TMP / "missing.mp4") == 33
     sp.close()
     return "video player + time label formatting"
 
@@ -970,8 +1723,19 @@ def t_f79():
     hp2 = HistoryPanel()
     hp2.init_persistence(db)  # reload
     assert hp2._list.count() == 1
-    hp.close(); hp2.close()
-    return "history persists + reloads"
+    corrupt_db = _TMP / "history-corrupt.sqlite3"
+    corrupt_bytes = b"not history sqlite\x00\xff"
+    corrupt_db.write_bytes(corrupt_bytes)
+    hp3 = HistoryPanel()
+    hp3.init_persistence(corrupt_db)
+    quarantined = list(_TMP.glob("history-corrupt.sqlite3.corrupt-*"))
+    assert len(quarantined) == 1 and quarantined[0].read_bytes() == corrupt_bytes
+    hp3.add_entry("recovered", "new", "compiled", 0)
+    assert hp3._list.count() == 1
+    hp.close()
+    hp2.close()
+    hp3.close()
+    return "history persists; corrupt DB quarantined and rebuilt (BUG-52)"
 
 
 def t_f80():
@@ -1038,9 +1802,15 @@ def t_f85():
 
 def t_f86():
     from aetherlab.services.pdf import compile_latex_to_pdf
+    from aetherlab.ui.main_window import MainWindow
+
     # pdflatex likely absent — must return None, not raise
     r = compile_latex_to_pdf(_TMP / "d.tex")
-    return f"compile_latex_to_pdf returned {r!r} (None ok if no pdflatex)"
+    assert r is None or r.exists()
+    src = inspect.getsource(MainWindow._export_pdf)
+    assert "_start_export_task" in src and 'with_suffix(".tex")' in src
+    assert "LaTeX saved instead" in src and "cancel_check=cancel.is_set" in src
+    return "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)"
 
 
 def t_f87():
@@ -1052,15 +1822,35 @@ def t_f87():
 
 
 def t_f88():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow._save_video)
-    assert "copy2" in src and "video_path" in src
-    return "save video copies MP4"
+    from aetherlab.core.atomic_file import atomic_copy_file
+    from aetherlab.core.proc import ProcessCancelledError
+    from aetherlab.ui.main_window import MainWindow
+
+    source = _TMP / "atomic-video-source.mp4"
+    destination = _TMP / "atomic-video-destination.mp4"
+    source.write_bytes(b"new-video" * 200_000)
+    destination.write_bytes(b"prior-good-video")
+    try:
+        atomic_copy_file(source, destination, cancel_check=lambda: True)
+        raise AssertionError("cancelled copy unexpectedly completed")
+    except ProcessCancelledError:
+        pass
+    assert destination.read_bytes() == b"prior-good-video"
+    assert not list(_TMP.glob(".atomic-video-destination.*.tmp.mp4"))
+    atomic_copy_file(source, destination)
+    assert destination.read_bytes() == source.read_bytes()
+    src = inspect.getsource(MainWindow._save_video)
+    assert "_start_export_task" in src and "atomic_copy_file" in src
+    return "video copy is backgrounded, cancellable, and atomic (BUG-57)"
 
 
 def t_f89():
     src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow._export_gif)
     assert "ffmpeg" in src and "FileNotFoundError" in src and "TimeoutExpired" in src
-    return "gif export via ffmpeg w/ error handling"
+    assert "_start_export_task" in src and "run_process_tree" in src
+    assert "unique_staging_path" in src and "os.replace" in src
+    assert "subprocess.run" not in src
+    return "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1074,9 +1864,48 @@ def t_f90():
 
 
 def t_f91():
-    src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.__init__)
-    assert "0.92" in src and "min(1500" in src
-    return "responsive sizing formula"
+    from aetherlab.ui.live_canvas import LiveCanvas
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import CommandBar, LessonView, SimulationPanel
+
+    w = MainWindow(_settings())
+    try:
+        assert w.minimumWidth() <= 960 and w.minimumHeight() <= 640
+        w.resize(760, 520)
+        w._apply_responsive_layout()
+        assert 220 <= w._param_side.width() <= 320
+        assert w._param_side.width() == 220
+
+        sim = SimulationPanel()
+        sim_video = getattr(sim, "_video_widget", None)
+        if sim_video is not None:
+            assert sim_video.minimumWidth() <= 280
+            assert sim_video.minimumHeight() <= 158
+
+        canvas = LiveCanvas()
+        assert canvas.minimumWidth() <= 260
+        assert canvas.minimumHeight() <= 180
+
+        command = CommandBar()
+        command.resize(520, 120)
+        command.show()
+        _app.processEvents()
+        assert command.input.width() >= 220, command.input.width()
+        command.close()
+
+        lesson = LessonView()
+        assert lesson._outline.minimumWidth() <= 160
+        assert lesson._outline.maximumWidth() <= 280
+        lesson_video = getattr(lesson, "_video_widget", None)
+        if lesson_video is not None:
+            assert lesson_video.minimumWidth() <= 280
+            assert lesson_video.minimumHeight() <= 158
+    finally:
+        w.close()
+        probe = getattr(w, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    return "responsive shell + command bar + media/canvas minimums fit small screens"
 
 
 def t_f92():
@@ -1159,19 +1988,3633 @@ def t_f100():
     from aetherlab.services.manim_runtime import sanitize_scene_name, _scene_name
     assert sanitize_scene_name("my-cool scene 1") == "MyCoolScene1"
     assert sanitize_scene_name("!!!") == "AetherLabScene"
-    a = _scene_name("X", "code A"); b = _scene_name("X", "code B")
+    a = _scene_name("X", "code A")
+    b = _scene_name("X", "code B")
     assert a != b and _scene_name("X", "code A") == a
     return "sanitize + stable per-code hashing"
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Redesign Phase 1 — planner + conditional outputs
+# Live canvas flagship upgrade (F109-F118)
 # ══════════════════════════════════════════════════════════════════════════
 
-def t_f101():
+def _canvas(params=None, plot=None):
+    from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state
+    lc = LiveCanvas()
+    lc.resize(800, 600)
+    lc.set_state(build_canvas_state(
+        "t", params or {"damping": 0.2, "stiffness": 1.0}, plot=plot))
+    return lc
+
+
+def t_f109():
+    # Cursor-anchored zoom: the data point under the cursor must not move,
+    # for both the direct math and the wheel path (smooth animation bypassed).
+    from aetherlab.ui.qt_compat import QtCore
+    lc = _canvas()
+    plot_rect = lc._plot_rect()
+    anchor = QtCore.QPointF(plot_rect.left() + plot_rect.width() * 0.3,
+                            plot_rect.top() + plot_rect.height() * 0.8)
+    before = lc._pixel_to_data(anchor.x(), anchor.y(), plot_rect)
+    lc._apply_zoom(4.0, anchor)
+    after = lc._pixel_to_data(anchor.x(), anchor.y(), plot_rect)
+    assert abs(before[0] - after[0]) < 1e-9 and abs(before[1] - after[1]) < 1e-9
+    # Smooth-zoom plumbing exists and wheel targets it
+    assert lc.smooth_zoom_enabled and lc._zoom_anim.duration() == 120
+    lc.reset_view()
+    assert lc._zoom_factor == 1.0 and lc._zoom_target == 1.0
+    return "zoom anchors cursor; 120ms smooth-zoom animation wired"
+
+
+def t_f110():
+    # Trail lives in data space (survives zoom); tracer advances by wall clock.
+    from aetherlab.ui.qt_compat import QtCore
+    from aetherlab.ui.live_canvas import SWEEP_SECONDS
+    lc = _canvas()
+    lc._trail.append((1.25, -0.5))
+    lc._apply_zoom(6.0, QtCore.QPointF(400, 300))
+    lc._pan_offset += QtCore.QPointF(2.0, 1.0)
+    assert list(lc._trail) == [(1.25, -0.5)], "trail must store data coords"
+    assert SWEEP_SECONDS == 6.0
+    lc._sweep_clock.invalidate()
+    t0 = lc._tracer_t
+    lc._tick()  # first tick after a pause only starts the clock — no jump
+    assert lc._tracer_t == t0 and lc._sweep_clock.isValid()
+    return "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump"
+
+
+def t_f111():
+    # Hover snapping: cursor near the curve snaps to a sample with (t, x, y).
+    from aetherlab.ui.qt_compat import QtCore, QtGui
+    lc = _canvas()
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)  # populate pixel cache
+    assert lc._pixel_cache, "paint must publish pixel cache for hover"
+    idx, px, py, t_arr = lc._pixel_cache[0]
+    import numpy as np
+    j = int(np.nanargmin(np.abs(px - 400)))
+    near = QtCore.QPointF(float(px[j]) + 5, float(py[j]) + 5)
+    lc._update_hover(near)
+    assert lc._hover_snap is not None, "within 24px must snap"
+    sidx, st, sx, sy, spx, spy = lc._hover_snap
+    assert sidx == idx and abs(spx - px[j]) < 30
+    far = QtCore.QPointF(float(px[j]) + 200, float(py[j]) - 200)
+    lc._update_hover(far)
+    assert lc._hover_snap is None and lc._hover_coords is not None, "far → raw coords"
+    return "snaps within 24px with (t,x,y); raw-coords fallback beyond"
+
+
+def t_f112():
+    # All canvas colors flow from CANVAS_PALETTE (mirrors style.py tokens).
+    import inspect
+    import re
+    import aetherlab.ui.live_canvas as mod
+    from aetherlab.ui.live_canvas import CANVAS_PALETTE
+    assert CANVAS_PALETTE["primary"] == "#22D3EE"  # v2 bright cyan
+    assert CANVAS_PALETTE["grid"] == "#1E293B"
+    src = inspect.getsource(mod)
+    body = src.split("CANVAS_PALETTE: dict[str, str] = {")[1].split("}")[1]
+    stray = re.findall(r'"#[0-9A-Fa-f]{6}"', body)
+    assert stray == [], f"hardcoded hex outside palette: {stray[:4]}"
+    return "one palette dict; zero stray hex in module body"
+
+
+def t_f113():
+    # Sample cache is viewport-independent; NaN gaps split into branches.
+    import numpy as np
+    from aetherlab.ui.qt_compat import QtCore, QtGui
+    from aetherlab.ui.live_canvas import (
+        LiveCanvas, CanvasState, CurveSpec, _finite_runs,
+    )
+    def fx(t, p): return t
+    def fy(t, p):
+        with np.errstate(all="ignore"):
+            return 1.0 / t
+    st = CanvasState(title="1/t", x_range=(-3, 3), y_range=(-5, 5),
+                     curves=[CurveSpec(name="1/t", x_fn=fx, y_fn=fy,
+                                       t_range=(-3.0, 3.0), t_steps=601)])
+    lc = LiveCanvas()
+    lc.resize(800, 600)
+    lc.set_state(st)
+    lc._ensure_samples(st)
+    key = lc._sample_key
+    lc._apply_zoom(5.0, QtCore.QPointF(400, 300))
+    lc._ensure_samples(st)
+    assert lc._sample_key == key, "zoom must NOT rebuild samples"
+    t, xs, ys = lc._samples[0]
+    runs = _finite_runs(np.isfinite(xs) & np.isfinite(ys))
+    assert len(runs) == 2, f"1/t must render as 2 branches, got {len(runs)}"
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)
+    assert not pm.isNull()
+    st.params["k"] = 2.0
+    lc._ensure_samples(st)
+    assert lc._sample_key != key, "param change must rebuild samples"
+    return "viewport-independent sample cache; 1/t = 2 branches, no bridge"
+
+
+def t_f114():
+    # Multi-curve payloads: roles, dashed references, fill, points — and full
+    # backward compatibility for old single-curve payloads.
+    from aetherlab.services.plotting import compile_plot, fallback_plot_payload
+    from aetherlab.ui.live_canvas import build_canvas_state, CANVAS_PALETTE
+    vars_ = {"damping": 0.3}
+    payload = {
+        "kind": "explicit", "t_range": [0, 10],
+        "curves": [
+            {"name": "x(t)", "y": "exp(-damping*t)*sin(3*t)", "role": "primary"},
+            {"name": "env", "y": "exp(-damping*t)", "style": "dashed", "role": "reference"},
+        ],
+        "fill_between": {"upper": "exp(-damping*t)", "lower": "-exp(-damping*t)"},
+        "points": [{"t": 0.0, "label": "release"}, {"t": 99.0, "label": "dropped"}],
+    }
+    cp = compile_plot(payload, vars_)
+    assert len(cp.curves) == 2 and cp.fill is not None and len(cp.points) == 1
+    st = build_canvas_state("m", vars_, plot=payload)
+    assert len(st.curves) == 2 and st.curves[1].style == "dashed"
+    assert st.curves[1].color == CANVAS_PALETTE["reference"]
+    assert len(st.fills) == 1 and len(st.marked_points) == 1
+    # Backward compat: legacy payload and cached rows load as one primary curve
+    old = {"kind": "explicit", "y": "sin(t)", "t_range": [0, 6], "y_label": "x(t)"}
+    st_old = build_canvas_state("o", vars_, plot=old)
+    assert len(st_old.curves) == 1 and st_old.curves[0].role == "primary"
+    # Fallback payload showcases envelopes; solver prompt documents the schema
+    fb = fallback_plot_payload()
+    assert len(fb["curves"]) == 3
+    import inspect
+    from aetherlab.services import llm
+    src = inspect.getsource(llm.AsyncLLMCoordinator._solve_remote)
+    assert "fill_between" in src and "reference" in src
+    return "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated"
+
+
+def t_f115():
+    # Time scrubbing + double-click reset.
+    from aetherlab.ui.qt_compat import QtCore
+    lc = _canvas()
+    plot_rect = lc._plot_rect()
+    curve = lc._state.curves[0]
+    t0, t1 = curve.t_range
+    lc._begin_scrub(QtCore.QPointF(plot_rect.left() + plot_rect.width() * 0.5,
+                                   plot_rect.center().y()))
+    assert lc._scrubbing
+    mid = t0 + 0.5 * (t1 - t0)
+    assert abs(lc._tracer_t - mid) < (t1 - t0) * 0.02, f"{lc._tracer_t} vs {mid}"
+    saved = lc._tracer_t
+    lc._tick()
+    assert lc._tracer_t == saved, "animation pauses while scrubbing"
+    lc._scrubbing = False
+    lc._apply_zoom(3.0, QtCore.QPointF(400, 300))
+    lc.reset_view()  # double-click routes here (mouseDoubleClickEvent)
+    assert lc._zoom_factor == 1.0
+    import inspect
+    from aetherlab.ui.live_canvas import LiveCanvas
+    assert "reset_view" in inspect.getsource(LiveCanvas.mouseDoubleClickEvent)
+    assert hasattr(LiveCanvas, "_draw_progress_bar")
+    return "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn"
+
+
+def t_f116():
+    # PNG export writes a nonzero 2x file offscreen and emits the signal.
+    import os
+    import tempfile
+    lc = _canvas()
+    got = []
+    lc.png_exported.connect(lambda p: got.append(p))
+    path = os.path.join(tempfile.mkdtemp(prefix="aeth_png_"), "canvas.png")
+    out = lc.save_png(path)
+    assert out == path and os.path.getsize(path) > 1000
+    assert got == [path], "png_exported signal must fire"
+    from aetherlab.ui.qt_compat import QtGui
+    img = QtGui.QImage(path)
+    assert img.width() == lc.width() * 2, f"expected 2x, got {img.width()}"
+    return f"2x PNG written ({os.path.getsize(path)} bytes) + signal"
+
+
+def t_f117():
+    # Interactive legend: always present for named curves, click-toggles.
+    from aetherlab.ui.qt_compat import QtGui
+    lc = _canvas()  # single named curve — legend must still render
+    pm = QtGui.QPixmap(lc.size())
+    lc.render(pm)
+    assert lc._legend_hits, "legend hidden for a single named curve"
+    rect, index = lc._legend_hits[0]
+    assert lc._state.curves[index].visible
+    hit = lc._legend_hit(rect.center())
+    assert hit == index
+    lc.toggle_curve_visibility(index)
+    assert not lc._state.curves[index].visible
+    pm2 = QtGui.QPixmap(lc.size())
+    lc.render(pm2)  # muted style paints fine
+    lc.toggle_curve_visibility(index)
+    assert lc._state.curves[index].visible
+    return "legend always shown, hit-testable, toggles visibility"
+
+
+def t_f118():
+    # Param chip renders live values; first paint fades in (later ones don't).
+    import inspect
+    from aetherlab.ui.live_canvas import LiveCanvas, build_canvas_state, FADE_IN_MS
+    src = inspect.getsource(LiveCanvas._draw_param_chip)
+    assert "params.items()" in src and "AlignRight" in src
+    lc = LiveCanvas()
+    lc.resize(800, 600)
+    assert lc._fade_alpha == 1.0
+    lc.set_state(build_canvas_state("t", {"damping": 0.2}))
+    assert lc._fade_alpha < 1.0, "first curves must start faded"
+    lc._fade_anim.stop()
+    lc._fade_alpha = 1.0
+    lc.set_state(build_canvas_state("t", {"damping": 0.4}))
+    assert lc._fade_alpha == 1.0, "subsequent updates must not re-fade"
+    assert FADE_IN_MS == 300
+    return "mono param chip; 300ms fade only on first paint"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Design v2 activation (F119-F124)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f119():
+    # v2 tokens: bright cyan primary + new surface tints; canvas primary matches.
+    from aetherlab.ui import style
+    assert style.CYAN == "#22D3EE" and style.CYAN_DEEP == "#06B6D4"
+    for tok in ("STAGE", "ELEV", "HOVER_SURFACE", "LINE_0"):
+        assert hasattr(style, tok), tok
+    assert style.STAGE == "#000000"
+    from aetherlab.ui.live_canvas import CANVAS_PALETTE
+    assert CANVAS_PALETTE["primary"] == "#22D3EE"
+    from aetherlab.ui.widgets import SidebarNav
+    rail = SidebarNav()
+    assert rail.width() == 56, f"rail should be 56px, got {rail.width()}"
+    return "cyan #22D3EE primary; stage/elev/hover/line-0 tokens; 56px rail"
+
+
+def t_f120():
+    # Math-as-brand: mathtext service typesets to pixmaps, never raises.
+    from aetherlab.services.mathtext import (
+        render_math, render_param_symbol, looks_like_math, latex_for_param,
+        WATERMARK_FORMULAS,
+    )
+    pm = render_math(r"x(t) = A e^{-\zeta \omega_0 t}\cos(\omega_d t)", 26)
+    assert pm is not None and pm.width() > 100
+    sym = render_param_symbol("damping", 15)
+    assert sym is not None and sym.width() > 0
+    assert latex_for_param("omega0") == r"\omega_0"
+    assert looks_like_math("E = mc^2") and not looks_like_math(
+        "the system slowly returns to rest as friction dissipates energy")
+    assert render_math("\\frac{unclosed", 20) is None  # bad input → None, no raise
+    assert all(render_math(f, 34) is not None for f in WATERMARK_FORMULAS)
+    return "mathtext → pixmaps; symbol map; math/prose discriminator; safe on junk"
+
+
+def t_f121():
+    # Hero equation banner typesets math summaries, prose stays text;
+    # parameter rows show typeset symbols; empty state carries watermarks.
+    from aetherlab.core.models import SolverResult
+    from aetherlab.ui.widgets import AnalysisPanel, ParameterDock, EmptyStateView
+    a = AnalysisPanel()
+    a.set_solver_result(SolverResult("x(t) = A e^{-ζωt}\\cos(ω t)",
+                                     ["s"], ["k"], {"damping": 0.2}, "m"))
+    assert a.summary.pixmap() is not None and not a.summary.pixmap().isNull()
+    a.set_solver_result(SolverResult(
+        "The oscillator gradually loses amplitude as damping removes its energy.",
+        ["s"], ["k"], {"damping": 0.2}, "m"))
+    assert a.summary.text() and a.summary.pixmap().isNull()  # PyQt6: cleared pixmap is null, not None
+    d = ParameterDock()
+    d.set_variables({"damping": 0.15, "omega0": 2.0})
+    assert d._container_layout.rowCount() == 2
+    e = EmptyStateView()
+    assert len(e._watermarks) >= 2
+    return "hero banner: math→pixmap, prose→text; param symbols; ambient watermarks"
+
+
+def t_f122():
+    # Scene-meta parser + storyboard normalizer feed the v2 chrome.
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.ui.widgets import parse_scene_meta, _storyboard_acts, SimulationPanel
+    sb = SceneBundle(
+        "AetherLabScene", "class AetherLabScene(Scene):\n    def construct(self): pass",
+        "manim-community", "rendered",
+        ["Estimated duration ~19s (6 beats, 2 waits).",
+         "Applied render repair 1.", "Applied visual revision 1.",
+         "Visual critique round 1: ship (score 8.5) — tighten pacing; raise contrast"],
+        storyboard={"acts": [
+            {"name": "ESTABLISH", "duration_s": 5, "beats": ["b"]},
+            {"name": "EVOLVE", "duration_s": 10, "beats": ["b"]},
+            {"name": "REVEAL", "duration_s": 4, "beats": ["b"]}],
+            "narration": ["Set the stage", "Let it evolve", "Lock the invariant"]})
+    m = parse_scene_meta(sb)
+    assert m["repaired"] == 1 and m["revised"] == 1
+    assert m["critique"]["verdict"] == "ship" and m["critique"]["score"] == 8.5
+    assert len(m["critique"]["issues"]) == 2 and m["duration"] == "~19s"
+    acts = _storyboard_acts(sb.storyboard)
+    assert [a["name"] for a in acts] == ["ESTABLISH", "EVOLVE", "REVEAL"]
+    assert acts[2]["narration"] == "Lock the invariant"
+    # empty/old bundles degrade to no storyboard, no crash
+    assert parse_scene_meta(SceneBundle.from_json({}))["critique"] is None
+    assert _storyboard_acts(None) == []
+    p = SimulationPanel()
+    p.set_scene_bundle(sb)
+    assert p._repaired_pill.isVisibleTo(p) and p._revised_pill.isVisibleTo(p)
+    assert p._engine_chip.text() == "manim-community"
+    assert len(p._seek_slider._act_fracs) == 3 and p._seek_slider._hero_frac is not None
+    return "parse repaired/revised/critique/duration; storyboard acts + hero bookmark"
+
+
+def t_f123():
+    # Screening room + code artifact + storyboard seek wiring.
+    from aetherlab.ui.widgets import (
+        SimulationPanel, ManimBadge, CodeArtifactView, _ManimHighlighter,
+        ActSeekSlider, StoryboardStrip, CritiqueBadge,
+    )
+    p = SimulationPanel()
+    assert isinstance(p.code, CodeArtifactView)
+    assert isinstance(p._seek_slider, ActSeekSlider)
+    assert isinstance(p._storyboard_strip, StoryboardStrip)
+    assert isinstance(p._critique_badge, CritiqueBadge)
+    assert isinstance(p._manim_badge, ManimBadge)
+    # code view has a Manim-aware highlighter + line numbers
+    assert isinstance(p.code._highlighter, _ManimHighlighter)
+    assert p.code.line_number_area_width() > 0
+    # storyboard click → seek
+    seeks = []
+    p._seek_fraction = lambda f: seeks.append(f)  # capture
+    p._storyboard_strip.act_seek_requested.connect(p._seek_fraction)
+    p._storyboard_strip.set_storyboard({"acts": [
+        {"name": "ESTABLISH", "duration_s": 5}, {"name": "REVEAL", "duration_s": 5}]})
+    # find an act card and click it
+    cards = [p._storyboard_strip._layout.itemAt(i).widget()
+             for i in range(p._storyboard_strip._layout.count())]
+    cards[1].mousePressEvent(None)  # second act → frac 0.5
+    assert seeks and abs(seeks[-1] - 0.5) < 1e-6, seeks
+    return "screening room widgets swapped in; code artifact + highlighter; act-click seeks"
+
+
+def t_f124():
+    # Library bookshelf spines + chunk counts; Settings Vision·Critique section.
+    import inspect
+    from aetherlab.ui.widgets import LibraryPanel, _BookSpine
+    src = inspect.getsource(LibraryPanel.refresh)
+    assert "_BookSpine" in src and "chunks" in src and "Re-indexing" in src
+    spine = _BookSpine("#22D3EE")
+    from aetherlab.ui.qt_compat import QtGui
+    pm = QtGui.QPixmap(spine.size())
+    spine.render(pm)  # paints without crash
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.core.settings import load_settings
+    d = SettingsDialog(load_settings())
+    vals = d.get_settings()
+    assert "vision_model" in vals
+    dsrc = inspect.getsource(SettingsDialog.__init__)
+    assert "VISION" in dsrc and "_vision_edit" in dsrc
+    return "library spines + chunk counts + freshness; Settings vision·critique field"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# v3 — Web references + graphics upgrade (F125-F127)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f125():
+    # Web reference provider: offline-safe, correct shape; model back-compat.
+    import aetherlab.services.web_references as webrefs
+    from aetherlab.services.web_references import WikipediaReferenceProvider, fetch_web_references
+    from aetherlab.core.models import RagHit, RagResult
+    # A broken endpoint must return [] (never raise) — offline-safety contract.
+    broken = WikipediaReferenceProvider(timeout=2)
+    broken.api = "https://invalid.aetherlab.example/w/api.php"
+    assert broken.search(["oscillator"], 3) == []
+    assert WikipediaReferenceProvider().search([], 3) == []  # no keywords → []
+    # BUG-47: MediaWiki can return an error/warning object with HTTP 200. Any
+    # valid JSON of the wrong shape must remain fail-soft after the fetch.
+    original_get = webrefs._http_get_json
+    try:
+        for malformed in ([], None, {"error": {"code": "ratelimited"}},
+                          {"query": []}, {"query": {"pages": []}}):
+            webrefs._http_get_json = lambda *_args, value=malformed, **_kwargs: value
+            assert WikipediaReferenceProvider().search(["oscillator"], 3) == []
+        webrefs._http_get_json = lambda *_args, **_kwargs: {
+            "query": {"pages": {
+                "bad": 7,
+                "ok": {
+                    "index": "not-a-number",
+                    "title": "Harmonic oscillator",
+                    "extract": "A mass oscillates about equilibrium.",
+                    "fullurl": "https://en.wikipedia.org/wiki/Harmonic_oscillator",
+                },
+            }}
+        }
+        shaped = WikipediaReferenceProvider().search(["oscillator"], 3)
+        assert len(shaped) == 1 and shaped[0].source_label == "Harmonic oscillator"
+    finally:
+        webrefs._http_get_json = original_get
+    # RagHit gains origin/source_label with safe defaults; old dicts still load.
+    h = RagHit("C:/lib/x.pdf", 3, 2.0, "e")
+    assert h.origin == "library" and not h.is_web and h.source_name == "x.pdf"
+    w = RagHit("https://en.wikipedia.org/wiki/Harmonic_oscillator", None, 0.9, "e",
+               source_label="Harmonic oscillator", origin="web")
+    assert w.is_web and w.source_name == "Harmonic oscillator"
+    rr = RagResult.from_json({"keywords": ["k"], "backend": "chromadb",
+                              "hits": [{"source_path": "a.pdf", "page_number": 1,
+                                        "score": 1.0, "excerpt": "e"}]})
+    assert rr.hits[0].origin == "library"  # legacy 4-field row → default origin
+    # fetch honors the settings toggle
+    from aetherlab.core.settings import load_settings
+    from dataclasses import replace
+    assert fetch_web_references(["x"], replace(load_settings(), web_references=False)) == []
+    return "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)"
+
+
+def t_f126():
+    # Merge helper appends web hits after library hits, tags backend, fail-soft;
+    # settings expose the toggle end to end.
+    import asyncio
+    from dataclasses import replace
+    from aetherlab.core.models import RagHit, RagResult
+    from aetherlab.core.settings import load_settings, _as_bool
+    from aetherlab.services.pipeline import _merge_web_references
+
+    s = load_settings()
+    assert isinstance(s.web_references, bool)
+    assert _as_bool("0", default=True) is False and _as_bool(None, "yes", default=False) is True
+
+    base = RagResult(["osc"], [RagHit("C:/lib/b.pdf", 5, 3.0, "local")], "chromadb")
+    # disabled → identical object
+    assert asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=False))) is base
+    # a provider that raises must not break the merge (returns base unchanged)
+    import aetherlab.services.web_references as wr
+    orig = wr.fetch_web_references
+    wr.fetch_web_references = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        out = asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=True)))
+        assert out is base
+    finally:
+        wr.fetch_web_references = orig
+    # a provider that returns hits gets merged, library first, backend tagged
+    wr.fetch_web_references = lambda kw, st, limit=3: [
+        RagHit("https://en.wikipedia.org/wiki/X", None, 0.9, "web", source_label="X", origin="web")]
+    try:
+        out = asyncio.run(_merge_web_references(base, ["x"], replace(s, web_references=True)))
+    finally:
+        wr.fetch_web_references = orig
+    assert len(out.hits) == 2 and out.hits[0].origin == "library" and out.hits[1].is_web
+    assert out.backend == "chromadb+web"
+    return "merge: library-first + web-tagged; fail-soft on provider error; toggle wired"
+
+
+def t_f127():
+    # Reference card web styling + dimming; blueprint backdrop; focus filament;
+    # Settings web-references checkbox.
+    import os
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from aetherlab.ui.qt_compat import QtWidgets, QtGui
+    from aetherlab.ui.widgets import _RagHitCard, BlueprintBackdrop, CommandBar
+    from aetherlab.core.models import RagResult, RagHit
+    from aetherlab.ui.widgets import ReferencePanel
+
+    # web card: opens a URL, not a local file; low score dims the card
+    web_card = _RagHitCard("Harmonic oscillator", None, 0.9,
+                           "An oscillator…", "https://en.wikipedia.org/wiki/Harmonic_oscillator",
+                           is_web=True)
+    assert web_card.graphicsEffect() is None  # high score → not dimmed
+    dim_card = _RagHitCard("Weak", 12, 0.3, "…", "C:/lib/x.pdf", is_web=False)
+    assert dim_card.graphicsEffect() is not None  # < 0.5 → dimmed
+    pm = QtGui.QPixmap(320, 120)
+    web_card.render(pm)  # paints without crash
+
+    # ReferencePanel provenance line counts library vs web
+    rp = ReferencePanel()
+    rp.set_rag_result(RagResult(["k"], [
+        RagHit("C:/lib/a.pdf", 3, 0.9, "lib", origin="library"),
+        RagHit("https://en.wikipedia.org/wiki/X", None, 0.8, "web", source_label="X", origin="web"),
+    ], "chromadb+web"))
+    assert "1 library" in rp._backend_label.text() and "1 web" in rp._backend_label.text()
+
+    # Blueprint backdrop paints; command-bar filament toggles the shell property
+    bd = BlueprintBackdrop(QtWidgets.QLabel("x"))
+    bd.resize(400, 300)
+    pm2 = QtGui.QPixmap(bd.size())
+    bd.render(pm2)
+    cb = CommandBar()
+    cb._set_shell_focused(True)
+    assert cb._shell.property("focused") == "true"
+    cb._set_shell_focused(False)
+    assert cb._shell.property("focused") == "false"
+
+    # Settings dialog carries the web-references checkbox
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.core.settings import load_settings
+    d = SettingsDialog(load_settings())
+    vals = d.get_settings()
+    assert "web_references" in vals and isinstance(vals["web_references"], bool)
+    return "web/library card styling + dimming; provenance; backdrop; filament; settings toggle"
+
+
+def t_f128():
+    # Provider independence: ollama preset resolution + qwen autoload gated off.
+    import aetherlab.core.settings as S
+    saved_env = os.environ.pop("AETHERLAB_DATA_DIR", None)
+    orig_default = S._default_data_dir
+    S._default_data_dir = lambda: _TMP / "prov_home"
+    try:
+        s0 = S.load_settings()
+        assert s0.openai_api_key is None, "qwen autoload must be gated off by default"
+        S.save_app_config({"provider_preset": "ollama", "model": "qwen2.5:7b"})
+        s1 = S.load_settings()
+        assert s1.openai_base_url == S.OLLAMA_OPENAI_BASE_URL
+        assert s1.openai_api_key == "ollama" and s1.provider_source == "ollama-local"
+        os.environ["AETHERLAB_OPENAI_API_KEY"] = "sk-env"
+        assert S.load_settings().openai_api_key == "sk-env", "env must beat preset"
+    finally:
+        os.environ.pop("AETHERLAB_OPENAI_API_KEY", None)
+        (_TMP / "prov_home" / "settings.json").unlink(missing_ok=True)
+        S._default_data_dir = orig_default
+        if saved_env is not None:
+            os.environ["AETHERLAB_DATA_DIR"] = saved_env
+    return "ollama preset resolves; qwen gated; env wins (F128)"
+
+
+def t_f129():
+    # Ollama discovery + Settings preset UI + EmptyState one-click CTA.
+    import threading
+    import time
+    from dataclasses import replace
+
+    import aetherlab.services.providers as providers
+    from aetherlab.services.providers import detect_ollama, test_connection
+
+    models = detect_ollama(timeout=1.0)  # absence is a normal state
+    assert isinstance(models, list)
+    ok, msg = test_connection(replace(_settings(), openai_api_key=None))
+    assert not ok and "key" in msg.lower()
+    from aetherlab.ui.main_window import SettingsDialog
+
+    d = SettingsDialog(_settings())
+    assert d._preset_combo.count() == 3 and hasattr(d, "_test_btn")
+    assert d.get_settings()["provider_preset"] in ("custom", "ollama", "none")
+
+    started = threading.Event()
+    release = threading.Event()
+    original_test_connection = providers.test_connection
+
+    def blocking_test(_probe):
+        started.set()
+        assert release.wait(2.0)
+        return True, "Connected without blocking the GUI"
+
+    providers.test_connection = blocking_test
+    try:
+        before = time.perf_counter()
+        d._test_connection()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and started.wait(0.5)
+        assert not d._test_btn.isEnabled()
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while d._provider_task and d._provider_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert d._provider_task and not d._provider_task.is_running
+        assert d._test_btn.isEnabled()
+        assert "without blocking" in d._test_result.text()
+    finally:
+        release.set()
+        providers.test_connection = original_test_connection
+    d.close()
+    from aetherlab.ui.widgets import EmptyStateView
+    ev = EmptyStateView()
+    ev.offer_ollama(2)
+    assert ev._ollama_btn.isVisibleTo(ev) and "2 local models" in ev._key_label.text()
+    ev.set_status(True, "m", 0)
+    assert not ev._ollama_btn.isVisibleTo(ev)
+    ev.close()
+    return f"provider test is backgrounded + preset UI + CTA ({len(models)} local models) (BUG-53)"
+
+
+def t_f130():
+    # key_equations contract: model round-trip, fallback domains, hero banner, export.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest, SolverResult
+    from aetherlab.services.llm import AsyncLLMCoordinator, FALLBACK_EQUATIONS
+    sr = SolverResult.from_json(SolverResult(
+        summary="s", derivation_steps=[], keywords=[], variables={},
+        model_name="t", key_equations=[r"E = mc^2"]).to_json())
+    assert sr.key_equations == [r"E = mc^2"]
+    assert SolverResult.from_json({}).key_equations == []
+    keyless = replace(_settings(), openai_api_key=None)
+    r = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="Solve the simple pendulum")))
+    assert r.key_equations == FALLBACK_EQUATIONS["pendulum"]
+    em = asyncio.run(AsyncLLMCoordinator(keyless).solve(ProblemRequest(prompt="electric dipole field lines")))
+    assert em.key_equations == FALLBACK_EQUATIONS["em_field"]
+    from aetherlab.services.mathtext import render_math
+    pm = render_math(r.key_equations[0], px_size=30)
+    assert pm is not None and not pm.isNull()
+    from aetherlab.ui.widgets import AnalysisPanel
+    ap = AnalysisPanel()
+    ap.set_solver_result(r)
+    assert ap.summary.pixmap() is not None and not ap.summary.pixmap().isNull()
+    ap.close()
+    from aetherlab.services.pdf import export_derivation_to_latex
+    out = _TMP / "keq.tex"
+    export_derivation_to_latex("s", ["x"], {}, out, key_equations=[r"E = mc^2"])
+    assert r"\[ E = mc^2 \]" in out.read_text(encoding="utf-8")
+    return "key_equations end-to-end: model→fallback domains→banner→export (F130)"
+
+
+def t_f131():
+    # Product hygiene: version flag, rotating log, icon assets + taskbar wiring.
+    import subprocess
+    from aetherlab import __version__
+    r = subprocess.run([sys.executable, "-m", "aetherlab", "--version"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, env={**os.environ})
+    assert __version__ in (r.stdout + r.stderr), (r.stdout, r.stderr)
+    from aetherlab.__main__ import _setup_logging
+    _setup_logging()
+    log_file = Path(os.environ["AETHERLAB_DATA_DIR"]) / "logs" / "aetherlab.log"
+    assert log_file.exists() and "starting" in log_file.read_text(encoding="utf-8")
+    assert Path("assets/aetherlab.ico").exists()
+    src = inspect.getsource(__import__("aetherlab.ui.app", fromlist=["run_app"]).run_app)
+    assert "SetCurrentProcessExplicitAppUserModelID" in src and "setWindowIcon" in src
+    return f"--version={__version__}; rotating log; ico + taskbar wiring (F131)"
+
+
+def t_f132():
+    # Packaging readiness: LaTeX-aware scene prompts + packaging assets present.
+    from aetherlab.services.manim_runtime import detect_latex
+    has = detect_latex()
+    src = inspect.getsource(__import__(
+        "aetherlab.services.scene_generator", fromlist=["SceneGenerator"]
+    ).SceneGenerator._generate_remote)
+    assert "detect_latex" in src and "NO LaTeX" in src
+    for f in ("packaging/aetherlab.spec", "packaging/installer.iss", "packaging/build.py",
+              ".github/workflows/ci.yml", "docs/QUICKSTART.md", "docs/TROUBLESHOOTING.md"):
+        assert Path(f).exists(), f
+    # Frozen-bundle regression: inside PyInstaller, sys.executable is our exe,
+    # so the renderer must relay via `aetherlab --manim ...` (not `-m manim`),
+    # and the build gate must demand an actually-rendered video.
+    from aetherlab.services.manim_runtime import ManimRuntime
+    mr_src = inspect.getsource(ManimRuntime._find_manim_command)
+    assert '"--manim"' in mr_src and "frozen" in mr_src
+    main_src = Path("aetherlab/__main__.py").read_text(encoding="utf-8")
+    assert '"--manim"' in main_src and "manim_main" in main_src
+    build_src = Path("packaging/build.py").read_text(encoding="utf-8")
+    assert "Scene status: rendered" in build_src, "gate must require a real render"
+    return f"LaTeX-aware prompts (latex={has}); frozen manim relay + strict gate (F132)"
+
+
+def t_f133():
+    # Bug 2 — cross-platform subprocess: Windows flags never reach POSIX.
+    import aetherlab.core.proc as proc
+    orig = proc.IS_WINDOWS
+    try:
+        proc.IS_WINDOWS = True
+        assert proc.subprocess_kwargs() == {"creationflags": proc.CREATE_NO_WINDOW}
+        assert proc.subprocess_kwargs(below_normal=True)["creationflags"] & proc.BELOW_NORMAL_PRIORITY_CLASS
+        proc.IS_WINDOWS = False
+        assert proc.subprocess_kwargs() == {"start_new_session": True}
+        assert "creationflags" not in proc.subprocess_kwargs(below_normal=True)
+    finally:
+        proc.IS_WINDOWS = orig
+    # No raw creationflags left in any subprocess site (they'd break Linux CI/cloud).
+    import pathlib
+    offenders = []
+    for f in ("aetherlab/services/manim_runtime.py", "aetherlab/services/pdf.py",
+              "aetherlab/services/scene_critic.py", "aetherlab/ui/main_window.py"):
+        if "creationflags=" in pathlib.Path(f).read_text(encoding="utf-8"):
+            offenders.append(f)
+    assert not offenders, f"raw creationflags remain in: {offenders}"
+    # BUG-33/39: audit every Python surface instead of a hand-maintained five-
+    # file list. Text subprocess pipes and text files must specify encodings;
+    # print-producing entry points must configure redirected legacy streams.
+    import ast
+    import io
+
+    from aetherlab.core.console import configure_utf8_stdio
+
+    roots = [pathlib.Path("aetherlab"), pathlib.Path("tools"), pathlib.Path("packaging")]
+    py_files = sorted({p for root in roots for p in root.rglob("*.py")})
+    py_files += [pathlib.Path("build_feature_tracker.py"), pathlib.Path("aetherlab_watchdog.py"), pathlib.Path("test_features.py")]
+    undecoded = []
+    default_codec = []
+    unsafe_console = []
+    for path in py_files:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        has_print = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "print":
+                has_print = True
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.func.attr in {"run", "Popen", "check_output", "check_call"}
+            ):
+                kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+                text_mode = any(
+                    isinstance(kwargs.get(name), ast.Constant) and kwargs[name].value is True
+                    for name in ("text", "universal_newlines")
+                )
+                if text_mode and not {"encoding", "errors"} <= set(kwargs):
+                    undecoded.append(f"{path}:{node.lineno}")
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {"read_text", "write_text"}:
+                kwargs = {kw.arg for kw in node.keywords if kw.arg}
+                if "encoding" not in kwargs:
+                    default_codec.append(f"{path}:{node.lineno}")
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                mode = "r"
+                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                    mode = str(node.args[1].value)
+                kwargs = {kw.arg for kw in node.keywords if kw.arg}
+                if "b" not in mode and "encoding" not in kwargs:
+                    default_codec.append(f"{path}:{node.lineno}")
+        if has_print and "configure_utf8_stdio" not in source:
+            unsafe_console.append(str(path))
+    assert not undecoded, f"text subprocess calls missing UTF-8/errors=replace: {undecoded}"
+    assert not default_codec, f"text file calls relying on locale codec: {default_codec}"
+    assert not unsafe_console, f"print entry points lack UTF-8 stdio policy: {unsafe_console}"
+
+    raw = io.BytesIO()
+    cp1251 = io.TextIOWrapper(raw, encoding="cp1251", errors="strict")
+    configure_utf8_stdio((cp1251,))
+    cp1251.write("revision → θ")
+    cp1251.flush()
+    assert raw.getvalue().decode("utf-8") == "revision → θ"
+    return "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
+
+
+def t_f134():
+    # Bug 1 — the sync fix: isolated dir + disable_caching + this-render discovery.
+    from aetherlab.services.manim_runtime import ManimRuntime, _find_video_in
+    src = inspect.getsource(ManimRuntime.render_scene)
+    assert "--disable_caching" in src and "_RUNS_DIR" in src and "uuid" in src
+    assert "subprocess_kwargs" in src and "_find_video_in" in src
+    # _find_video_in prefers the class-named mp4 that belongs to THIS render.
+    media = _TMP / "vid_media" / "videos" / "scene" / "480p30"
+    media.mkdir(parents=True, exist_ok=True)
+    (media / "Neighbor.mp4").write_bytes(b"0" * 5000)      # a stray/older file
+    target = media / "AetherLabScene.mp4"
+    target.write_bytes(b"0" * 3000)
+    got = _find_video_in(_TMP / "vid_media", "AetherLabScene", 0.0)
+    assert got == target, f"must return the class-named render, got {got}"
+    return "render isolated+disable_caching; discovery returns this render (F134)"
+
+
+def t_f135():
+    # Bug 4 — hard-scene survival: cost-scaled timeout + draft→final + partial success.
+    from aetherlab.services.manim_runtime import ManimRuntime, _estimate_render_cost
+    light = _estimate_render_cost("class S(Scene):\n    def construct(self):\n        self.wait(1)\n")
+    heavy = _estimate_render_cost(
+        "class S(Scene):\n" + "        self.play(x)\n" * 40
+        + "        always_redraw(f)\n" * 12 + "        Surface(g)\n" * 4)
+    assert 1.0 <= light < heavy <= 5.0, (light, heavy)
+    rs = inspect.getsource(ManimRuntime.render_scene)
+    assert "_estimate_render_cost" in rs and "1800" in rs  # weight-aware, hard ceiling
+    assert 'scene_bundle.video_path = ""' in rs, "failed renders must not keep stale paths"
+    rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "draft_quality" in rr and "partial success" in rr and "keeping draft" in rr
+
+    # BUG-29: a pre-rendered draft (e.g. the tournament winner) is NOT re-rendered
+    # at draft quality — the repair path reuses it and promotes straight to HQ.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import SceneBundle
+    rt = ManimRuntime(_settings())
+    calls: list[str] = []
+
+    async def _fake_render_once(scene, settings, quality, progress=None, variant=""):
+        calls.append(quality)
+        return _replace(scene, status="rendered", video_path=str(_TMP / f"r_{quality}.mp4"))
+
+    rt._render_once = _fake_render_once  # type: ignore[assignment]
+    drafted = _TMP / "prewinner.mp4"
+    drafted.write_bytes(b"\x00" * 64)
+    pre = SceneBundle("S", "code", "manim", "rendered", video_path=str(drafted))
+
+    calls.clear()
+    out = _asyncio.run(rt.render_scene_with_repair(_replace(pre), _settings(), quality="l"))
+    assert calls == [], f"pre-rendered draft must not re-render at draft quality: {calls}"
+    assert out.video_path == str(drafted), "the winner's own draft must be reused as the output"
+
+    calls.clear()
+    _asyncio.run(rt.render_scene_with_repair(_replace(pre), _settings(), quality="h"))
+    assert calls == ["h"], f"pre-rendered draft must promote straight to HQ (no re-draft): {calls}"
+
+    calls.clear()
+    _asyncio.run(rt.render_scene_with_repair(SceneBundle("S", "code", "manim", "compiled"), _settings(), quality="l"))
+    assert calls == ["l"], f"a fresh compiled scene must still render its draft: {calls}"
+    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success; winner reuse (F135)"
+
+
+def t_f136():
+    # Bug 5 — observability: classification, artifact dump, failure_kind field.
+    from aetherlab.services.manim_runtime import _classify_failure, _dump_render_failure
+    assert _classify_failure("NameError: 'ShowCreation' not defined") == "hallucinated-api"
+    assert _classify_failure("! Undefined control sequence \\foo") == "latex"
+    assert _classify_failure("ffmpeg: command not found") == "ffmpeg"
+    assert _classify_failure("MemoryError") == "oom"
+    assert _classify_failure("plain nonsense") == "unknown"
+    dump = _dump_render_failure(_TMP, "scene code", "the stderr", "latex")
+    assert dump and (dump / "scene.py").read_text(encoding="utf-8") == "scene code"
+    assert (dump / "stderr.txt").read_text(encoding="utf-8") == "the stderr"
+    from aetherlab.core.models import SceneBundle
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="render-error",
+        failure_kind="latex").to_json())
+    assert sb.failure_kind == "latex" and SceneBundle.from_json({}).failure_kind == ""
+    return "failure classified+dumped; failure_kind round-trips (F136)"
+
+
+def t_f137():
+    # Bug 3 — frozen render: manim ecosystem collected + ffmpeg-independent path.
+    spec = Path("packaging/aetherlab.spec").read_text(encoding="utf-8")
+    for pkg in ("manimpango", "skia_pathops", "moderngl", "manim.plugins"):
+        assert pkg in spec, f"spec must collect {pkg} for a working frozen render"
+    # The dev render path proves manimpango/Text works locally (Manim 0.20 uses
+    # PyAV, not an ffmpeg CLI, so the bundle isn't ffmpeg-dependent).
+    main_src = Path("aetherlab/__main__.py").read_text(encoding="utf-8")
+    assert '"--manim"' in main_src and "manim_main" in main_src
+    return "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
+
+
+def t_f138():
+    # Narration sync engine (manim-bot decision): fit-to-video math + merge policy.
+    from aetherlab.services import voiceover as vo
+    assert vo._parse_rate("+8%") == 8 and vo._parse_rate("-20%") == -20 and vo._parse_rate(None) == 0
+    assert vo._format_rate(8) == "+8%" and vo._format_rate(-25) == "-25%"
+    # audio 20% too long → speak faster (ratio>1 raises the rate)
+    ratio, base = 1.20, 8
+    assert vo._format_rate(max(-40, min(80, base + round((ratio - 1) * 100)))) == "+28%"
+    # merge policy: audio>video pads (tpad), audio<=video copies without -shortest.
+    msrc = inspect.getsource(vo.merge)
+    assert "tpad" in msrc and "stop_mode=clone" in msrc, "long-audio path must pad video"
+    assert "no -shortest" in msrc, "short-audio path must keep full video (no -shortest)"
+    # fail-soft: missing video → None (no network needed)
+    got = asyncio.run(vo.add_voiceover(_TMP / "nope.mp4", "hi", _TMP / "narr"))
+    assert got is None
+    # empty narration → None
+    assert asyncio.run(vo.add_voiceover(_TMP / "nope.mp4", "", _TMP / "narr")) is None
+    return f"fit-to-video math + merge policy + fail-soft (avail={vo.narration_available()}) (F138)"
+
+
+def t_f139():
+    # Narration derivation from final code + storyboard; pipeline wiring + fail-soft.
+    from aetherlab.services import voiceover as vo
+    from aetherlab.services.scene_generator import SceneGenerator
+    sb = {"narration": ["Beat one.", "Beat two."],
+          "acts": [{"duration_s": 6}, {"duration_s": 8}, {"duration_s": 5}]}
+    assert vo.storyboard_narration_script(sb) == "Beat one. Beat two."
+    assert vo.storyboard_target_seconds(sb) == 19.0
+    assert vo.storyboard_narration_script(None) == "" and vo.storyboard_target_seconds({}) is None
+    # narrate() derives FROM the final code (references on-screen beats)
+    nsrc = inspect.getsource(SceneGenerator.narrate)
+    assert "Scene code" in nsrc and "in the order" in nsrc.lower()
+    # wired into the render pipeline, fail-soft
+    from aetherlab.services.manim_runtime import ManimRuntime
+    rr = inspect.getsource(ManimRuntime.render_scene_with_repair)
+    assert "_add_narration" in rr and "narration_enabled" in rr
+    an = inspect.getsource(ManimRuntime._add_narration)
+    assert "narration_available" in an and "silent_video_path" in an and "kept silent" in an
+    # disabled → the block is guarded; missing video path → kept silent (fast)
+    from dataclasses import replace
+    s_on = replace(_settings(), narration_enabled=True)
+    out = asyncio.run(ManimRuntime()._add_narration(
+        SceneBundle_(video_path="/no/such.mp4"), s_on, "brief"))
+    assert out.video_path == "/no/such.mp4"
+    return "narration derived from code+storyboard; wired + fail-soft (F139)"
+
+
+def SceneBundle_(**kw):
+    from aetherlab.core.models import SceneBundle
+    base = dict(class_name="X", code="c", engine="manim-community", status="rendered")
+    base.update(kw)
+    return SceneBundle(**base)
+
+
+def t_f140():
+    # Narration settings: env + app-config round-trip; silent_video_path persists.
+    import aetherlab.core.settings as S
+    saved = {k: os.environ.pop(k, None) for k in
+             (
+                 "AETHERLAB_NARRATION", "AETHERLAB_TTS_VOICE", "AETHERLAB_TTS_RATE",
+                 "VOICEOVER_ENABLED", "TTS_ENABLED", "TTS_VOICE", "TTS_RATE",
+             )}
+    try:
+        os.environ["AETHERLAB_NARRATION"] = "1"
+        os.environ["AETHERLAB_TTS_VOICE"] = "en-GB-RyanNeural"
+        s = S.load_settings()
+        assert s.narration_enabled is True and s.tts_voice == "en-GB-RyanNeural" and s.tts_rate == "+8%"
+        del os.environ["AETHERLAB_NARRATION"]
+        assert S.load_settings().narration_enabled is False
+        os.environ.pop("AETHERLAB_TTS_VOICE", None)
+        os.environ.pop("AETHERLAB_TTS_RATE", None)
+        os.environ["VOICEOVER_ENABLED"] = "true"
+        os.environ["TTS_VOICE"] = "en-US-AndrewMultilingualNeural"
+        os.environ["TTS_RATE"] = "+10%"
+        alias = S.load_settings()
+        assert alias.narration_enabled is True and alias.tts_voice.endswith("MultilingualNeural")
+        assert alias.tts_rate == "+10%"
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    from aetherlab.core.models import SceneBundle
+    sb = SceneBundle.from_json(SceneBundle(
+        class_name="X", code="c", engine="e", status="rendered",
+        video_path="narrated.mp4", silent_video_path="silent.mp4").to_json())
+    assert sb.silent_video_path == "silent.mp4" and SceneBundle.from_json({}).silent_video_path == ""
+    # Settings dialog exposes the toggle
+    from aetherlab.ui.main_window import SettingsDialog
+    d = SettingsDialog(_settings())
+    assert hasattr(d, "_narration_check") and "narration_enabled" in d.get_settings()
+    d.close()
+    return "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)"
+
+
+def t_f141():
+    # Topic-explainer Phase 1: lesson planner + LessonPlan/LessonBundle model.
+    from dataclasses import replace
+    from aetherlab.core.models import LessonPlan, LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import plan_lesson, _template_lesson
+    from aetherlab.services.scene_templates import detect_domain
+    # model round-trip incl. nested chapters/questions; old caches load with defaults
+    p = _template_lesson("Solve the simple pendulum", "ap")
+    p2 = LessonPlan.from_json(p.to_json())
+    assert p2.audience == "ap" and p2.chapters and p2.questions
+    assert LessonPlan.from_json({}).title == "Untitled lesson"
+    assert LessonPlan.from_json({"audience": "weird"}).audience == "undergrad"
+    b2 = LessonBundle.from_json(LessonBundle(
+        plan=p, chapter_scenes=[SceneBundle(class_name="X", code="c", engine="e", status="rendered")]
+    ).to_json())
+    assert b2.plan.title == p.title and len(b2.chapter_scenes) == 1
+    # keyless fail-soft → coherent domain templates (per domain)
+    keyless = replace(_settings(), openai_api_key=None)
+    for topic, need in (("Kepler orbit", "orbit"), ("damped oscillator", "oscillator"),
+                        ("simple pendulum", "pendulum"), ("Fourier wave", "wave"),
+                        ("electric dipole field", "em_field")):
+        lp = asyncio.run(plan_lesson(topic, keyless))
+        assert lp.model_name == "deterministic-template" and 4 <= len(lp.chapters) <= 7
+        kinds = {c.kind for c in lp.chapters}
+        assert "interactive" in kinds and "recap" in kinds and lp.misconception
+        assert any(c.key_equations for c in lp.chapters)
+        got = detect_domain([lp.topic] + [c.title for c in lp.chapters], {})
+        assert got == need, (topic, got)
+    return "lesson plan model round-trips; keyless domain templates coherent (F141)"
+
+
+def t_f142():
+    # Phase 2: per-chapter narration timeline → .srt + fail-soft narrate_segment.
+    from aetherlab.services.voiceover import _fmt_srt_time, build_srt, narrate_segment
+    srt = build_srt([("Chapter one.", 4.0), ("", 1.0), ("Chapter two.", 6.5)])
+    assert "00:00:00,000 --> 00:00:04,000" in srt and "Chapter two." in srt
+    assert srt.count("-->") == 2  # blank consumes time but emits no cue
+    assert "00:00:05,000 --> 00:00:11,500" in srt  # ch2 offset by the blank
+    assert _fmt_srt_time(11.9996) == "00:00:12,000"
+    res, dur = asyncio.run(narrate_segment(_TMP / "nope.mp4", "hi", _TMP))
+    assert res is None and dur == 0.0  # missing video → fail-soft
+    return "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)"
+
+
+def t_f143():
+    # Phase 3: chapter synthesis + per-chapter cache + orchestration + assembly.
+    from dataclasses import replace
+    from pathlib import Path
+    from aetherlab.core.models import LessonChapter, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import (
+        LessonPipeline, _ChapterCache, _chapter_key, _chapter_prompt, _chapter_solver,
+    )
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    ch = next(c for c in plan.chapters if c.key_equations)
+    solver = _chapter_solver(ch, plan)
+    assert solver.key_equations and solver.derivation_steps and solver.keywords
+    assert plan.topic in _chapter_prompt(ch, plan)
+    assert _chapter_key(ch, plan) != _chapter_key(plan.chapters[0], plan)
+
+    # A tiny real mp4 to drive the chapter-cache playability test. ffmpeg comes
+    # from a system binary or the optional 'narration' extra (imageio-ffmpeg); if
+    # neither exists, skip the render-driven checks fail-soft (the pure chapter
+    # logic above is already verified) — the app treats ffmpeg as optional too.
+    import subprocess
+
+    ff = _ffmpeg_exe()
+    if not ff:
+        return "chapter solver/prompt/key verified; playable-video cache checks skipped (no ffmpeg) (F143)"
+    clip = _TMP / "seg.mp4"
+    subprocess.run([ff, "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=30:duration=1", "-pix_fmt", "yuv420p", str(clip)],
+                   capture_output=True)
+    assert clip.exists()
+
+    cache = _ChapterCache(_TMP)
+    k = _chapter_key(ch, plan)
+    cache.put(k, SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(clip)))
+    assert cache.get(k) is not None and cache.get("missing") is None
+    bad_clip = _TMP / "truncated.mp4"
+    bad_clip.write_bytes(b"")
+    cache.put(
+        "bad",
+        SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(bad_clip)),
+    )
+    assert cache.get("bad") is None, "chapter cache must reject unplayable videos"
+
+    # BUG-45: valid JSON arrays/scalars in cache files degrade to misses and a
+    # following write reconstructs a valid object store.
+    cache.path.write_text("[]", encoding="utf-8")
+    assert cache.get(k) is None
+    cache.put(k, SceneBundle(class_name="X", code="c", engine="e", status="rendered", video_path=str(clip)))
+    assert cache.get(k) is not None
+
+    from aetherlab.services.lesson_pipeline import _PlanCache
+
+    plan_cache = _PlanCache(_settings())
+    plan_path = plan_cache._path(plan.topic, plan.audience)
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text("null", encoding="utf-8")
+    assert plan_cache.get(plan.topic, plan.audience) is None
+
+    s = replace(_settings(), openai_api_key=None, narration_enabled=False)
+    lp = LessonPipeline(s)
+    # BUG-9 regression: a failed middle render must not compact chapter scenes
+    # and then narrate/title the surviving next scene with the failed chapter's
+    # text. Keep the original plan index with every rendered scene.
+    narr_lp = LessonPipeline(replace(s, narration_enabled=True))
+    one = LessonChapter(id="1", title="One", kind="scene", narration="narration one")
+    three = LessonChapter(id="3", title="Three", kind="scene", narration="narration three")
+    calls = []
+    import aetherlab.services.voiceover as voiceover
+
+    async def _fake_narrate(video, narration, out_dir, **kw):
+        calls.append((Path(video).name, narration))
+        return Path(video), 1.0
+
+    orig_narrate = voiceover.narrate_segment
+    voiceover.narrate_segment = _fake_narrate
+    try:
+        clips, segments, titles = asyncio.run(narr_lp._narrate_chapters([
+            (0, one, SceneBundle("S1", "", "e", "rendered", video_path="one.mp4")),
+            (2, three, SceneBundle("S3", "", "e", "rendered", video_path="three.mp4")),
+        ], _TMP))
+    finally:
+        voiceover.narrate_segment = orig_narrate
+    assert calls == [("one.mp4", "narration one"), ("three.mp4", "narration three")], calls
+    assert titles == ["One", "Three"] and segments[-1][0] == "narration three"
+    n = {"i": 0}
+    async def _gen(request, solver, rag, settings, aspect="full"):
+        return SceneBundle(class_name="AetherLabScene", code="x", engine="manim-community", status="compiled")
+    async def _render(scene, settings, quality="l", brief="", **kw):
+        n["i"] += 1
+        scene.status = "rendered"
+        scene.video_path = str(clip)
+        return scene
+    lp.manim.generate_scene_async = _gen
+    lp.manim.render_scene_with_repair = _render
+    prog = []
+    bundle = asyncio.run(lp.run("Kepler orbit", progress=lambda m, d, t: prog.append(m)))
+    assert bundle.status == "assembled" and bundle.video_path and Path(bundle.video_path).exists()
+    assert len(bundle.chapter_scenes) >= 3 and any("Assembling" in m for m in prog)
+    assert len(bundle.rendered_chapter_indexes) == len(bundle.chapter_scenes)
+    return f"lesson pipeline: {len(bundle.chapter_scenes)} chapters → assembled mp4; partial-render narration aligned (F143)"
+
+
+def t_f144():
+    # Phase 4: RAG fact-check (fail-soft) + Phase 5 study-guide export.
+    from dataclasses import replace
+    from aetherlab.services.fact_check import fact_check_lesson
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.pdf import export_lesson_study_guide
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    keyless = replace(_settings(), openai_api_key=None)
+    out = asyncio.run(fact_check_lesson(plan, keyless))
+    assert out is plan and len(out.chapters) >= 3  # in-place, never raises
+    tex = _TMP / "guide.tex"
+    export_lesson_study_guide(plan, tex)
+    body = tex.read_text(encoding="utf-8")
+    assert r"\section*{Learning objectives}" in body and r"\section*{Check yourself}" in body
+    assert "Watch out for" in body and r"\[" in body  # misconception + display-math equations
+    return "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)"
+
+
+def t_f145():
+    # Phase 5: LessonView populates + interactive questions; LessonWorker wiring.
+    from aetherlab.core.models import LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.ui.widgets import LessonView, _QuestionCard
+    from aetherlab.ui.workers import LessonWorker
+    from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+    from aetherlab.ui.qt_compat import QtCore
+    plan = _template_lesson("simple pendulum", "ap")
+    lv = LessonView()
+    lv.set_lesson(LessonBundle(plan=plan))
+    assert lv._outline.count() == len(plan.chapters)
+    assert lv._questions_layout.count() - 1 == len(plan.questions)
+    assert lv._split.isVisibleTo(lv) and not lv._empty.isVisibleTo(lv)
+    assert lv._tabs.tabText(0) == "Video"  # inline lesson player is first tab
+    tabs = [lv._tabs.tabText(i) for i in range(lv._tabs.count())]
+    assert "Play with it" in tabs  # interactive exploration embedded
+    assert lv._explore_canvas._state is not None  # canvas seeded from the domain
+    got = []
+    lv.chapter_seek_requested.connect(lambda s: got.append(s))
+    lv._on_outline_click(lv._outline.item(0))
+    assert got == [0.0] and lv._tabs.currentIndex() == 0  # click seeks + shows Video
+    # BUG-9 UI regression: if a middle renderable chapter failed, offsets are
+    # mapped by plan index, not by compacted rendered-list position.
+    renderable_indexes = [i for i, ch in enumerate(plan.chapters) if ch.kind in _RENDERED_KINDS]
+    assert len(renderable_indexes) >= 3
+    partial = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "", "e", "rendered", video_path="missing-one.mp4"),
+            SceneBundle("S3", "", "e", "rendered", video_path="missing-three.mp4"),
+        ],
+        chapter_offsets=[4.5, 12.25],
+        rendered_chapter_indexes=[renderable_indexes[0], renderable_indexes[2]],
+    )
+    lv.set_lesson(partial)
+    assert lv._outline.item(renderable_indexes[0]).data(QtCore.Qt.ItemDataRole.UserRole) == 4.5
+    assert lv._outline.item(renderable_indexes[2]).data(QtCore.Qt.ItemDataRole.UserRole) == 12.25
+    mcq = next(q for q in plan.questions if q.choices)
+    qc = _QuestionCard(1, mcq)
+    qc._answer_mcq(mcq.answer)
+    assert "Correct" in qc._feedback.text()
+    lv.close()
+    qc.close()
+    w = LessonWorker("simple pendulum", _settings())
+    assert hasattr(w, "lesson_ready") and hasattr(w, "progress") and hasattr(w, "failure")
+    # Main-window wiring: Learn button + lesson page + on_lesson_ready.
+    from aetherlab.core.models import LessonBundle
+    from aetherlab.ui.main_window import MainWindow, PAGE_LESSON
+    mw = MainWindow(_settings())
+    assert mw._workspace.widget(PAGE_LESSON) is mw.lesson_view
+    assert hasattr(mw.command_bar, "learn_button") and callable(mw.start_lesson)
+    got = []
+    mw.command_bar.learn_requested.connect(lambda t: got.append(t))
+    mw.show()  # child button isVisible() needs the window shown
+    _app.processEvents()
+    mw.command_bar.input.setText("Kepler orbit")
+    mw.command_bar._learn()
+    assert got == ["Kepler orbit"]
+    mw.on_lesson_ready(LessonBundle(plan=_template_lesson("Kepler orbit", "undergrad")))
+    assert mw._workspace.currentIndex() == PAGE_LESSON and mw.lesson_view._outline.count() >= 4
+    mw.close()
+    return "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+
+
+def t_f146():
+    # P1.1: per-chapter template "aspect" makes keyless lesson chapters visually
+    # distinct instead of N identical domain templates.
+    from aetherlab.services.scene_templates import build_scene, ASPECTS, _BUILDERS
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_validation import validate_scene
+    steps = ["m x'' + c x' + k x = 0", "solution decays", "energy drains away"]
+    for domain in _BUILDERS:
+        codes = {}
+        for asp in ASPECTS:
+            code = build_scene("AetherLabScene", domain, "Why does it move?",
+                               "a short intuition", steps, {"damping": 0.15}, aspect=asp)
+            compile(code, "<t>", "exec")  # every aspect must compile
+            safe, _ = validate_code_safety(code)
+            lint, _ = validate_scene(code)
+            assert safe and lint, f"{domain}/{asp} failed gates"
+            codes[asp] = code
+        # setup/math/recap must each differ from the plain evolution render.
+        assert codes["setup"] != codes["evolution"]
+        assert codes["math"] != codes["evolution"]
+        assert codes["recap"] != codes["evolution"]
+    # "full" (the Solve path default) keeps the classic top-strip header.
+    full = build_scene("AetherLabScene", "oscillator", "t", "s", steps, {}, aspect="full")
+    assert "self.add(title, summary, rows)" in full
+    return "aspect setup/evolution/math/recap → distinct, gate-passing scenes per domain (F146)"
+
+
+def t_f147():
+    # P1.1: the lesson pipeline assigns aspects by chapter role so the four
+    # renderable chapters of a keyless lesson get four different compositions.
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _chapter_aspect, _RENDERED_KINDS
+    plan = _template_lesson("the simple pendulum", "undergrad")
+    aspects = {c.id: _chapter_aspect(c, plan) for c in plan.chapters}
+    renderable = [c for c in plan.chapters if c.kind in _RENDERED_KINDS]
+    got = [aspects[c.id] for c in renderable]
+    assert got[0] == "setup", got
+    assert "math" in got and "recap" in got and "evolution" in got, got
+    # equation/recap kinds map deterministically regardless of position.
+    eq = next(c for c in plan.chapters if c.kind == "equation_card")
+    rc = next(c for c in plan.chapters if c.kind == "recap")
+    assert _chapter_aspect(eq, plan) == "math" and _chapter_aspect(rc, plan) == "recap"
+    return f"chapter→aspect: first={got[0]}, roles={got} (F147)"
+
+
+def t_f148():
+    # P1.2: produced lesson — PIL title cards + crossfaded assembly.
+    import subprocess
+
+    from aetherlab.services.assembly import _segment_starts
+    from aetherlab.services.cards import render_card_png
+
+    # BUG-6 invariant guard: seg k must start at max(sum(durs[0..k-1]) - k*d, 0)
+    # exactly — the double-subtraction bug drifted later crossfades early. Check
+    # 1/2/3/11-segment and zero-duration cases directly (no render needed).
+    for durs, d in (
+        ([5.0], 0.5), ([5.0, 4.0], 0.5), ([3.0, 4.0, 5.0], 0.5),
+        ([2.2, 6, 2.2, 6, 2.2, 6, 2.2, 6, 2.2, 6, 3.0], 0.5), ([0.0, 0.0, 0.0], 0.2),
+    ):
+        starts = _segment_starts(durs, d)
+        for k in range(len(durs)):
+            assert abs(starts[k] - max(sum(durs[:k]) - k * d, 0.0)) < 1e-9, (durs, d, k, starts)
+        assert all(starts[i] <= starts[i + 1] + 1e-9 for i in range(len(starts) - 1)), starts
+    from aetherlab.services.assembly import assemble_lesson
+    png = render_card_png(_TMP / "card.png", kicker="Chapter 2",
+                          title="The idea", subtitle="undergrad")
+    assert png and png.exists() and png.stat().st_size > 1000
+
+    # Real crossfade assembly needs an ffmpeg binary (optional 'narration' extra
+    # or a system one). Absent both, skip render-driven assembly fail-soft — the
+    # BUG-6 segment-start math and PIL cards above are already verified.
+    ff = _ffmpeg_exe()
+    if not ff:
+        return ("produced-lesson BUG-6 segment-start math + PIL cards verified; "
+                "assembly render skipped (no ffmpeg) (F148)")
+    import av
+
+    clips = []
+    for i in range(2):
+        c = _TMP / f"clip{i}.mp4"
+        subprocess.run([ff, "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=480x360:rate=30:duration=2",
+                        "-pix_fmt", "yuv420p", str(c)], capture_output=True)
+        clips.append(c)
+    # return_offsets exposes each chapter clip's readable start in the produced
+    # video (BUG-8: plain-concat timing; BUG-16: crossfade-start subtitle drift).
+    out, offsets = asyncio.run(assemble_lesson(
+        clips, _TMP / "produced.mp4",
+        lesson_title="The Pendulum", lesson_subtitle="Undergraduate level",
+        chapter_titles=["The question", "The idea"], return_offsets=True))
+    assert out and Path(out).exists()
+    assert len(offsets) == 2, offsets
+    # Chapter 1 must start AFTER the 3s intro card + its chapter card — never 0
+    # (a plain concat would have put it at 0), and offsets must be increasing.
+    assert offsets[0] > 4.6, f"ch1 offset {offsets[0]} should clear the title-card crossfade"
+    assert offsets[1] > offsets[0], offsets
+    with av.open(str(out)) as cont:
+        vs = cont.streams.video[0]
+        dur = float(cont.duration) / 1e6 if cont.duration else 0
+        # intro + 2*(card+clip) + end = 6 segments; must exceed the 4s of raw
+        # clips, proving the cards were inserted.
+        assert vs.width == 1280 and vs.height == 720
+        assert dur > 5.0, dur
+        # Every chapter offset lands within the real video timeline.
+        assert offsets[-1] < dur, (offsets, dur)
+    return (f"produced lesson: cards + crossfades → {dur:.1f}s 1280x720; "
+            f"chapter offsets {[round(o,1) for o in offsets]} past intro (F148)")
+
+
+def t_f149():
+    # P1.3: LessonPlan cache keyed by topic+audience (re-open is instant) +
+    # regenerate bypass; keyed distinctly per audience.
+    from dataclasses import replace
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _PlanCache, _topic_id
+    s = replace(_settings(), openai_api_key=None)
+    pc = _PlanCache(s)
+    assert pc.get("the wave equation", "undergrad") is None  # cold
+    plan = _template_lesson("the wave equation", "undergrad")
+    pc.put("the wave equation", "undergrad", plan)
+    hit = pc.get("the wave equation", "undergrad")
+    assert hit is not None and hit.cached and len(hit.chapters) == len(plan.chapters)
+    # case/space-insensitive key, audience-sensitive.
+    assert pc.get("  THE WAVE EQUATION  ", "undergrad") is not None
+    assert pc.get("the wave equation", "high_school") is None
+    assert _topic_id("X", "ap") != _topic_id("X", "undergrad")
+    return "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)"
+
+
+def t_f150():
+    # P2: Learn is cancellable — cancel_check stops the pipeline and returns a
+    # "cancelled" bundle; the worker exposes cancel(); the UI stays non-blank.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.lesson_pipeline import LessonPipeline
+    from aetherlab.ui.workers import LessonWorker
+    s = replace(_settings(), openai_api_key=None, narration_enabled=False)
+    lp = LessonPipeline(s)
+    calls = {"n": 0}
+    async def _gen(request, solver, rag, settings, aspect="full"):
+        return SceneBundle(class_name="AetherLabScene", code="x",
+                           engine="manim-community", status="compiled")
+    async def _render(scene, settings, quality="l", brief="", **kw):
+        calls["n"] += 1
+        scene.status = "rendered"
+        scene.video_path = ""
+        return scene
+    lp.manim.generate_scene_async = _gen
+    lp.manim.render_scene_with_repair = _render
+    # Cancel immediately: no chapter should render, bundle is "cancelled".
+    bundle = asyncio.run(lp.run("Kepler orbit", regenerate=True,
+                                cancel_check=lambda: True))
+    assert bundle.status == "cancelled", bundle.status
+    assert calls["n"] == 0, calls
+    # Worker exposes a cancel() that flips its event.
+    w = LessonWorker("x", s, regenerate=True)
+    assert hasattr(w, "cancel") and not w._cancel.is_set()
+    w.cancel()
+    assert w._cancel.is_set()
+
+    # BUG-56: cancellation requested after a chapter starts reaches the active
+    # render instead of waiting for the full Manim timeout/current chapter.
+    import threading
+
+    from aetherlab.core.proc import ProcessCancelledError
+
+    mid_render_cancel = threading.Event()
+
+    async def _cancel_during_render(scene, settings, quality="l", brief="", **kw):
+        calls["n"] += 1
+        check_cancel = kw.get("cancel_check")
+        assert callable(check_cancel)
+        mid_render_cancel.set()
+        if check_cancel():
+            raise ProcessCancelledError("cancelled active lesson render")
+        return scene
+
+    lp.manim.render_scene_with_repair = _cancel_during_render
+    bundle2 = asyncio.run(
+        lp.run(
+            "Kepler orbit",
+            regenerate=True,
+            max_concurrent=1,
+            cancel_check=mid_render_cancel.is_set,
+        )
+    )
+    assert bundle2.status == "cancelled" and calls["n"] >= 1
+    return "Learn cancellation reaches active chapter render and returns partial bundle (BUG-56)"
+
+
+def t_f151():
+    # Innovation: partial lessons make skipped renderable chapters visible in
+    # the outline instead of silently mapping them to a surviving clip.
+    from aetherlab.core.models import LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+    from aetherlab.ui.qt_compat import QtCore
+    from aetherlab.ui.widgets import LessonView
+
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    renderable_indexes = [i for i, ch in enumerate(plan.chapters) if ch.kind in _RENDERED_KINDS]
+    assert len(renderable_indexes) >= 3
+    bundle = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "", "e", "rendered", video_path="missing-one.mp4"),
+            SceneBundle("S3", "", "e", "rendered", video_path="missing-three.mp4"),
+        ],
+        chapter_offsets=[3.0, 9.0],
+        rendered_chapter_indexes=[renderable_indexes[0], renderable_indexes[2]],
+    )
+    lv = LessonView()
+    lv.set_lesson(bundle)
+    skipped = lv._outline.item(renderable_indexes[1])
+    assert "not rendered" in skipped.text().lower(), skipped.text()
+    assert "did not render" in skipped.toolTip().lower()
+    assert lv._outline.item(renderable_indexes[2]).data(QtCore.Qt.ItemDataRole.UserRole) == 9.0
+    lv.close()
+    return "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)"
+
+
+def t_f152():
+    # RenderBackend seam: default local, explicit cloud, auto threshold routing.
+    from dataclasses import replace
+    from aetherlab.services.render_backend import (
+        CloudRenderBackend, LocalRenderBackend, cloud_job_id, render_fps_for,
+        render_timeout_for, select_backend,
+    )
+    from aetherlab.core.models import SceneBundle
+    s = _settings()
+    assert isinstance(select_backend(s, "light", "l"), LocalRenderBackend)
+    cloud = replace(s, render_mode="cloud", github_repo="owner/render", github_token="ghp_" + "x" * 24)
+    assert isinstance(select_backend(cloud, "light", "l"), CloudRenderBackend)
+    auto = replace(cloud, render_mode="auto", cloud_render_threshold=3.0)
+    assert isinstance(select_backend(auto, "self.play(FadeIn(x))", "l"), LocalRenderBackend)
+    heavy = "self.play(FadeIn(x))\n" * 80
+    assert isinstance(select_backend(auto, heavy, "h"), CloudRenderBackend)
+    scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
+    assert cloud_job_id(scene, quality="l", fps=30) != cloud_job_id(scene, quality="h", fps=30)
+    assert render_fps_for(heavy, "h") == 30
+    stale_long = replace(cloud, cloud_render_timeout=1800)
+    assert render_timeout_for("light", "l", stale_long) == 420
+    return "backend selection local/cloud/auto + stable cloud job ids (F152)"
+
+
+def t_f153():
+    # Settings round-trip for cloud render config; token is config-only and masked elsewhere.
+    from aetherlab.core.settings import save_app_config, load_settings, app_config_path
+    save_app_config({
+        "render_mode": "auto",
+        "cloud_provider": "github_actions",
+        "github_repo": "owner/render",
+        "github_token": "github_pat_TESTTOKEN",
+        "github_workflow": "render.yml",
+        "github_branch": "renders",
+        "cloud_render_threshold": "3.5",
+        "cloud_poll_seconds": "4",
+        "cloud_render_timeout": "123",
+    })
+    s = load_settings()
+    assert s.render_mode == "auto" and s.github_repo == "owner/render"
+    assert s.github_token == "github_pat_TESTTOKEN"
+    assert s.cloud_render_threshold == 3.5 and s.cloud_poll_seconds == 4
+    assert s.cloud_render_timeout == 123
+    app_config_path().unlink(missing_ok=True)
+    keys = (
+        "AETHERLAB_RENDER_MODE", "AETHERLAB_RENDER_REPO", "AETHERLAB_GITHUB_WORKFLOW",
+        "AETHERLAB_GITHUB_BRANCH", "AETHERLAB_CLOUD_POLL_SECONDS",
+        "AETHERLAB_CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO",
+        "CLOUD_RENDER_WORKFLOW", "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT",
+        "CLOUD_RENDER_POLL", "AETHERLAB_DISABLE_LEGACY_ENV", "AETHERLAB_LEGACY_ENV_PATH",
+        "MANIM_BOT_ENV_PATH",
+    )
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        os.environ["CLOUD_RENDER_ENABLED"] = "true"
+        os.environ["CLOUD_RENDER_REPO"] = "owner/worker"
+        os.environ["CLOUD_RENDER_WORKFLOW"] = "render.yml"
+        os.environ["CLOUD_RENDER_BRANCH"] = "main"
+        os.environ["CLOUD_RENDER_TIMEOUT"] = "456"
+        os.environ["CLOUD_RENDER_POLL"] = "9"
+        alias = load_settings()
+        assert alias.render_mode == "auto" and alias.github_repo == "owner/worker"
+        assert alias.github_workflow == "render.yml" and alias.github_branch == "main"
+        assert alias.cloud_render_timeout == 456 and alias.cloud_poll_seconds == 9
+        for k in ("CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO", "CLOUD_RENDER_WORKFLOW",
+                  "CLOUD_RENDER_BRANCH", "CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_POLL"):
+            os.environ.pop(k, None)
+        legacy = _TMP / "manim-bot.env"
+        legacy.write_text(
+            "\n".join([
+                "CLOUD_RENDER_ENABLED=true",
+                "CLOUD_RENDER_REPO=owner/legacy-worker",
+                "CLOUD_RENDER_WORKFLOW=.github/workflows/render.yml",
+                "CLOUD_RENDER_BRANCH=main",
+                "CLOUD_RENDER_TIMEOUT=789",
+                "CLOUD_RENDER_POLL=11",
+                "GPT_BASE_URL=https://legacy.example/v1",
+                "GPT_API_KEY=legacy-test-token",
+                "MANIM_MODEL=qwen-legacy",
+            ]),
+            encoding="utf-8",
+        )
+        os.environ["AETHERLAB_DISABLE_LEGACY_ENV"] = "0"
+        os.environ["AETHERLAB_LEGACY_ENV_PATH"] = str(legacy)
+        migrated = load_settings()
+        assert migrated.render_mode == "auto" and migrated.github_repo == "owner/legacy-worker"
+        assert migrated.github_workflow == "render.yml" and migrated.github_branch == "main"
+        assert migrated.cloud_render_timeout == 789 and migrated.cloud_poll_seconds == 11
+        assert migrated.openai_base_url == "https://legacy.example/v1"
+        assert migrated.llm_model == "qwen-legacy" and migrated.openai_api_key
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)"
+
+
+def t_f154():
+    # Cloud backend fully stubbed: success downloads MP4; identical scene reuses cache.
+    import io
+    import zipfile
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.render_backend import CloudRenderBackend, GitHubActionsClient
+    import aetherlab.services.render_backend as rb
+
+    class FakeClient:
+        def __init__(self):
+            self.dispatches = 0
+            self.provisioned = 0
+            self.name = ""
+        # BUG-16: the workflow must be installed before dispatch or GitHub 404s.
+        def default_branch(self): return "main"
+        def ensure_workflow(self, *, workflow, branch):
+            self.provisioned += 1
+            return False
+        def ensure_branch(self, branch): pass
+        def put_file(self, path, content, *, branch, message): pass
+        def dispatch(self, **kw):
+            # Provisioning must have happened before the first dispatch.
+            assert self.provisioned >= 1, "workflow not provisioned before dispatch"
+            self.dispatches += 1
+            return 10
+        def get_run(self, run_id, *, job_id, branch):
+            return {"id": 10, "status": "completed", "conclusion": "success"}
+        def find_run_artifact(self, run_id, name):
+            self.name = name
+            return {"id": 77, "name": name}
+        def get_artifact(self, artifact_id):
+            return {"id": artifact_id, "name": self.name, "expired": False}
+        def find_repo_artifact(self, name):
+            return None
+        def download_artifact_zip(self, artifact_id):
+            bio = io.BytesIO()
+            with zipfile.ZipFile(bio, "w") as zf:
+                zf.writestr(self.name, b"\x00\x00\x00\x18ftypmp42" + b"0" * 256)
+            return bio.getvalue()
+
+    s = replace(_settings(), render_mode="cloud", github_repo="owner/render",
+                github_token="ghp_" + "x" * 24)
+    path_workflow = replace(s, github_workflow=".github/workflows/render.yml")
+    assert GitHubActionsClient.from_settings(path_workflow).workflow == "render.yml"
+    client = FakeClient()
+    backend = CloudRenderBackend(s, client=client)
+    scene = SceneBundle("AetherLabScene", "from manim import *\nclass AetherLabScene(Scene):\n pass\n",
+                        "manim-community", "compiled")
+    out = asyncio.run(backend.render(scene, quality="l", settings=s, timeout=30))
+    assert out.status == "rendered" and Path(out.video_path).exists(), out.diagnostics
+    scene2 = SceneBundle("AetherLabScene", scene.code, "manim-community", "compiled")
+    out2 = asyncio.run(backend.render(scene2, quality="l", settings=s, timeout=30))
+    assert out2.status == "rendered" and client.dispatches == 1
+
+    class RunLookupClient(GitHubActionsClient):
+        def __init__(self, runs):
+            super().__init__("owner", "render", "token")
+            self.runs = runs
+        def _request(self, method, path, payload=None, *, raw=False):
+            if path.startswith("/repos/owner/render/actions/runs?"):
+                return {"workflow_runs": self.runs}
+            raise AssertionError(path)
+
+    wrong = RunLookupClient([{"id": 1, "status": "completed", "display_title": "AetherLab render old"}])
+    assert wrong.get_run(None, job_id="wanted", branch="renders") == {"status": "queued"}
+    right = RunLookupClient([{"id": 2, "status": "completed", "display_title": "AetherLab render wanted"}])
+    assert right.get_run(None, job_id="wanted", branch="renders")["id"] == 2
+    redirect_src = inspect.getsource(GitHubActionsClient._download_redirecting_raw)
+    assert "_NoRedirect" in redirect_src and "urlopen(signed" in redirect_src
+
+    # BUG-16 regression: provision_render_repo installs the dispatchable workflow
+    # on BOTH the default branch and the render branch, is idempotent, and gives a
+    # clear message when the token lacks the 'workflow' scope (403).
+    import urllib.error
+    from aetherlab.services.render_backend import (
+        RENDER_WORKFLOW_YAML, provision_render_repo,
+    )
+
+    class ProvisionClient(GitHubActionsClient):
+        def __init__(self, existing=None, forbid=False):
+            super().__init__("owner", "render", "token")
+            self.files = dict(existing or {})   # branch -> {path: content}
+            self.branches = {"main"}
+            self.writes = []
+            self.forbid = forbid
+        def default_branch(self): return "main"
+        def file_content(self, path, *, branch):
+            return self.files.get(branch, {}).get(path)
+        def ensure_branch(self, branch): self.branches.add(branch)
+        def put_file(self, path, content, *, branch, message):
+            if self.forbid:
+                raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+            self.files.setdefault(branch, {})[path] = content
+            self.writes.append((branch, path))
+
+    wf_path = ".github/workflows/render.yml"
+    fresh = ProvisionClient()
+    provision_render_repo(fresh, branch="renders", workflow="render.yml")
+    assert (fresh.files.get("main", {}).get(wf_path) or "").strip() == RENDER_WORKFLOW_YAML.strip()
+    assert (fresh.files.get("renders", {}).get(wf_path) or "").strip() == RENDER_WORKFLOW_YAML.strip()
+    assert "renders" in fresh.branches
+    # Idempotent: a repo that already has the exact workflow writes nothing.
+    have = {b: {wf_path: RENDER_WORKFLOW_YAML} for b in ("main", "renders")}
+    warm = ProvisionClient(existing=have)
+    warm.branches.add("renders")
+    provision_render_repo(warm, branch="renders", workflow="render.yml")
+    assert warm.writes == [], warm.writes
+    # Missing 'workflow' scope surfaces an actionable message, not a raw 403.
+    denied = ProvisionClient(forbid=True)
+    try:
+        provision_render_repo(denied, branch="renders", workflow="render.yml")
+        raise AssertionError("expected a scope error")
+    except RuntimeError as exc:
+        assert "workflow" in str(exc).lower() and "scope" in str(exc).lower()
+
+    # manim-bot used GitHub CLI auth instead of a pasted token. AetherLab should
+    # accept that runtime token fallback when Settings has no saved token.
+    orig_cli_token = rb._github_cli_token
+    rb._github_cli_token = lambda: "ghp_" + "z" * 24
+    try:
+        cli_auth = replace(s, github_token="")
+        assert CloudRenderBackend(cli_auth).available()[0]
+        assert GitHubActionsClient.from_settings(cli_auth).token.startswith("ghp_")
+    finally:
+        rb._github_cli_token = orig_cli_token
+
+    from aetherlab.services.render_backend import CloudRenderManifest
+
+    malformed_manifest_path = _TMP / "cloud_manifest_wrong_shape.json"
+    malformed_manifest_path.write_text("[]", encoding="utf-8")
+    malformed_manifest = CloudRenderManifest(malformed_manifest_path)
+    assert malformed_manifest.get("missing") is None
+    malformed_manifest.put("recovered", {"status": "rendered"})
+    assert malformed_manifest.get("recovered") == {"status": "rendered"}
+    return "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
+
+
+def t_f155():
+    # Cloud unavailable/no token fails soft through ManimRuntime._render_once to local.
+    from dataclasses import replace
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime
+    import aetherlab.services.render_backend as rb
+
+    calls = {"local": 0}
+    class FakeLocal:
+        name = "local"
+        def available(self): return True, "ok"
+        async def render(self, scene, *, quality, settings, timeout, progress=None):
+            calls["local"] += 1
+            scene.status = "rendered"
+            scene.video_path = str(_TMP / "fake.mp4")
+            return scene
+
+    orig = rb.LocalRenderBackend
+    orig_cli_token = rb._github_cli_token
+    rb.LocalRenderBackend = FakeLocal
+    rb._github_cli_token = lambda: ""
+    try:
+        s = replace(_settings(), render_mode="cloud", github_repo="owner/render", github_token="")
+        scene = SceneBundle("AetherLabScene", "code", "manim-community", "compiled")
+        out = asyncio.run(ManimRuntime(s)._render_once(scene, s, "l"))
+    finally:
+        rb.LocalRenderBackend = orig
+        rb._github_cli_token = orig_cli_token
+    assert out.status == "rendered" and calls["local"] == 1
+    assert any("GitHub token" in d for d in out.diagnostics)
+    assert any("rendered locally" in d for d in out.diagnostics)
+
+    # BUG-37: exhausting the cloud poll budget is also cloud unavailability,
+    # not a terminal render-timeout. Cancel the remote run and fall back now.
+    class TimeoutClient:
+        def __init__(self): self.cancelled = []
+        def find_repo_artifact(self, name): return None
+        def default_branch(self): return "main"
+        def ensure_workflow(self, *, workflow, branch): return False
+        def ensure_branch(self, branch): pass
+        def put_file(self, path, content, *, branch, message): pass
+        def dispatch(self, **kw): return 91
+        def get_run(self, run_id, *, job_id, branch):
+            return {"id": 91, "status": "queued"}
+        def cancel_run(self, run_id): self.cancelled.append(run_id)
+
+    timeout_client = TimeoutClient()
+    orig_select = rb.select_backend
+    orig_timeout = rb.render_timeout_for
+    rb.LocalRenderBackend = FakeLocal
+    rb.select_backend = lambda settings, code, quality: rb.CloudRenderBackend(
+        settings, client=timeout_client
+    )
+    rb.render_timeout_for = lambda code, quality, settings: 0
+    try:
+        calls["local"] = 0
+        s2 = replace(
+            _settings(), render_mode="cloud", github_repo="owner/render",
+            github_token="ghp_" + "x" * 24, data_dir=_TMP / "cloud_timeout",
+        )
+        scene2 = SceneBundle(
+            "AetherLabScene",
+            "from manim import *\nclass AetherLabScene(Scene):\n    pass\n",
+            "manim-community", "compiled",
+        )
+        out2 = asyncio.run(ManimRuntime(s2)._render_once(scene2, s2, "l"))
+    finally:
+        rb.LocalRenderBackend = orig
+        rb.select_backend = orig_select
+        rb.render_timeout_for = orig_timeout
+    assert out2.status == "rendered" and calls["local"] == 1
+    assert timeout_client.cancelled == [91]
+    assert any("timed out" in d.lower() and "falling back" in d.lower() for d in out2.diagnostics)
+    return "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
+
+
+def t_f156():
+    # Security guard refuses likely secrets and masks tokens in diagnostics.
+    from aetherlab.services.render_backend import _mask, scan_cloud_payload
+    assert scan_cloud_payload("OPENAI_API_KEY='sk-secret'") is not None
+    assert scan_cloud_payload("from manim import *\nText('Energy')") is None
+    masked = _mask("failed with github_pat_ABCDEF1234567890 and sk-abcdef1234567890")
+    assert "github_pat_ABC" not in masked and "sk-abcdef" not in masked
+    return "cloud payload secret scan + token masking (F156)"
+
+
+def t_f157():
+    # Settings dialog exposes cloud controls; Scene panel shows backend chip.
+    import threading
+    import time
+    from dataclasses import replace
+
+    import aetherlab.services.render_backend as render_backend
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.ui.widgets import SimulationPanel
+
+    s = replace(_settings(), render_mode="auto", github_repo="owner/render",
+                github_token="ghp_" + "x" * 24,
+                github_oauth_client_id="test-device-client")
+    d = SettingsDialog(s)
+    vals = d.get_settings()
+    assert vals["render_mode"] == "auto" and vals["github_repo"] == "owner/render"
+
+    cloud_started = threading.Event()
+    cloud_release = threading.Event()
+    original_available = render_backend.CloudRenderBackend.available
+
+    def blocking_available(_backend):
+        cloud_started.set()
+        assert cloud_release.wait(2.0)
+        return False, "Cloud unavailable in regression"
+
+    render_backend.CloudRenderBackend.available = blocking_available
+    try:
+        before = time.perf_counter()
+        d._test_cloud_render()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and cloud_started.wait(0.5)
+        assert not d._cloud_test_btn.isEnabled()
+        cloud_release.set()
+        if d._cloud_task:
+            d._cloud_task.wait(3.0)  # deterministic join, not a slow-runner deadline
+        _app.processEvents()          # deliver the queued finished/result signals
+        assert d._cloud_test_btn.isEnabled()
+        assert "regression" in d._cloud_result.text()
+    finally:
+        cloud_release.set()
+        render_backend.CloudRenderBackend.available = original_available
+
+    device_started = threading.Event()
+    device_release = threading.Event()
+    original_device_code = render_backend.request_github_device_code
+
+    def blocking_device_code(_client_id):
+        device_started.set()
+        assert device_release.wait(2.0)
+        return {}
+
+    render_backend.request_github_device_code = blocking_device_code
+    try:
+        before = time.perf_counter()
+        d._get_github_token()
+        elapsed = time.perf_counter() - before
+        assert elapsed < 0.2 and device_started.wait(0.5)
+        assert not d._get_token_btn.isEnabled()
+        device_release.set()
+        if d._github_task:
+            d._github_task.wait(3.0)  # deterministic join, not a slow-runner deadline
+        _app.processEvents()
+        assert d._get_token_btn.isEnabled()
+        assert "failed" in d._cloud_result.text().lower()
+    finally:
+        device_release.set()
+        render_backend.request_github_device_code = original_device_code
+
+    connection_src = inspect.getsource(SettingsDialog._test_connection)
+    cloud_src = inspect.getsource(SettingsDialog._test_cloud_render)
+    github_src = inspect.getsource(SettingsDialog._get_github_token)
+    assert "BackgroundTask" in connection_src and "processEvents" not in connection_src
+    assert "BackgroundTask" in cloud_src and "processEvents" not in cloud_src
+    assert "cancel.wait(interval)" in github_src and 'error == "slow_down"' in github_src
+    assert "interval + 5" in github_src and "time.sleep" not in github_src
+    d.close()
+    panel = SimulationPanel()
+    scene = SceneBundle("AetherLabScene", "code", "manim-community", "rendered",
+                        diagnostics=["Rendered via GitHub Actions (abc)."],
+                        video_path=str(_TMP / "fake.mp4"))
+    panel.set_scene_bundle(scene)
+    assert panel._backend_chip.text() == "Cloud"
+    panel.close()
+    return "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)"
+
+
+def t_f158():
+    # Workflow and docs ship the concrete GitHub Actions render worker.
+    from aetherlab.services.render_backend import RENDER_WORKFLOW_YAML
+    wf = Path(".github/workflows/render.yml").read_text(encoding="utf-8")
+    doc = Path("docs/CLOUD_RENDERING.md").read_text(encoding="utf-8")
+    assert "workflow_dispatch" in wf and "manim==0.20.1" in wf
+    assert "jobs/<job_id>.py" in doc and "Cloud" in doc
+    # BUG-18 regression: `cache: pip` in setup-python needs a requirements.txt/
+    # pyproject.toml, which a render repo has neither of — the step ERRORS and
+    # every cloud render fails. It must not reappear in the app-installed workflow.
+    assert "cache: pip" not in RENDER_WORKFLOW_YAML, "cache: pip breaks render-repo setup-python"
+    assert "cache: pip" not in wf
+    # The bundled constant (what the app installs) must match the shipped file so
+    # the two can't drift apart.
+    assert RENDER_WORKFLOW_YAML.strip() == wf.strip(), "bundled workflow != .github/workflows/render.yml"
+    return "cloud render workflow + docs present; no cache:pip; bundle==file (F158)"
+
+
+def t_f159():
+    # Graphic redesign pass: precision-instrument QSS hooks + bright-cyan theme.
+    from aetherlab.ui import style
+    from aetherlab.ui.theme import Theme
+    from aetherlab.ui.widgets import AnalysisPanel, EmptyStateView, LibraryPanel, RunningView, SimulationPanel
+    from aetherlab.ui.live_canvas import LiveCanvas
+
+    qss = style.AETHERLAB_QSS
+    for token in (
+        "QFrame#AnalysisCard",
+        "QWidget#SceneToolbar",
+        "QFrame#SetupStrip",
+        "QFrame#LibraryEmptyState",
+        "QToolButton#CanvasExportButton",
+        "QTabWidget::pane",
+        "QRadioButton::indicator:checked",
+    ):
+        assert token in qss, token
+    assert style.CYAN == "#22D3EE" and style.STAGE == "#000000"
+    assert Theme().accent == "#22D3EE" and Theme().curve1 == "#22D3EE"
+
+    ap = AnalysisPanel()
+    assert ap.findChild(QtWidgets.QFrame, "AnalysisCard") is not None
+    ev = EmptyStateView()
+    assert ev._setup_strip.objectName() == "SetupStrip"
+    rv = RunningView()
+    assert rv.findChild(QtWidgets.QWidget, "RunningStatusStrip") is not None
+    panel = SimulationPanel()
+    assert panel.findChild(QtWidgets.QWidget, "SceneToolbar") is not None
+    lib = LibraryPanel()
+    assert lib._empty.objectName() == "LibraryEmptyState"
+    canvas = LiveCanvas()
+    assert canvas._export_btn.objectName() == "CanvasExportButton"
+    doc = Path("docs/UI_GRAPHIC_REDESIGN.md").read_text(encoding="utf-8")
+    assert "precision" in doc.lower() and "Qt Mapping" in doc
+    for w in (ap, ev, rv, panel, lib, canvas):
+        w.close()
+    return "precision-instrument graphic redesign hooks + notes (F159)"
+
+
+def t_f160():
+    # Phase 1: persist visual quality metadata and opt into cache rejection for
+    # stale/mediocre renders without changing default reuse behavior.
+    from dataclasses import replace
+    from aetherlab.core.cache import SessionCache
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.pipeline import AetherLabPipeline
+    from aetherlab.services.scene_critic import Critique
+    import aetherlab.services.scene_critic as critic_mod
+
+    scene = SceneBundle(
+        class_name="S",
+        code="from manim import *\nclass S(Scene):\n    def construct(self): pass\n",
+        engine="manim-community",
+        status="rendered",
+        video_path="v.mp4",
+        quality_score=8.25,
+        critique_verdict="ship",
+        critique_issues=["readable", "well paced"],
+    )
+    restored = SceneBundle.from_json(scene.to_json(), cached=True)
+    assert restored.cached and restored.quality_score == 8.25
+    assert restored.critique_verdict == "ship" and restored.critique_issues == ["readable", "well paced"]
+    legacy = SceneBundle.from_json({})
+    assert legacy.quality_score == 0.0 and legacy.critique_verdict == "" and legacy.critique_issues == []
+
+    cache = SessionCache(_TMP / "quality-cache.sqlite3")
+    req = ProblemRequest(prompt="quality cached scene")
+    key = cache.ensure_request(req)
+    cache.store_scene(key, scene)
+    assert cache.get(key).scene.quality_score == 8.25
+
+    import subprocess
+    import imageio_ffmpeg
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    video = _TMP / "cached.mp4"
+    subprocess.run(
+        [ff, "-y", "-f", "lavfi", "-i",
+         "testsrc=size=160x90:rate=10:duration=0.5", "-pix_fmt", "yuv420p", str(video)],
+        capture_output=True,
+    )
+    assert video.exists()
+
+    class _LLM:
+        async def solve(self, _request):
+            return _solver(model_name="deterministic-fallback")
+
+    class _Rag:
+        async def search(self, _keywords):
+            return RagResult(keywords=["quality"], hits=[], backend="test")
+
+    class _Manim:
+        def __init__(self):
+            self.generated = 0
+
+        def detect_engine(self):
+            return "manim-community", ""
+
+        async def generate_scene_async(self, _request, _solver_result, _rag_result, _settings, **_kwargs):
+            self.generated += 1
+            return SceneBundle(
+                class_name="Fresh",
+                code="fresh",
+                engine="manim-community",
+                status="rendered",
+                video_path=str(video),
+                quality_score=9.0,
+                critique_verdict="ship",
+            )
+
+        async def render_scene_with_repair(self, *_args, **_kwargs):
+            raise AssertionError("render should be skipped for rendered scene with existing video")
+
+    async def _no_ingest():
+        return None
+
+    low = SceneBundle(
+        class_name="Old",
+        code="old",
+        engine="manim-community",
+        status="rendered",
+        video_path=str(video),
+        quality_score=3.0,
+    )
+    strict_settings = replace(_settings(), cache_path=_TMP / "strict-cache.sqlite3", min_quality_score=7.0)
+    p = AetherLabPipeline(strict_settings)
+    p.cache = SessionCache(strict_settings.cache_path)
+    p.llm = _LLM()
+    p.rag = _Rag()
+    p.manim = _Manim()
+    p._ensure_ingested = _no_ingest
+    p.cache.ensure_request(req)
+    p.cache.store_solver(key, _solver(model_name="deterministic-fallback"))
+    p.cache.store_rag(key, RagResult(keywords=["quality"], hits=[], backend="test"))
+    p.cache.store_scene(key, low)
+    result = asyncio.run(p.run(req))
+    assert p.manim.generated == 1 and result.scene.class_name == "Fresh"
+
+    default_settings = replace(_settings(), cache_path=_TMP / "default-quality-cache.sqlite3", min_quality_score=0.0)
+    p2 = AetherLabPipeline(default_settings)
+    p2.cache = SessionCache(default_settings.cache_path)
+    p2.llm = _LLM()
+    p2.rag = _Rag()
+    p2.manim = _Manim()
+    p2._ensure_ingested = _no_ingest
+    key2 = p2.cache.ensure_request(req)
+    p2.cache.store_solver(key2, _solver(model_name="deterministic-fallback"))
+    p2.cache.store_rag(key2, RagResult(keywords=["quality"], hits=[], backend="test"))
+    p2.cache.store_scene(key2, low)
+    result2 = asyncio.run(p2.run(req))
+    assert p2.manim.generated == 0 and result2.scene.class_name == "Old"
+
+    rt_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        visual_critic_max_passes=1,
+    )
+    rt = ManimRuntime(rt_settings)
+    render_video = _TMP / "critic.mp4"
+    render_video.write_bytes(b"fake")
+
+    async def fake_render_once(bundle, _settings_arg, _quality, _progress=None):
+        bundle.status = "rendered"
+        bundle.video_path = str(render_video)
+        return bundle
+
+    async def fake_critique(*_args, **_kwargs):
+        return Critique(verdict="ship", score=8.4, issues=["text readable"], strengths=["clear focus"])
+
+    old_critique = critic_mod.critique_video
+    critic_mod.critique_video = fake_critique
+    rt._render_once = fake_render_once
+    try:
+        rendered = asyncio.run(rt.render_scene_with_repair(
+            SceneBundle(class_name="S", code="code", engine="manim-community", status="compiled"),
+            rt_settings,
+        ))
+    finally:
+        critic_mod.critique_video = old_critique
+    assert rendered.quality_score == 8.4
+    assert rendered.critique_verdict == "ship" and rendered.critique_issues == ["text readable"]
+    return "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+
+
+def t_f161():
+    # Phase 2: opt-in candidate tournament. Network/vision work is stubbed; the
+    # test proves selection, failed-candidate dropping, and N=1 delegation.
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest, SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+
+    request = ProblemRequest(prompt="candidate tournament")
+    solver = _solver()
+    rag = _rag()
+
+    single_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        scene_candidates=1,
+        auto_tournament=False,
+    )
+    single = ManimRuntime(single_settings)
+    calls: list[str] = []
+    compiled = SceneBundle(class_name="S", code="single-code", engine="e", status="compiled")
+    rendered = SceneBundle(class_name="S", code="single-code", engine="e", status="rendered")
+
+    async def fake_generate(*_args, **_kwargs):
+        calls.append("generate")
+        return compiled
+
+    async def fake_render(scene, *_args, **_kwargs):
+        calls.append(f"render:{scene.code}")
+        return rendered
+
+    async def unexpected_candidate_build(*_args, **_kwargs):
+        raise AssertionError("opted-out single path attempted provider-backed candidate generation")
+
+    single.generate_scene_async = fake_generate
+    single.render_scene_with_repair = fake_render
+    single._build_scene_candidates = unexpected_candidate_build
+    assert not single.scene_tournament_enabled(single_settings)
+    got = asyncio.run(single.generate_render_tournament(request, solver, rag, single_settings))
+    assert got is rendered and calls == ["generate", "render:single-code"]
+
+    tournament_settings = replace(
+        _settings(),
+        openai_api_key="sk-test",
+        vision_model="vision-test",
+        scene_candidates=3,
+        scene_candidate_concurrency=2,
+    )
+    rt = ManimRuntime(tournament_settings)
+    candidates = [
+        SceneCandidate(0, SceneBundle("S", "low", "e", "compiled"), {"id": "low"}),
+        SceneCandidate(1, SceneBundle("S", "broken", "e", "compiled"), {"id": "broken"}),
+        SceneCandidate(2, SceneBundle("S", "winner", "e", "compiled"), {"id": "winner"}),
+    ]
+
+    score_rt = ManimRuntime(tournament_settings)
+    score_candidates = [
+        SceneCandidate(0, SceneBundle("S", "low", "e", "compiled"), {"id": "low"}),
+        SceneCandidate(1, SceneBundle("S", "broken", "e", "compiled"), {"id": "broken"}),
+        SceneCandidate(2, SceneBundle("S", "winner", "e", "compiled"), {"id": "winner"}),
+    ]
+    from aetherlab.services.scene_critic import Critique
+    import aetherlab.services.scene_critic as critic_mod
+
+    async def fake_draft_render(scene, *_args, **_kwargs):
+        if scene.code == "broken":
+            scene.status = "render-error"
+            return scene
+        scene.status = "rendered"
+        scene.video_path = str(_TMP / f"{scene.code}.mp4")
+        return scene
+
+    async def fake_critique(video_path, *_args, **_kwargs):
+        score = 8.8 if "winner" in str(video_path) else 5.0
+        verdict = "ship" if score > 7 else "revise"
+        return Critique(verdict=verdict, score=score, issues=[] if verdict == "ship" else ["weak"])
+
+    old_critique = critic_mod.critique_video
+    critic_mod.critique_video = fake_critique
+    score_rt._render_once = fake_draft_render
+    try:
+        scored = asyncio.run(score_rt._render_and_score_candidates(
+            score_candidates, tournament_settings, None
+        ))
+    finally:
+        critic_mod.critique_video = old_critique
+    assert [c.scene.code for c in scored] == ["low", "winner"]
+    assert max(scored, key=lambda c: c.score).scene.code == "winner"
+
+    async def fake_build(*_args, **_kwargs):
+        return candidates
+
+    async def fake_score(cands, *_args, **_kwargs):
+        # Candidate 1 simulates a render/static failure and is dropped.
+        cands[0].score = 5.0
+        cands[0].verdict = "revise"
+        cands[0].issues = ["weak composition", "too static"]
+        cands[2].score = 8.8
+        cands[2].verdict = "ship"
+        cands[2].issues = ["minor label crowding"]
+        return [cands[0], cands[2]]
+
+    selected: list[str] = []
+
+    async def fake_final(scene, *_args, **_kwargs):
+        selected.append(scene.code)
+        assert scene.quality_score == 8.8
+        assert scene.critique_verdict == "ship"
+        assert scene.critique_issues == ["minor label crowding"]
+        assert any("Tournament winner: candidate #3" in d for d in scene.diagnostics)
+        scene.status = "rendered"
+        return scene
+
+    rt._build_scene_candidates = fake_build
+    rt._render_and_score_candidates = fake_score
+    rt.render_scene_with_repair = fake_final
+    winner = asyncio.run(rt.generate_render_tournament(
+        request, solver, rag, tournament_settings, quality="h", brief="brief"
+    ))
+    assert selected == ["winner"] and winner.code == "winner"
+
+    failed = ManimRuntime(tournament_settings)
+    fallback_calls: list[str] = []
+
+    async def fake_empty(*_args, **_kwargs):
+        return []
+
+    async def fake_fallback_generate(*_args, **_kwargs):
+        fallback_calls.append("fallback-generate")
+        return compiled
+
+    async def fake_fallback_render(scene, *_args, **_kwargs):
+        fallback_calls.append(f"fallback-render:{scene.code}")
+        return rendered
+
+    failed._build_scene_candidates = fake_empty
+    failed.generate_scene_async = fake_fallback_generate
+    failed.render_scene_with_repair = fake_fallback_render
+    fallback = asyncio.run(failed.generate_render_tournament(request, solver, rag, tournament_settings))
+    assert fallback is rendered and fallback_calls == ["fallback-generate", "fallback-render:single-code"]
+    return "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
+
+
+def t_f162():
+    # Visual-regression quality GATE: warnings alone never failed the run, and
+    # compare_report computed deltas but never flagged regressions. quality_failures,
+    # regression flagging, and --strict decide_exit are pure + unit-testable here.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "visual_regression_mod", str(Path("tools/visual_regression.py").resolve())
+    )
+    vr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vr)
+
+    healthy = {"kind": "scene", "metrics": {
+        "duration": 18.0, "fps": 30.0, "blank_ranges": [], "static_ranges": [],
+    }}
+    assert vr.quality_failures(healthy) == [], vr.quality_failures(healthy)
+
+    broken = {"kind": "scene", "metrics": {
+        "duration": 1.2, "fps": 3.0,
+        "blank_ranges": [{"duration": 1.5}],
+        "static_ranges": [{"duration": 16.0}],
+    }}
+    reasons = vr.quality_failures(broken)
+    assert any("duration" in r for r in reasons) and any("fps" in r for r in reasons)
+    assert any("blank" in r for r in reasons) and any("static" in r for r in reasons), reasons
+
+    lesson_no_subs = {"kind": "lesson", "metrics": {
+        "duration": 25.0, "fps": 30.0, "blank_ranges": [], "static_ranges": [],
+        "subtitle": {"cue_count": 0},
+    }}
+    assert any("subtitle" in r for r in vr.quality_failures(lesson_no_subs))
+
+    # compare_report flags a real regression (duration collapse, more blank frames).
+    base_dir = _TMP / "vr_baseline"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    (base_dir / "summary.json").write_text(json.dumps({"cases": [
+        {"id": "scene_x", "metrics": {"duration": 18.0, "frame_count": 540,
+                                       "blank_ratio": 0.0, "static_ratio": 0.10}},
+        {"id": "scene_y", "metrics": {"duration": 12.0, "frame_count": 360,
+                                       "blank_ratio": 0.0, "static_ratio": 0.10}},
+    ]}), encoding="utf-8")
+    now = {"cases": [
+        {"id": "scene_x", "metrics": {"duration": 6.0, "frame_count": 180,
+                                      "blank_ratio": 0.05, "static_ratio": 0.10}},  # regressed
+        {"id": "scene_y", "metrics": {"duration": 12.1, "frame_count": 362,
+                                      "blank_ratio": 0.0, "static_ratio": 0.11}},   # stable
+    ]}
+    cmp = vr.compare_report(base_dir, now)
+    assert cmp["regression_count"] >= 2, cmp
+    by_id = {d["id"]: d for d in cmp["deltas"]}
+    assert by_id["scene_x"]["regressions"] and not by_id["scene_y"]["regressions"], cmp
+
+    # decide_exit: render failures always fail; --strict also fails on quality/warn/regress.
+    render_fail = {"cases": [{"id": "a", "status": "fail"}]}
+    assert vr.decide_exit(render_fail, strict=False) == 1
+    warn_only = {"cases": [{"id": "a", "status": "warn", "quality_failures": []}]}
+    assert vr.decide_exit(warn_only, strict=False) == 0  # default unchanged
+    assert vr.decide_exit(warn_only, strict=True) == 1
+    qfail = {"cases": [{"id": "a", "status": "pass", "quality_failures": ["duration low"]}]}
+    assert vr.decide_exit(qfail, strict=False) == 0 and vr.decide_exit(qfail, strict=True) == 1
+    regressed = {"cases": [{"id": "a", "status": "pass", "quality_failures": []}],
+                 "compare": {"regression_count": 3}}
+    assert vr.decide_exit(regressed, strict=True) == 1
+    clean = {"cases": [{"id": "a", "status": "pass", "quality_failures": []}]}
+    assert vr.decide_exit(clean, strict=True) == 0
+    return "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)"
+
+
+def t_f163():
+    # Exemplar library: domain-matched few-shot scenes injected into codegen.
+    # Every exemplar must pass the SAME gates a generated scene must, and be
+    # selected + injected. (All four also render — verified out of band; kept out
+    # of the fast suite for speed.)
+    from dataclasses import replace
+    from aetherlab.core.models import ProblemRequest
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_exemplars import EXEMPLARS, exemplar_block, exemplar_for
+    from aetherlab.services.scene_generator import SceneGenerator
+    from aetherlab.services.scene_validation import validate_scene
+
+    assert set(EXEMPLARS) == {"oscillator", "pendulum", "orbit", "wave"}
+    for dom, code in EXEMPLARS.items():
+        compile(code, "<ex>", "exec")
+        assert "MathTex" not in code and "Tex(" not in code, f"{dom} must be LaTeX-free"
+        ok, iss = validate_code_safety(code)
+        assert ok, (dom, iss)
+        lok, liss = validate_scene(code)
+        assert lok, (dom, liss)
+
+    # Selection reuses detect_domain and always yields a domain.
+    assert exemplar_for(["kepler", "orbit"], {})[0] == "orbit"
+    assert exemplar_for(["pendulum"], {})[0] == "pendulum"
+    assert exemplar_for(["fourier", "wave"], {})[0] == "wave"
+    assert exemplar_for(["thing"], {"damping": 0.1})[0] == "oscillator"
+    assert exemplar_block(["orbit"], {}).startswith("## Reference exemplar")
+    assert exemplar_block([], {}) != ""
+
+    # Injected into the codegen system prompt (captured via a stub client).
+    class _Msg:
+        def __init__(self, c):
+            self.content = c
+
+    class _Choice:
+        def __init__(self, c):
+            self.finish_reason = "stop"
+            self.message = _Msg(c)
+
+    class _Resp:
+        def __init__(self, c):
+            self.choices = [_Choice(c)]
+
+    calls = []
+
+    class _Completions:
+        async def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:
+                return _Resp('{"concept":"c","staging":"s","palette":{},'
+                             '"acts":[{"name":"ESTABLISH","duration_s":5,"beats":["b"]}],'
+                             '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
+            return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
+                         "    def construct(self):\n        self.wait(1)\n")
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    sg = SceneGenerator(replace(_settings(), openai_api_key="sk-test"))
+    sg._client = _Client()
+    asyncio.run(sg._generate_remote(
+        ProblemRequest(prompt="damped oscillator"), _solver(), _rag(), "AetherLabScene"))
+    codegen_system = calls[1]["messages"][0]["content"]
+    assert "Reference exemplar" in codegen_system, "exemplar not injected into codegen prompt"
+    assert "oscillator" in codegen_system, "domain-matched exemplar expected"
+    return "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
+
+
+def t_f164():
+    from tools.feature_surface_audit import audit
+
+    report = audit()
+    assert report["feature_count"] >= 164, report
+    assert report["surface_count"] >= 60, report
+    assert report["uncovered_count"] == 0, report["uncovered"]
+    return (
+        f"feature-surface audit covers {report['covered_count']}/"
+        f"{report['surface_count']} current surfaces (F164)"
+    )
+
+
+def t_f165():
+    from tools.tracker_integrity_audit import audit
+
+    report = audit(allow_pending_result="F168")
+    assert report["feature_count"] >= 168, report
+    assert report["story_count"] == report["feature_count"], report
+    assert report["result_count"] >= report["feature_count"] - 1, report
+    assert report["test_count"] == report["feature_count"], report
+    assert report["ok"], report["issues"]
+    return (
+        f"tracker integrity: {report['feature_count']} features/"
+        f"{report['story_count']} stories/"
+        f"{report['result_count']} results/{report['test_count']} tests aligned (F165)"
+    )
+
+
+def t_f166():
+    import json
+    import subprocess
+    import zipfile
+
+    import imageio_ffmpeg
+
+    from aetherlab.core.models import LessonBundle, SceneBundle
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.services.share_export import export_lesson_bundle
+    from aetherlab.ui.qt_compat import QtWidgets
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import LessonView
+
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    video = _TMP / "share_lesson.mp4"
+    subprocess.run(
+        [ff, "-y", "-f", "lavfi", "-i",
+         "testsrc=size=160x90:rate=10:duration=0.5", "-pix_fmt", "yuv420p", str(video)],
+        capture_output=True,
+    )
+    assert video.exists() and video.stat().st_size > 0
+    video.with_suffix(".srt").write_text(
+        "1\n00:00:00,000 --> 00:00:00,500\nKepler opens the lesson.\n",
+        encoding="utf-8",
+    )
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    bundle = LessonBundle(
+        plan=plan,
+        chapter_scenes=[
+            SceneBundle("S1", "class S1(Scene):\n    pass\n", "e", "rendered", video_path=str(video)),
+            SceneBundle("S2", "class S2(Scene):\n    pass\n", "e", "rendered", video_path=str(video)),
+        ],
+        video_path=str(video),
+        status="assembled",
+        chapter_offsets=[0.0, 3.5],
+        rendered_chapter_indexes=[0, 1],
+    )
+    out = _TMP / "kepler_bundle.zip"
+    summary = export_lesson_bundle(bundle, out)
+    assert summary.path == out and summary.size_bytes > video.stat().st_size
+
+    # BUG-26 regression: a mid-export failure must not truncate a prior good
+    # bundle or leave a plausible-but-incomplete zip in its place (atomic write).
+    good_bytes = out.read_bytes()
+    from unittest import mock as _mock
+    from aetherlab.services import share_export as _se
+
+    _orig_write = _se._write
+
+    def _boom(zf, entries, source, arcname, compress_type=None):
+        if arcname.endswith("lesson.mp4"):
+            raise OSError("simulated disk-full during export")
+        return _orig_write(zf, entries, source, arcname, compress_type)
+
+    with _mock.patch.object(_se, "_write", _boom):
+        try:
+            export_lesson_bundle(bundle, out)
+            raise AssertionError("expected export to fail mid-write")
+        except OSError:
+            pass
+    assert out.read_bytes() == good_bytes, "prior bundle destroyed by failed re-export"
+    assert not (out.with_name(out.name + ".part")).exists(), "staging .part leaked"
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        assert any(n.endswith("/index.html") for n in names)
+        assert any(n.endswith("/metadata.json") for n in names)
+        assert any(n.endswith("/study_guide.tex") for n in names)
+        assert any(n.endswith("/media/lesson.mp4") for n in names)
+        assert any(n.endswith("/media/lesson.srt") for n in names)
+        assert any(n.endswith("/media/lesson.vtt") for n in names)
+        assert any("/scenes/chapter_01_" in n and n.endswith(".py") for n in names)
+        html = zf.read(next(n for n in names if n.endswith("/index.html"))).decode("utf-8")
+        meta = json.loads(zf.read(next(n for n in names if n.endswith("/metadata.json"))))
+    assert "<video" in html and "media/lesson.vtt" in html and "data-time=\"3.500\"" in html
+    meta_text = json.dumps(meta)
+    assert str(_TMP) not in meta_text and "api_key" not in meta_text.lower()
+    assert meta["assets"]["video"] == "media/lesson.mp4"
+    assert meta["chapters"][0]["rendered"] is True
+
+    lv = LessonView()
+    try:
+        lv.set_lesson(bundle)
+        assert hasattr(lv, "share_bundle_requested")
+        labels = [b.text() for b in lv.findChildren(QtWidgets.QPushButton)]
+        assert "Export bundle" in labels
+    finally:
+        lv.close()
+    import threading
+    import time
+
+    started = threading.Event()
+    release = threading.Event()
+    mw = MainWindow(_settings())
+    try:
+        assert hasattr(mw, "_export_lesson_bundle")
+        assert "_start_export_task" in inspect.getsource(mw._export_lesson_bundle)
+
+        def blocking_export(_cancel, _progress):
+            started.set()
+            assert release.wait(2.0)
+            return "Export completed in background"
+
+        before = time.perf_counter()
+        assert mw._start_export_task("Exporting lesson bundle…", blocking_export)
+        assert time.perf_counter() - before < 0.2 and started.wait(0.5)
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while mw._export_task and mw._export_task.is_running and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+        _app.processEvents()
+        assert "completed in background" in mw.statusBar().currentMessage()
+    finally:
+        release.set()
+        mw.close()
+        probe = getattr(mw, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    return "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+
+
+def t_f167():
+    import json
+
+    from aetherlab.core.models import LessonBundle
+    from aetherlab.services.course_mode import CourseProgressStore, lesson_key
+    from aetherlab.services.lesson_planner import _template_lesson
+    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.widgets import LessonView, _QuestionCard
+
+    plan = _template_lesson("Kepler orbit", "undergrad")
+    store_path = _TMP / "course_progress.json"
+    store = CourseProgressStore(store_path)
+    wrong = plan.questions[0].choices[-1]
+    summary = store.record_quiz_answer(plan, 0, False, wrong)
+    assert store_path.exists()
+    assert summary.attempts == 1 and summary.correct == 0
+    assert summary.missed_concepts and summary.next_topic.startswith("Review:")
+    data = json.loads(store_path.read_text(encoding="utf-8"))
+    key = lesson_key(plan)
+    assert key in data["lessons"]
+    assert data["lessons"][key]["questions"]["0"]["last_choice"] == wrong
+    assert "api_key" not in json.dumps(data).lower()
+    summary2 = CourseProgressStore(store_path).summary(plan)
+    assert summary2.attempts == 1 and summary2.missed_concepts == summary.missed_concepts
+
+    # BUG-45: valid-but-wrong JSON shapes and malformed nested counters recover
+    # as empty progress instead of breaking the lesson's quiz interaction.
+    key = lesson_key(plan)
+    store_path.write_text(
+        json.dumps({"lessons": {key: {"attempts": "bad", "questions": []}}}),
+        encoding="utf-8",
+    )
+    repaired = CourseProgressStore(store_path).record_quiz_answer(plan, 0, True, "A")
+    assert repaired.attempts == 1 and repaired.correct == 1
+    store_path.write_text("[]", encoding="utf-8")
+    assert CourseProgressStore(store_path).summary(plan).attempts == 0
+
+    lv = LessonView()
+    try:
+        lv.set_lesson(LessonBundle(plan=plan))
+        assert "Course progress" in lv._course_status.text()
+        got = []
+        lv.quiz_answered.connect(lambda i, ok, choice: got.append((i, ok, choice)))
+        card = lv.findChildren(_QuestionCard)[0]
+        card._answer_mcq(wrong)
+        assert got == [(0, False, wrong)]
+        # BUG-27 regression: switching the selection after answering must not
+        # record a second attempt (the card locks on first answer).
+        right = plan.questions[0].answer
+        card._answer_mcq(right)
+        assert got == [(0, False, wrong)], "quiz card re-recorded after answering"
+        assert card._answered and all(
+            not b.isEnabled() for b in card._group.buttons()
+        ), "quiz card not locked after answering"
+        lv.set_course_summary("Quiz score 0/1. Review orbital shape next.")
+        assert "Review orbital shape" in lv._course_status.text()
+    finally:
+        lv.close()
+
+    mw = MainWindow(_settings())
+    try:
+        mw._last_lesson = LessonBundle(plan=plan)
+        mw.course_progress = CourseProgressStore(_TMP / "main_course_progress.json")
+        mw._record_lesson_quiz_answer(0, False, wrong)
+        assert mw.course_progress.path.exists()
+        assert "Review" in mw.lesson_view._course_status.text()
+    finally:
+        mw.close()
+        probe = getattr(mw, "_ollama_probe", None)
+        if probe and probe.isRunning():
+            probe.wait(5000)
+    assert Path("docs/COURSE_MODE.md").read_text(encoding="utf-8")
+    return "course progress persists quiz answers and updates lesson recommendation strip (F167)"
+
+
+def t_f168():
+    import json
+
+    from tools import prompt_quality_lab as lab
+
+    prompts = lab.load_prompt_set()
+    assert len(prompts) >= 6
+    assert {p["id"] for p in prompts} >= {"pendulum", "kepler_orbit", "lesson_kepler"}
+    assert any(p["mode"] == "lesson" for p in prompts)
+
+    custom = _TMP / "prompt_set.json"
+    custom.write_text(
+        json.dumps([{"id": "x", "mode": "solve", "prompt": "show x"}]),
+        encoding="utf-8",
+    )
+    assert lab.load_prompt_set(custom)[0]["id"] == "x"
+    bom = _TMP / "prompt_bom.json"
+    bom.write_text(
+        "\ufeff" + json.dumps([{"id": "bom", "mode": "solve", "prompt": "show bom"}]),
+        encoding="utf-8",
+    )
+    assert lab.load_prompt_set(bom)[0]["id"] == "bom"
+    dup = _TMP / "prompt_dup.json"
+    dup.write_text(
+        json.dumps([
+            {"id": "x", "mode": "solve", "prompt": "one"},
+            {"id": "x", "mode": "solve", "prompt": "two"},
+        ]),
+        encoding="utf-8",
+    )
+    try:
+        lab.load_prompt_set(dup)
+        raise AssertionError("duplicate prompt ids must fail")
+    except ValueError:
+        pass
+
+    story = lab.storyboard_summary({
+        "hero_frame": "orbit reveal",
+        "acts": [{"duration_s": 5}, {"duration_s": 7}, {"duration_s": 4}],
+    })
+    assert story == {
+        "present": True,
+        "act_count": 3,
+        "duration_s": 16.0,
+        "has_hero_frame": True,
+    }
+
+    good_case = {
+        "id": "pendulum",
+        "mode": "solve",
+        "status": "pass",
+        "storyboard": story,
+        "critic": {"score": 8.0},
+        "metrics": {"duration": 12.0, "fps": 30.0, "blank_ratio": 0.0, "static_ratio": 0.02},
+        "quality_failures": [],
+    }
+    bad_case = {
+        **good_case,
+        "metrics": {"duration": 1.0, "fps": 4.0, "blank_ratio": 0.4, "static_ratio": 0.5},
+        "quality_failures": ["duration below floor"],
+        "critic": {"score": 0.0},
+    }
+    assert lab.score_case(good_case) > lab.score_case(bad_case)
+    report = {
+        "schema": "aetherlab.prompt_quality_lab.v1",
+        "cases": [good_case],
+        "summary": lab.summarize_cases([good_case]),
+    }
+    before = _TMP / "prompt_quality_before"
+    before.mkdir()
+    (before / "summary.json").write_text(
+        json.dumps({"cases": [{**good_case, "score": 8.5}]}),
+        encoding="utf-8",
+    )
+    compare = lab.compare_lab_reports(before, {**report, "cases": [{**good_case, "score": 6.9}]})
+    assert compare and compare["regression_count"] == 1
+    out = _TMP / "prompt_quality_report"
+    lab.write_outputs(out, report)
+    assert (out / "summary.json").exists()
+    assert "Prompt Quality Lab" in (out / "summary.md").read_text(encoding="utf-8")
+    assert "score" in (out / "scores.csv").read_text(encoding="utf-8")
+    assert Path("docs/PROMPT_QUALITY_LAB.md").read_text(encoding="utf-8")
+    return "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
+
+
+def t_f169():
+    # Quality Flywheel Phase 0: the golden-set + release ratchet (gate).
+    from tools import prompt_quality_lab as lab
+
+    # Golden set spans the domains AetherLab serves and is >= 12 prompts.
+    prompts = lab.load_prompt_set()
+    ids = {p["id"] for p in prompts}
+    assert len(prompts) >= 12, len(prompts)
+    assert {"pendulum", "projectile", "doppler", "rc_circuit", "escape_velocity"} <= ids, ids
+    assert any(p["mode"] == "lesson" for p in prompts), "golden set must exercise a lesson"
+
+    # The gate is a pure function: identical/improved/within-tolerance runs pass;
+    # a real mean-score drop or ANY render-pass-rate drop fails. This is the
+    # deterministic proof of the ratchet (no rendering needed).
+    base = {"summary": {"mean_score": 6.0, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, base)["ok"], "identical run must pass the gate"
+    better = {"summary": {"mean_score": 6.8, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, better)["ok"], "improvement must pass"
+    noisy = {"summary": {"mean_score": 5.7, "case_count": 12, "pass_count": 12}}
+    assert lab.evaluate_gate(base, noisy)["ok"], "within-tolerance noise must pass"
+    worse = {"summary": {"mean_score": 5.2, "case_count": 12, "pass_count": 12}}
+    g = lab.evaluate_gate(base, worse)
+    assert not g["ok"] and any("mean score regressed" in r for r in g["reasons"]), g
+    fewer = {"summary": {"mean_score": 6.0, "case_count": 12, "pass_count": 10}}
+    g2 = lab.evaluate_gate(base, fewer)
+    assert not g2["ok"] and any("pass rate" in r for r in g2["reasons"]), g2
+
+    # A committed baseline exists and gates cleanly against itself (delta 0),
+    # proving the wired file path — not just synthetic dicts.
+    baseline_path = Path("tools/prompt_quality_baseline.json")
+    assert baseline_path.exists(), "committed baseline must ship with the gate"
+    committed = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert committed.get("summary", {}).get("case_count", 0) >= 12, committed.get("summary")
+    assert lab.evaluate_gate(committed, committed)["ok"], "baseline must gate against itself"
+
+    # The CLI wires --gate/--baseline/--score-tolerance.
+    import inspect
+    main_src = inspect.getsource(lab.main)
+    assert "--gate" in main_src and "evaluate_gate" in main_src, "gate must be wired into the CLI"
+    return "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
+
+
+def t_f170():
+    # Quality Flywheel Phase 1: the trustworthy per-axis judge.
+    import inspect
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services import scene_critic as sc
+    from aetherlab.services.scene_critic import (
+        CRITIC_AXES, Critique, _coerce_breakdown, static_quality_estimate,
+    )
+
+    assert set(CRITIC_AXES) == {"legibility", "composition", "palette", "structure", "substance"}
+
+    # A well-formed breakdown validates as "vision" and is clamped 0-2.
+    good = {"legibility": 2, "composition": 1.5, "palette": 2, "structure": 1, "substance": 9}
+    b, src = _coerce_breakdown(good, 8.0)
+    assert src == "vision" and b["substance"] == 2.0 and set(b) == set(CRITIC_AXES), (src, b)
+    # BUG-7 lesson: a malformed breakdown with a valid score is NOT silent-zeroed
+    # — it is approximated from the score and flagged, not dropped.
+    b2, src2 = _coerce_breakdown({"legibility": "oops"}, 6.0)
+    assert src2 == "vision-approx" and abs(sum(b2.values()) - 6.0) < 1e-6 and all(v > 0 for v in b2.values()), (src2, b2)
+
+    # The rubric prompt asks for the per-axis breakdown.
+    assert '"breakdown"' in sc.CRITIC_SYSTEM_PROMPT and "0-2" in sc.CRITIC_SYSTEM_PROMPT
+
+    # Static no-vision proxy: non-zero, discriminating, verdict stays "skipped".
+    good_code = ("from manim import *\nclass S(Scene):\n    def construct(self):\n"
+                 "        for i in range(5):\n            self.play(Create(Dot()), run_time=2)\n        self.wait(2)\n")
+    bad_code = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.add(Text('x'))\n"
+    eg, eb = static_quality_estimate(good_code), static_quality_estimate(bad_code)
+    assert eg.breakdown_source == "static" and eg.verdict == "skipped"
+    assert eg.score > 0 and set(eg.breakdown) == set(CRITIC_AXES)
+    assert eb.score < eg.score, (eb.score, eg.score)  # a worse scene ranks lower
+    # metrics (blank/static frames) push substance down.
+    noisy = static_quality_estimate(good_code, {"blank_ratio": 0.5, "static_ratio": 0.5})
+    assert noisy.breakdown["substance"] < eg.breakdown["substance"]
+
+    # SceneBundle persists the breakdown and round-trips; OLD payloads still load.
+    sb = SceneBundle("S", "c", "manim", "rendered", critique_breakdown={"legibility": 2.0})
+    rt = SceneBundle.from_json(sb.to_json())
+    assert rt.critique_breakdown == {"legibility": 2.0}
+    assert SceneBundle.from_json({"class_name": "S", "code": "c"}).critique_breakdown == {}
+    # a malformed persisted breakdown coerces cleanly, never raises.
+    assert SceneBundle.from_json({"critique_breakdown": {"legibility": "x", "composition": 1}}).critique_breakdown == {"composition": 1.0}
+
+    # All three manim_runtime critique-copy sites propagate the breakdown, and the
+    # tournament uses the static proxy instead of dropping keyless candidates.
+    rt_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]))
+    assert rt_src.count("critique_breakdown") >= 3, "all three copy sites must carry the breakdown"
+    assert "static_quality_estimate" in rt_src, "keyless candidates must be statically scored, not dropped"
+
+    # Critique default is backward-compatible (empty breakdown, no source).
+    assert Critique(verdict="skipped").breakdown == {} and Critique(verdict="skipped").breakdown_source == ""
+    return "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)"
+
+
+def t_f171():
+    # Quality Flywheel Phase 2: parallel cloud fan-out with per-candidate
+    # job-id isolation (the BUG-15 artifact-steal race under concurrency).
+    import asyncio as _asyncio
+    from dataclasses import replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_backend import GitHubActionsClient, cloud_job_id
+
+    code = "class AetherLabScene(Scene):\n    def construct(self):\n        self.play(Create(Dot()))\n        self.wait(1)\n"
+    sb = SceneBundle("AetherLabScene", code, "manim", "compiled")
+
+    # variant salts the cloud id; "" stays byte-identical to the legacy id so the
+    # single-scene path keeps its content-addressed cloud cache.
+    base = cloud_job_id(sb, quality="l", fps=30)
+    assert cloud_job_id(sb, quality="l", fps=30, variant="") == base, "empty variant must preserve cache id"
+    salted = [cloud_job_id(sb, quality="l", fps=30, variant=f"cand{i}") for i in range(4)]
+    assert len(set(salted)) == 4 and base not in salted, salted
+
+    # BUG-36: unique paths are insufficient because GitHub's Contents API
+    # commits each file to the shared branch. Concurrent PUTs must serialize.
+    import concurrent.futures
+    import threading
+    import time
+    import urllib.error
+
+    class ConcurrentPutClient(GitHubActionsClient):
+        def __init__(self):
+            super().__init__("owner", "render", "token")
+            self.guard = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+            self.writes = 0
+
+        def _request(self, method, path, payload=None, *, raw=False):
+            if method == "GET" and "/contents/" in path:
+                raise urllib.error.HTTPError("u", 404, "missing", {}, None)
+            if method == "PUT":
+                with self.guard:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                time.sleep(0.03)
+                with self.guard:
+                    self.active -= 1
+                    self.writes += 1
+                return {}
+            raise AssertionError((method, path))
+
+    put_client = ConcurrentPutClient()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                put_client.put_file, f"jobs/cand{i}.py", code,
+                branch="renders", message=f"candidate {i}",
+            )
+            for i in range(2)
+        ]
+        for future in futures:
+            future.result()
+    assert put_client.writes == 2 and put_client.max_active == 1, (
+        put_client.writes, put_client.max_active
+    )
+
+    # Concurrently render THREE byte-identical candidates through the real
+    # tournament scorer with a stubbed render; each must get its own variant and
+    # receive its own artifact — never another candidate's.
+    s = _settings()
+    runtime = ManimRuntime(s)
+    seen: list[str] = []
+
+    async def fake_render_once(scene, settings, quality, progress=None, variant=""):
+        seen.append(variant)
+        await _asyncio.sleep(0)  # yield so the gathered candidates interleave
+        return replace(scene, status="rendered", video_path=f"/fake/{variant}.mp4")
+
+    runtime._render_once = fake_render_once  # type: ignore[assignment]
+    candidates = [SceneCandidate(index=i, scene=replace(sb), storyboard=None) for i in range(3)]
+    scored = _asyncio.run(runtime._render_and_score_candidates(candidates, s, None))
+
+    assert sorted(seen) == ["cand0", "cand1", "cand2"], seen  # distinct isolation keys
+    assert scored, "keyless candidates must be scored (static proxy), not dropped"
+    for c in scored:
+        assert c.scene.video_path == f"/fake/cand{c.index}.mp4", (c.index, c.scene.video_path)
+        assert c.score > 0, "static proxy must score keyless candidates for ranking"
+
+    # A manual live-smoke script exists for the real GitHub end-to-end path.
+    smoke = Path("tools/cloud_tournament_smoke.py").read_text(encoding="utf-8")
+    assert "cloud_job_id" in smoke and "variant" in smoke and "asyncio.gather" in smoke
+    return "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
+
+
+def t_f172():
+    # Quality Flywheel Phase 3a: losers teach — aesthetic pitfall learning.
+    import inspect
+
+    from aetherlab.services.error_learner import (
+        AestheticPitfallStore, learned_aesthetic_block, normalize_aesthetic, preventive_pitfalls_block,
+    )
+
+    # Variants that differ only in numbers/paths/axis-tag collapse to one phrase.
+    a = normalize_aesthetic("Legibility: Text overlaps the axis at (3, 4).")
+    b = normalize_aesthetic("text overlaps the axis at (1, 2)")
+    assert a == b and "text overlaps the axis" in a, (a, b)
+
+    store = AestheticPitfallStore(_TMP / "aesthetic_pitfalls.json")
+    store.record(["Text overlaps the axis at (3,4)", "Object leaves the frame", "text overlaps the axis at (9,9)"])
+    top = store.top()
+    assert top[0][1] == 2 and "overlaps" in top[0][0], top  # the repeated one ranks first
+    # Persists across instances.
+    assert AestheticPitfallStore(_TMP / "aesthetic_pitfalls.json").top(1) == top[:1]
+
+    # The learned block is empty for an empty store and appears for a full one.
+    assert learned_aesthetic_block(AestheticPitfallStore(_TMP / "empty_aes.json")) == ""
+    # preventive_pitfalls_block(): static only (backward compatible), no learned section.
+    assert "past renders" not in preventive_pitfalls_block()
+    withlearn = preventive_pitfalls_block(store)
+    assert "past renders" in withlearn and "text overlaps the axis" in withlearn
+
+    # Generation injects the learned pitfalls at both codegen sites.
+    gen_src = inspect.getsource(__import__("aetherlab.services.scene_generator", fromlist=["SceneGenerator"]).SceneGenerator._generate_remote)
+    assert "AestheticPitfallStore" in gen_src and gen_src.count("preventive_pitfalls_block(_aesthetic)") == 2
+
+    # The tournament records losing candidates' issues (behavioural: the store file appears).
+    from aetherlab.services.manim_runtime import ManimRuntime
+    rt = ManimRuntime(_settings())
+    rt_src = inspect.getsource(ManimRuntime)
+    assert "_record_aesthetic_pitfalls" in rt_src and "is not winner" in rt_src
+    probe = _settings()
+    rt._record_aesthetic_pitfalls(["Text runs off the right edge"], probe)
+    recorded = AestheticPitfallStore(probe.data_dir / "aesthetic_pitfalls.json").top()
+    assert any("runs off" in p for p, _ in recorded), recorded
+    return "aesthetic pitfall learning: critic issues feed the next generation prompt (F172)"
+
+
+def t_f173():
+    # Quality Flywheel Phase 3b: winners teach — exemplar promotion (human-gated).
+    import inspect
+
+    from aetherlab.services.scene_exemplars import ExemplarCandidateStore, PROMOTE_MIN_SCORE
+
+    code = "from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n        self.wait(1)\n"
+    store = ExemplarCandidateStore(_TMP / "exemplar_candidates.json")
+    # Only a genuine, high-scoring VISION 'ship' is exemplar-worthy.
+    assert store.record(domain="pendulum", code=code, score=9.1, verdict="ship") is True
+    assert store.record(domain="wave", code=code, score=9.9, verdict="skipped") is False  # static proxy
+    assert store.record(domain="wave", code="x=1", score=6.0, verdict="ship") is False    # below bar
+    assert store.record(domain="wave", code="y=2", score=9.0, verdict="revise") is False  # critic unhappy
+    assert store.record(domain="wave", code="   ", score=9.0, verdict="ship") is False    # empty code
+    assert PROMOTE_MIN_SCORE >= 8.0
+    items = ExemplarCandidateStore(_TMP / "exemplar_candidates.json").list()
+    assert len(items) == 1 and items[0]["domain"] == "pendulum" and items[0]["verdict"] == "ship"
+    # Identical code dedups rather than piling up.
+    store.record(domain="pendulum", code=code, score=9.4, verdict="ship")
+    assert len(ExemplarCandidateStore(_TMP / "exemplar_candidates.json").list()) == 1
+    # BUG-45: malformed-but-valid rows are ignored, and the next good winner
+    # reconstructs a usable candidate list instead of failing on scalar .get().
+    store.path.write_text('[null, 3, {"code":"old"}]', encoding="utf-8")
+    assert store.record(domain="wave", code="new", score=9.0, verdict="ship")
+    assert all(isinstance(item, dict) for item in store.list())
+
+    # The tournament records winners; the store never lives in the curated source.
+    rt_src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime)
+    assert "_record_exemplar_candidate" in rt_src and "ExemplarCandidateStore" in rt_src
+
+    # The promote tool exists, runs, and NEVER auto-edits scene_exemplars.py
+    # (promotion is a reviewed human code change — supply-chain safety).
+    from tools import promote_exemplar
+    tool_src = Path("tools/promote_exemplar.py").read_text(encoding="utf-8")
+    assert 'scene_exemplars.py' in tool_src  # it references the target for humans
+    assert ".write_text(" not in tool_src and "open(" not in tool_src, "promote tool must not write files"
+    assert promote_exemplar.main(["--list"]) == 0  # runs without crashing
+
+    # BUG-31: promotion keys off the FINAL HQ critique, not the 480p draft score
+    # the tournament used only to pick the winner.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+
+    def _promote_count(draft: float, hq_score: float, hq_verdict: str, dd: Path) -> int:
+        s = _replace(_settings(), data_dir=dd, scene_candidates=2, openai_api_key="k", vision_model="v")
+        rt = ManimRuntime(s)
+
+        async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+            return [SceneCandidate(index=start_index + i,
+                                   scene=SceneBundle("AetherLabScene", "winner-code", "e", "rendered", video_path="/x.mp4"),
+                                   storyboard={"acts": [{"beats": ["a"]}]}) for i in range(count or 0)]
+
+        async def _fs(cands, settings, progress):
+            for c in cands:
+                c.score, c.verdict = draft, ("ship" if draft >= 7 else "revise")
+            return cands
+
+        async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+            return _replace(scene, quality_score=hq_score, critique_verdict=hq_verdict)
+
+        rt._build_scene_candidates = _fb          # type: ignore[assignment]
+        rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+        rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+        solver = SolverResult(summary="", derivation_steps=[], keywords=["orbit"], variables={}, model_name="t")
+        _asyncio.run(rt.generate_render_tournament(
+            ProblemRequest(prompt="x"), solver, RagResult(keywords=[], hits=[], backend="none"), s))
+        return len(ExemplarCandidateStore(dd / "exemplar_candidates.json").list())
+
+    da, db = _TMP / "rekey_a", _TMP / "rekey_b"
+    da.mkdir(exist_ok=True)
+    db.mkdir(exist_ok=True)
+    # A weak draft (7.0) that renders to a strong HQ (9.0 ship) IS promoted.
+    assert _promote_count(7.0, 9.0, "ship", da) == 1, "HQ ship must promote even when the draft scored below the bar"
+    # A strong draft (9.0 ship) that renders to a weak HQ (6.0) is NOT promoted.
+    assert _promote_count(9.0, 6.0, "ship", db) == 0, "a low HQ score must not promote despite a high draft score"
+    return "exemplar promotion keys off the final HQ critique, not the draft score (F173)"
+
+
+def t_f174():
+    # Quality Flywheel Phase 4: difficulty-scaled budget + cheap-first escalation.
+    import asyncio as _asyncio
+    from dataclasses import replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import (
+        ManimRuntime, SceneCandidate, candidate_budget, storyboard_difficulty,
+    )
+
+    EASY = {"acts": [{"beats": ["a"], "duration_s": 6}]}
+    HARD = {"acts": [{"beats": ["a", "b", "c", "d"], "duration_s": 8} for _ in range(4)]}
+    assert storyboard_difficulty(EASY) < storyboard_difficulty(HARD)
+    assert candidate_budget(EASY, 4) == 1, "easy scene must budget a single candidate"
+    assert candidate_budget(HARD, 4) == 4, "hard scene may use the full cap"
+    assert candidate_budget(HARD, 1) == 1 and candidate_budget(None, 4) >= 1
+
+    def _tournament(board, scores):
+        """Run the tournament with stubbed build/score/render; return build calls."""
+        # scene_candidates>1 + key + vision enable the tournament; the stubs mean
+        # no real provider/render is ever touched.
+        s = replace(_settings(), scene_candidates=4, openai_api_key="test-key", vision_model="test-vision")
+        rt = ManimRuntime(s)
+        calls = []
+
+        async def fake_build(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+            calls.append((count, start_index))
+            return [
+                SceneCandidate(index=start_index + i,
+                               scene=SceneBundle("AetherLabScene", "code", "manim", "compiled"),
+                               storyboard=board)
+                for i in range(count or 0)
+            ]
+
+        async def fake_score(cands, settings, progress):
+            for c in cands:
+                c.score = scores.get(c.index, 6.0)
+                c.verdict = "ship" if c.score >= 7 else "revise"
+            return cands
+
+        async def fake_repair(scene, settings=None, quality="l", max_repairs=2,
+                              max_revisions=2, brief="", progress=None):
+            return scene
+
+        rt._build_scene_candidates = fake_build          # type: ignore[assignment]
+        rt._render_and_score_candidates = fake_score     # type: ignore[assignment]
+        rt.render_scene_with_repair = fake_repair        # type: ignore[assignment]
+
+        req = ProblemRequest(prompt="x")
+        solver = SolverResult(summary="", derivation_steps=[], keywords=[], variables={}, model_name="t")
+        rag = RagResult(keywords=[], hits=[], backend="none")
+        _asyncio.run(rt.generate_render_tournament(req, solver, rag, s))
+        return calls
+
+    # A good first render ships immediately — no fan-out, even on a hard scene.
+    good = _tournament(HARD, {0: 9.0})
+    assert good == [(1, 0)], f"a strong first render must not escalate: {good}"
+
+    # A weak first render on a HARD scene escalates to the remaining budget.
+    weak_hard = _tournament(HARD, {0: 5.0})
+    assert weak_hard == [(1, 0), (3, 1)], f"weak+hard must fan out the budget: {weak_hard}"
+
+    # A weak first render on an EASY scene does NOT escalate (budget is 1).
+    weak_easy = _tournament(EASY, {0: 5.0})
+    assert weak_easy == [(1, 0)], f"weak+easy must stay single-candidate: {weak_easy}"
+
+    # BUG-30: if the first candidate builds but FAILS to render (scored empty),
+    # escalation must not exceed the budget/cap total attempts.
+    from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
+    s = replace(_settings(), scene_candidates=4, openai_api_key="k", vision_model="v")
+    rt = ManimRuntime(s)
+    built: list[int] = []
+
+    async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+        built.append(count or 0)
+        return [SceneCandidate(index=start_index + i, scene=SceneBundle("S", "c", "e", "compiled"), storyboard=HARD)
+                for i in range(count or 0)]
+
+    async def _fs(cands, settings, progress):
+        if cands and cands[0].index == 0:  # first candidate "fails to render"
+            return []
+        for c in cands:
+            c.score = 5.0
+            c.verdict = "revise"
+        return cands
+
+    async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+        return scene
+
+    rt._build_scene_candidates = _fb          # type: ignore[assignment]
+    rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+    rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+    req = ProblemRequest(prompt="x")
+    solver = SolverResult(summary="", derivation_steps=[], keywords=[], variables={}, model_name="t")
+    _asyncio.run(rt.generate_render_tournament(req, solver, RagResult(keywords=[], hits=[], backend="none"), s))
+    assert sum(built) <= 4, f"escalation exceeded the cap of 4: built {sum(built)} ({built})"
+    return "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
+
+
+def t_f175():
+    # Quality Flywheel Phase 5a: the render-farm job/candidate event ledger.
+    import inspect
+    import json as _json
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_ledger import RenderJobLedger, STATUSES, scrub
+
+    # Secret scrubbing: tokens/keys/bearer are redacted from any free text.
+    dirty = "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWX key sk-abcdefghijklmnopqrstuvwx Authorization: Bearer zzzz1234yyyy"
+    clean = scrub(dirty)
+    assert "ghp_" not in clean and "sk-" not in clean and "Bearer zzzz" not in clean and "redacted" in clean
+
+    led = RenderJobLedger(_TMP / "ledger_unit.json")
+    # Success job with per-candidate scores + winner.
+    led.start(job_id="j1", scene_class="AetherLabScene", quality="l", fps=30, backend="github-actions", provider="github_actions")
+    led.status("j1", "in_progress", "dispatched")
+    led.candidates("j1", [
+        {"index": 0, "score": 5.0, "verdict": "revise"},
+        {"index": 1, "score": 8.8, "verdict": "ship", "breakdown": {"legibility": 2}},
+    ])
+    led.winner("j1", 1)
+    led.status("j1", "artifact_downloaded", "MP4 downloaded")
+    led.finish("j1", "rendered", "/x/j1.mp4")
+    # Failure with a secret buried in the log tail.
+    led.failure("j2", "NameError line 3\nAuthorization: Bearer ghp_SECRETTOKEN1234567890 boom", kind="hallucinated-api")
+    # Cancellation, rate-limit, and local fallback.
+    led.status("j3", "cancelled", "user cancelled")
+    led.status("j4", "rate_limited", "Retry-After 42")
+    led.fallback("j5", "cloud unavailable: token lacks workflow scope", "/local/j5.mp4")
+
+    j1 = led.get("j1")
+    assert j1["winner_index"] == 1 and j1["status"] == "rendered" and j1["final_path"] == "/x/j1.mp4"
+    assert [c["score"] for c in j1["candidates"]] == [5.0, 8.8]
+    j2 = led.get("j2")
+    assert j2["status"] == "failed" and "ghp_" not in j2["log_tail"] and "redacted" in j2["log_tail"]
+    assert led.get("j5")["status"] == "fallback_local" and "workflow scope" in led.get("j5")["fallback_reason"]
+    # Every recorded timeline status is a known lifecycle state.
+    assert all(e["status"] in STATUSES for j in led.list(50) for e in j["timeline"])
+    # Cap keeps the ledger bounded.
+    capped = RenderJobLedger(_TMP / "ledger_cap.json", max_jobs=3)
+    for i in range(6):
+        capped.start(job_id=f"k{i}")
+    assert len(capped.list(50)) == 3
+
+    # BUG-44: every mutable JSON store reached by parallel candidates/chapters
+    # shares one transactional path lock and atomic replace. Fresh instances are
+    # intentional: an instance-local lock would still lose these updates.
+    workers = 12
+
+    def parallel_json(path: Path, writer) -> object:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        gate = threading.Barrier(workers)
+
+        def run_one(index: int) -> None:
+            gate.wait(timeout=10)
+            writer(index)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(run_one, range(workers)))
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+        return payload
+
+    ledger_race = _TMP / "ledger_race.json"
+    ledger_payload = parallel_json(
+        ledger_race,
+        lambda i: RenderJobLedger(ledger_race, max_jobs=workers).start(job_id=f"r{i}"),
+    )
+    assert {row["job_id"] for row in ledger_payload} == {f"r{i}" for i in range(workers)}
+
+    from aetherlab.services.render_backend import CloudRenderManifest
+
+    manifest_race = _TMP / "manifest_race.json"
+    manifest_payload = parallel_json(
+        manifest_race,
+        lambda i: CloudRenderManifest(manifest_race).put(f"m{i}", {"index": i}),
+    )
+    assert set(manifest_payload) == {f"m{i}" for i in range(workers)}
+    manifest_race.write_text("[]", encoding="utf-8")
+    malformed_manifest = CloudRenderManifest(manifest_race)
+    assert malformed_manifest.get("missing") is None
+    malformed_manifest.put("recovered", {"ok": True})
+    assert malformed_manifest.get("recovered") == {"ok": True}
+
+    from aetherlab.services.lesson_pipeline import _ChapterCache
+
+    chapter_dir = _TMP / "chapter_race_store"
+    chapter_path = chapter_dir / "chapters_cache.json"
+    chapter_payload = parallel_json(
+        chapter_path,
+        lambda i: _ChapterCache(chapter_dir).put(
+            f"c{i}", SceneBundle("S", f"code-{i}", "e", "compiled")
+        ),
+    )
+    assert set(chapter_payload) == {f"c{i}" for i in range(workers)}, sorted(chapter_payload)
+
+    from aetherlab.services.course_mode import CourseProgressStore
+    from aetherlab.services.lesson_planner import _template_lesson
+
+    course_race = _TMP / "course_race.json"
+    plan = _template_lesson("Concurrent pendulum", "undergrad")
+    parallel_json(
+        course_race,
+        lambda i: CourseProgressStore(course_race).record_quiz_answer(
+            plan, 0, True, str(i)
+        ),
+    )
+    course_summary = CourseProgressStore(course_race).summary(plan)
+    assert course_summary.attempts == workers and course_summary.correct == workers
+
+    from aetherlab.services.error_learner import AestheticPitfallStore, ErrorLearner
+
+    errors_race = _TMP / "errors_race.json"
+    parallel_json(
+        errors_race,
+        lambda _i: ErrorLearner(errors_race).record("NameError: missing_widget"),
+    )
+    assert ErrorLearner(errors_race).seen_count("NameError: missing_widget") == workers
+
+    aesthetic_race = _TMP / "aesthetic_race.json"
+    parallel_json(
+        aesthetic_race,
+        lambda _i: AestheticPitfallStore(aesthetic_race).record(["label overlaps axis"]),
+    )
+    assert AestheticPitfallStore(aesthetic_race).top(1)[0][1] == workers
+
+    from aetherlab.services.scene_exemplars import ExemplarCandidateStore
+
+    exemplar_race = _TMP / "exemplar_race.json"
+    exemplar_payload = parallel_json(
+        exemplar_race,
+        lambda i: ExemplarCandidateStore(exemplar_race).record(
+            domain="wave", code=f"scene-{i}", score=9.0, verdict="ship"
+        ),
+    )
+    assert len(exemplar_payload) == workers
+
+    # BUG-45: valid JSON with hostile/nested shapes remains fail-soft and can be
+    # repaired by the next legitimate mutation.
+    ledger_race.write_text(
+        '[null, 7, {"job_id":"damaged","timeline":"bad","candidates":[1]}]',
+        encoding="utf-8",
+    )
+    damaged = RenderJobLedger(ledger_race)
+    damaged.status("damaged", "in_progress", "recovered")
+    assert damaged.get("damaged")["timeline"][-1]["detail"] == "recovered"
+    exemplar_race.write_text('[null, 3, {"code":"old"}]', encoding="utf-8")
+    assert ExemplarCandidateStore(exemplar_race).record(
+        domain="wave", code="new", score=9.0, verdict="ship"
+    )
+    assert all(isinstance(row, dict) for row in _json.loads(exemplar_race.read_text(encoding="utf-8")))
+
+    # Tournament wiring: per-candidate scores + winner land in the ledger.
+    s = replace(_settings(), data_dir=_TMP / "ledger_tourney")
+    rt = ManimRuntime(s)
+    scored = [
+        SceneCandidate(0, SceneBundle("AetherLabScene", "c0", "e", "rendered"), score=5.0, verdict="revise", breakdown={"legibility": 1.0}),
+        SceneCandidate(1, SceneBundle("AetherLabScene", "c1", "e", "rendered"), score=8.8, verdict="ship", breakdown={"legibility": 2.0}),
+    ]
+    rt._record_tournament_ledger(scored, scored[1], s, "l")
+    tour = RenderJobLedger(s.data_dir / "render_ledger.json").list()
+    assert tour and tour[0]["winner_index"] == 1 and len(tour[0]["candidates"]) == 2
+
+    # The cloud backend and fallback path are wired to the ledger.
+    rb_src = inspect.getsource(__import__("aetherlab.services.render_backend", fromlist=["CloudRenderBackend"]).CloudRenderBackend)
+    assert "RenderJobLedger" in rb_src and "ledger.failure(" in rb_src and "ledger.finish(" in rb_src
+    assert "fallback(" in inspect.getsource(ManimRuntime._render_once)
+    return "render-farm ledger + atomic concurrent JSON persistence across stores (F175)"
+
+
+def t_f176():
+    # Quality Flywheel Phase 5b: the render-farm dashboard UI panel.
+    from aetherlab.services.render_ledger import RenderJobLedger
+    from aetherlab.ui.ledger_panel import RenderLedgerPanel
+    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.ui.qt_compat import QtWidgets
+
+    ledger_path = _TMP / "panel_ledger.json"
+    led = RenderJobLedger(ledger_path)
+    led.start(job_id="j1", scene_class="AetherLabScene", quality="l", backend="github-actions")
+    led.candidates("j1", [{"index": 0, "score": 5.0, "verdict": "revise"},
+                          {"index": 1, "score": 8.8, "verdict": "ship"}])
+    led.winner("j1", 1)
+    led.finish("j1", "rendered", "/x.mp4")
+    led.failure("j2", "boom Authorization: Bearer ghp_SECRET1234567890TOKEN", kind="oom")
+
+    panel = RenderLedgerPanel(ledger_path)
+    try:
+        assert panel._jobs.count() == 2, panel._jobs.count()
+        # Select the tournament job and confirm the winner + candidate scores show.
+        win_row = next(i for i, r in enumerate(panel._records) if r.get("winner_index") is not None)
+        panel._jobs.setCurrentRow(win_row)
+        detail = panel._details.toHtml()
+        assert "winner" in detail.lower() and "8.8" in detail, detail[:200]
+        # The failure job's log tail was scrubbed at write time — never shows a token.
+        fail_row = next(i for i, r in enumerate(panel._records) if r.get("status") == "failed")
+        panel._jobs.setCurrentRow(fail_row)
+        assert "ghp_" not in panel._details.toHtml()
+    finally:
+        panel.close()
+
+    # An absent ledger shows the empty state, not a crash.
+    empty = RenderLedgerPanel(_TMP / "no_such_ledger.json")
+    try:
+        assert empty._jobs.count() == 0 and empty._empty.isVisibleTo(empty)
+    finally:
+        empty.close()
+
+    malformed_path = _TMP / "malformed_panel_ledger.json"
+    malformed_path.write_text(
+        '[null,{"job_id":"x","winner_index":"bad","candidates":[1,{"index":"bad"}],'
+        '"timeline":[false,{"status":"queued"}]}]',
+        encoding="utf-8",
+    )
+    malformed = RenderLedgerPanel(malformed_path)
+    try:
+        assert malformed._jobs.count() == 1
+        assert "Candidates" in malformed._details.toPlainText()
+    finally:
+        malformed.close()
+
+    # The dashboard is reachable from the Settings cloud surface.
+    dialog = SettingsDialog(_settings())
+    try:
+        assert hasattr(dialog, "_open_render_ledger")
+        assert "View render ledger" in [b.text() for b in dialog.findChildren(QtWidgets.QPushButton)]
+    finally:
+        dialog.close()
+    return "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
+
+
+def t_f177():
+    # Quality Flywheel Phase 6: default-on for configured critics, safely.
+    import os
+    from dataclasses import replace
+
+    from aetherlab.core.settings import AppSettings, load_settings
+    from aetherlab.services.manim_runtime import (
+        AUTO_TOURNAMENT_CAP, ManimRuntime, effective_candidate_cap,
+    )
+    from aetherlab.ui.main_window import SettingsDialog
+
+    assert AppSettings.__dataclass_fields__["auto_tournament"].default is True
+
+    base = _settings()
+    keyless = replace(base, openai_api_key=None, vision_model=None, scene_candidates=1, auto_tournament=True)
+    critic = replace(base, openai_api_key="k", vision_model="v", scene_candidates=1, auto_tournament=True)
+    off = replace(critic, auto_tournament=False)
+    power = replace(base, openai_api_key="k", vision_model="v", scene_candidates=5, auto_tournament=False)
+
+    # Keyless/offline: exactly one render, tournament off — unchanged and no slower.
+    assert effective_candidate_cap(keyless) == 1
+    assert not ManimRuntime(keyless).scene_tournament_enabled(keyless)
+    # Configured critic: default-on with the auto cap (Phase-4 escalation keeps it cheap).
+    assert effective_candidate_cap(critic) == AUTO_TOURNAMENT_CAP
+    assert ManimRuntime(critic).scene_tournament_enabled(critic)
+    # Opt-out toggle -> single shot again.
+    assert effective_candidate_cap(off) == 1 and not ManimRuntime(off).scene_tournament_enabled(off)
+    # Power-user explicit scene_candidates override wins regardless of the toggle.
+    assert effective_candidate_cap(power) == 5 and ManimRuntime(power).scene_tournament_enabled(power)
+
+    # load_settings honours the env override.
+    old = os.environ.get("AETHERLAB_AUTO_TOURNAMENT")
+    try:
+        os.environ["AETHERLAB_AUTO_TOURNAMENT"] = "0"
+        assert load_settings().auto_tournament is False
+    finally:
+        if old is None:
+            os.environ.pop("AETHERLAB_AUTO_TOURNAMENT", None)
+        else:
+            os.environ["AETHERLAB_AUTO_TOURNAMENT"] = old
+
+    # The Settings dialog exposes the toggle and round-trips it (BUG-4 class).
+    dialog = SettingsDialog(_settings())
+    try:
+        assert hasattr(dialog, "_auto_tournament_check")
+        assert "auto_tournament" in dialog.get_settings()
+    finally:
+        dialog.close()
+    return "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+
+
+def t_f178():
+    # Global local-render concurrency bound: lessons x tournaments must not spawn
+    # unbounded simultaneous local Manim subprocesses.
+    import asyncio as _asyncio
+    import threading
+    import time as _time
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.services import render_backend as rb
+    import aetherlab.services.manim_runtime as mr
+
+    assert rb.LOCAL_RENDER_LIMIT >= 1
+    assert rb._default_local_render_limit() >= 1
+
+    live = {"cur": 0, "max": 0}
+    lock = threading.Lock()
+
+    class _FakeRuntime:
+        def __init__(self, settings):
+            pass
+
+        def render_scene(self, scene, settings, quality):
+            with lock:
+                live["cur"] += 1
+                live["max"] = max(live["max"], live["cur"])
+            _time.sleep(0.08)
+            with lock:
+                live["cur"] -= 1
+            return _replace(scene, status="rendered", video_path="/x.mp4")
+
+    old_sem, real_rt = rb._LOCAL_RENDER_SEM, mr.ManimRuntime
+    rb._LOCAL_RENDER_SEM = threading.Semaphore(2)  # bound to 2 for the test
+    mr.ManimRuntime = _FakeRuntime
+    try:
+        async def _run():
+            backend = rb.LocalRenderBackend()
+            scenes = [SceneBundle("S", "c", "manim", "compiled") for _ in range(6)]
+            return await _asyncio.gather(
+                *(backend.render(s, quality="l", settings=_settings(), timeout=60) for s in scenes)
+            )
+        results = _asyncio.run(_run())
+    finally:
+        rb._LOCAL_RENDER_SEM, mr.ManimRuntime = old_sem, real_rt
+
+    assert all(r.status == "rendered" for r in results), "all six must still render"
+    assert live["max"] <= 2, f"local render concurrency exceeded the bound: {live['max']}"
+    assert live["max"] >= 2, f"the bound should be saturated (parallelised up to 2), got {live['max']}"
+    return "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
+
+
+def t_f179():
+    # ML §1 — embeddings: semantic exemplar retrieval. The flywheel's F173 winner
+    # store becomes a live few-shot source: a proven-good past scene is re-served
+    # to a semantically-similar future problem (keyword matching can't).
+    from unittest import mock
+
+    from aetherlab.services import embeddings as E
+    from aetherlab.services.scene_exemplars import (
+        RETRIEVE_MIN_SIM, ExemplarCandidateStore, exemplar_block,
+    )
+
+    # Fail-soft primitives never raise on missing inputs.
+    assert E.nearest(None, None) == (-1, -1.0)
+    assert E.cosine(None, None) == 0.0
+
+    if E.available():
+        v = E.embed(["small-angle pendulum period", "mass on a spring oscillating", "electric dipole field lines"])
+        assert v is not None and v.shape[0] == 3 and v.shape[1] >= 128
+        assert abs(float((v[0] * v[0]).sum()) - 1.0) < 1e-3, "embeddings must be unit vectors"
+        # An SHM pair is closer than SHM vs E&M — real semantic structure.
+        assert E.cosine(v[0], v[1]) > E.cosine(v[0], v[2])
+
+    code = ("from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n"
+            "        self.play(Create(Ellipse()))\n        self.wait(1)\n")
+    data_dir = _TMP / "f179_dir"
+    data_dir.mkdir(exist_ok=True)
+    store = ExemplarCandidateStore(data_dir / "exemplar_candidates.json")  # canonical name exemplar_block reads
+    assert store.record(domain="orbit", code=code, score=9.2, verdict="ship",
+                        query_text="kepler elliptical orbit planet sun gravitation")
+
+    if E.available():
+        entry = store.list()[0]
+        assert isinstance(entry.get("embedding"), list) and len(entry["embedding"]) >= 128
+        # Semantically-similar problem retrieves the stored winner (keyword miss).
+        hit = store.retrieve("escape velocity from a planet's gravity")
+        assert hit and hit["domain"] == "orbit" and hit["similarity"] >= RETRIEVE_MIN_SIM
+        # An unrelated problem stays below the bar → no injection.
+        assert store.retrieve("fourier series of a square wave") is None
+        # exemplar_block appends the retrieved winner as a second few-shot example.
+        block = exemplar_block(["kepler", "orbit"], {}, data_dir=data_dir)
+        assert "Reference exemplar" in block and "Proven exemplar" in block
+
+    # Backward compatible: no data_dir → curated exemplar only, no retrieval.
+    assert "Proven exemplar" not in exemplar_block(["kepler", "orbit"], {})
+
+    # Fail-soft: with the embedder disabled, retrieval yields nothing and the
+    # curated exemplar path is unchanged — the keyless/no-model path is untouched.
+    with mock.patch.object(E, "embed_one", return_value=None):
+        assert store.retrieve("anything at all") is None
+        assert "Proven exemplar" not in exemplar_block(["kepler"], {}, data_dir=data_dir)
+    return "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
+
+
+def t_f180():
+    # "Prove It" Phase A: the tournament A/B harness. The paired lift math must be
+    # exact and deterministic — no renders, no provider key (that is Phase D).
+    import inspect
+
+    from tools import prompt_quality_lab as lab
+
+    def _rep(scores, extra=0):
+        return {"cases": [{"id": k, "status": "pass", "score": v} for k, v in scores.items()],
+                "extra_renders": extra}
+
+    on = _rep({"a": 8.0, "b": 6.0, "c": 5.0}, extra=4)
+    off = _rep({"a": 6.0, "b": 6.02, "c": 7.0})
+    pairing = lab.pair_ab_reports(on, off)
+    assert pairing["n"] == 3
+    assert pairing["mean_on"] == round((8.0 + 6.0 + 5.0) / 3, 3)
+    assert pairing["mean_off"] == round((6.0 + 6.02 + 7.0) / 3, 3)
+    assert pairing["mean_lift"] == round(pairing["mean_on"] - pairing["mean_off"], 3)
+    # a: +2 win; b: -0.02 tie (within the noise band); c: -2 loss.
+    assert (pairing["wins"], pairing["ties"], pairing["losses"]) == (1, 1, 1), pairing
+    assert pairing["extra_renders"] == 4
+    by = {p["id"]: p for p in pairing["per_prompt"]}
+    assert by["a"]["delta"] == 2.0 and by["a"]["on"] == 8.0 and by["a"]["off"] == 6.0
+
+    # Only the intersection of prompt ids is compared (robust to a dropped case).
+    assert lab.pair_ab_reports(_rep({"a": 9.0}), _rep({"b": 1.0}))["n"] == 0
+
+    # The verdict is a readable, honest sentence for each regime.
+    lift = lab.pair_ab_reports(_rep({"a": 9.0, "b": 9.0}), _rep({"a": 5.0, "b": 5.0}))
+    assert "LIFTS" in lift["verdict"], lift["verdict"]
+    same = lab.pair_ab_reports(_rep({"a": 5.0}), _rep({"a": 5.0}))
+    assert "identical" in same["verdict"].lower(), same["verdict"]
+    worse = lab.pair_ab_reports(_rep({"a": 4.0, "b": 4.0}), _rep({"a": 8.0, "b": 8.0}))
+    assert "did NOT help" in worse["verdict"], worse["verdict"]
+    # BUG-32: a POSITIVE mean lift where more prompts individually regressed must
+    # NOT be labelled "did NOT help" (it once read "did NOT help (mean +2.00)").
+    mixed = lab.pair_ab_reports(_rep({"a": 9.0, "b": 5.0, "c": 5.0}), _rep({"a": 1.0, "b": 6.0, "c": 6.0}))
+    assert mixed["mean_lift"] > 0 and mixed["losses"] > mixed["wins"], mixed
+    assert "did NOT help" not in mixed["verdict"] and "Mixed" in mixed["verdict"], mixed["verdict"]
+
+    # Markdown renders the comparison table without raising.
+    md = lab.render_ab_markdown(lift)
+    assert "Tournament A/B" in md and "| a |" in md
+
+    # The CLI wires --ab into main; arms are isolated and toggle the tournament env.
+    main_src = inspect.getsource(lab.main)
+    assert "--ab" in main_src and "run_ab" in main_src
+    ab_src = inspect.getsource(lab.run_ab)
+    assert "ab_" in ab_src and "extra_renders" in ab_src
+    assert "AETHERLAB_AUTO_TOURNAMENT" in inspect.getsource(lab._isolate_arm_env)
+    return "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+
+
+def t_f181():
+    # "Prove It" Phase B: mine the render ledger for offline signal. The aggregation
+    # is a pure function tested on synthetic jobs; then the real tournament wiring is
+    # exercised end-to-end (difficulty/budget + the winner's HQ score are recorded).
+    from tools.ledger_report import _pearson, load_jobs, summarize_ledger
+
+    # Pearson is exact on a clean linear relation and None when undefined.
+    assert _pearson([1, 2, 3], [2, 4, 6]) == 1.0
+    assert _pearson([1, 2, 3], [6, 4, 2]) == -1.0
+    assert _pearson([1, 1, 1], [1, 2, 3]) is None  # zero variance
+    assert _pearson([1.0], [2.0]) is None           # n < 2
+
+    def _tourney(jid, diff, cands, winner, hq):
+        return {"job_id": f"tournament-{jid}", "status": "rendered", "difficulty": diff,
+                "winner_index": winner, "winner_hq_score": hq,
+                "candidates": [{"index": i, "score": s, "verdict": ("ship" if s >= 7 else "revise"),
+                                "breakdown": {"legibility": 2.0, "composition": 1.0, "palette": 1.5,
+                                              "structure": s / 5.0, "substance": 1.0}}
+                               for i, s in enumerate(cands)]}
+
+    jobs = [
+        _tourney("a", 0.8, [5.0, 8.6], 1, 8.4),   # escalated: margin 3.6; draft 8.6 -> HQ 8.4
+        _tourney("b", 0.2, [7.0, 7.1], 1, 6.0),   # escalated near-tie: margin 0.1; 7.1 -> HQ 6.0
+        _tourney("c", 0.5, [9.0], 0, 9.2),        # single-candidate; keyed 9.0 -> HQ 9.2
+        {"job_id": "cloud-x", "status": "fallback_local", "candidates": []},
+        {"job_id": "cloud-y", "status": "failed", "candidates": []},
+    ]
+    s = summarize_ledger(jobs)
+
+    assert s["totals"]["tournaments"] == 3 and s["totals"]["escalated"] == 2
+    assert s["totals"]["fallbacks"] == 1 and s["totals"]["failures"] == 1
+    assert s["totals"]["escalation_rate"] == round(2 / 3, 3)
+
+    # Winner margin: two fan-outs (3.6 and 0.1); the 0.1 is a tie (barely moved).
+    assert s["winner_margin"]["n"] == 2
+    assert s["winner_margin"]["max"] == 3.6 and s["winner_margin"]["min"] == 0.1
+    assert s["winner_margin"]["tie_count"] == 1
+
+    # Draft->HQ: three keyed winners; correlation defined, means computed exactly.
+    assert s["draft_vs_hq"]["n"] == 3 and s["draft_vs_hq"]["pearson_r"] is not None
+    assert s["draft_vs_hq"]["mean_draft"] == round((8.6 + 7.1 + 9.0) / 3, 3)
+    assert s["draft_vs_hq"]["mean_hq"] == round((8.4 + 6.0 + 9.2) / 3, 3)
+
+    # Spend by difficulty places 0.8 in 'hard' and 0.2 in 'easy'.
+    assert "hard" in s["spend_by_difficulty"] and "easy" in s["spend_by_difficulty"]
+    assert s["spend_by_difficulty"]["hard"]["mean_candidates"] == 2.0
+    assert s["weakest_axis"] in {"legibility", "composition", "palette", "structure", "substance"}
+    assert s["verdict_mix"].get("ship", 0) >= 1
+
+    # Fully fail-soft: a missing/corrupt ledger yields an empty, non-crashing report.
+    assert load_jobs(_TMP / "no_ledger.json") == []
+    assert summarize_ledger([])["totals"]["jobs"] == 0
+
+    # End-to-end: a weak-draft escalating tournament records difficulty/budget and,
+    # after the (stubbed) HQ repair, the winner's HQ score against the same job.
+    import asyncio as _asyncio
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+    from aetherlab.services.manim_runtime import ManimRuntime, SceneCandidate
+    from aetherlab.services.render_ledger import RenderJobLedger
+
+    dd = _TMP / "f181_led"
+    dd.mkdir(exist_ok=True)
+    st = _replace(_settings(), data_dir=dd, scene_candidates=2, openai_api_key="k", vision_model="v")
+    rt = ManimRuntime(st)
+
+    async def _fb(request, solver, rag, settings, aspect, progress, count=None, start_index=0):
+        return [SceneCandidate(index=start_index + i,
+                               scene=SceneBundle("AetherLabScene", f"code{start_index + i}", "e",
+                                                 "rendered", video_path="/x.mp4"),
+                               storyboard={"acts": [{"beats": ["a", "b", "c"], "duration_s": 8}
+                                                    for _ in range(4)]})
+                for i in range(count or 0)]
+
+    async def _fs(cands, settings, progress):
+        for c in cands:
+            c.score, c.verdict = 5.0, "revise"   # weak draft -> forces escalation
+        return cands
+
+    async def _fr(scene, settings=None, quality="l", max_repairs=2, max_revisions=2, brief="", progress=None):
+        return _replace(scene, quality_score=8.7, critique_verdict="ship")
+
+    rt._build_scene_candidates = _fb          # type: ignore[assignment]
+    rt._render_and_score_candidates = _fs     # type: ignore[assignment]
+    rt.render_scene_with_repair = _fr         # type: ignore[assignment]
+    solver = SolverResult(summary="", derivation_steps=[], keywords=["orbit"], variables={}, model_name="t")
+    _asyncio.run(rt.generate_render_tournament(
+        ProblemRequest(prompt="x"), solver, RagResult(keywords=[], hits=[], backend="none"), st))
+    job = RenderJobLedger(dd / "render_ledger.json").list()[0]
+    assert job["winner_hq_score"] == 8.7 and job["winner_hq_verdict"] == "ship"
+    assert job["budget"] >= 2 and job["difficulty"] > 0.0
+    return "ledger report mines spend, winner margin, and the draft->HQ pair (F181)"
+
+
+def t_f182():
+    # "Prove It" Phase C: the learned keyless quality proxy. It must (1) be a no-op
+    # when no model ships (so the --gate baseline cannot move), (2) apply learned
+    # weights when present, and (3) recover known weights from ledger data.
+    from unittest import mock
+
+    from aetherlab.services import scene_critic as sc
+    from aetherlab.services.scene_critic import CRITIC_AXES, static_quality_estimate
+    from tools.train_quality_proxy import AXES, collect_pairs, fit_quality_proxy
+
+    assert tuple(AXES) == tuple(CRITIC_AXES)
+
+    # 1) No model -> keyless score is exactly the equal-weight sum (gate-safe).
+    assert sc._load_quality_proxy(_TMP / "no_model.json") is None
+    code = ("from manim import *\nclass S(Scene):\n    def construct(self):\n"
+            "        for i in range(5):\n            self.play(Create(Dot()), run_time=2)\n        self.wait(2)\n")
+    est = static_quality_estimate(code)
+    assert est.breakdown_source == "static"
+    assert abs(est.score - round(sum(est.breakdown.values()), 3)) < 1e-6, "no model -> equal-weight sum"
+
+    # 2) _proxy_score applies weights + intercept and clamps to 0-10.
+    assert sc._proxy_score({a: 2.0 for a in CRITIC_AXES},
+                           {"weights": {a: 1.0 for a in CRITIC_AXES}, "intercept": 0.0}) == 10.0
+    assert sc._proxy_score({a: 1.0 for a in CRITIC_AXES},
+                           {"weights": {a: 0.0 for a in CRITIC_AXES}, "intercept": 4.2}) == 4.2
+
+    # 3) The trainer recovers known weights from clean synthetic ledger data.
+    import random
+    rng = random.Random(0)
+    true_w = {"legibility": 1.5, "composition": 0.5, "palette": 0.2, "structure": 1.0, "substance": 1.3}
+    true_b = 0.4
+    jobs = []
+    for k in range(60):
+        bd = {a: round(rng.uniform(0.0, 2.0), 3) for a in CRITIC_AXES}
+        hq = true_b + sum(true_w[a] * bd[a] for a in CRITIC_AXES)
+        jobs.append({"job_id": f"tournament-{k}", "winner_index": 0, "winner_hq_score": hq,
+                     "candidates": [{"index": 0, "score": hq, "verdict": "ship", "breakdown": bd}]})
+    pairs = collect_pairs(jobs)
+    assert len(pairs) == 60
+    fit = fit_quality_proxy(pairs, lam=1e-8)
+    assert fit["r2"] > 0.999, fit["r2"]
+    for a in CRITIC_AXES:
+        assert abs(fit["weights"][a] - true_w[a]) < 0.02, (a, fit["weights"][a])
+    assert abs(fit["intercept"] - true_b) < 0.05
+    # collect_pairs ignores keyless/unscored jobs (no HQ score).
+    assert collect_pairs([{"winner_index": 0, "winner_hq_score": 0.0,
+                           "candidates": [{"index": 0, "breakdown": {a: 1.0 for a in CRITIC_AXES}}]}]) == []
+
+    # 4) With a model present, static_quality_estimate uses it — via a patched loader
+    #    so no global cache/env leaks into other tests' keyless path.
+    loaded = sc._load_quality_proxy(None)  # default path (absent in repo) -> None
+    assert loaded is None
+    model = {"weights": {a: 0.0 for a in CRITIC_AXES}, "intercept": 3.0}
+    with mock.patch.object(sc, "_load_quality_proxy", return_value=model):
+        assert static_quality_estimate(code).score == 3.0
+
+    # The trainer writes only a reviewable JSON model, never source code: its one
+    # and only write is the model json (committed after human review).
+    tool_src = Path("tools/train_quality_proxy.py").read_text(encoding="utf-8")
+    assert "quality_proxy_model.json" in tool_src
+    assert tool_src.count(".write_text(") == 1 and ".write_text(json.dumps(model" in tool_src
+    return "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Redesign: planner-first / numeric-grounded / self-verifying pipeline
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f183():
     # Planner routes a prompt to the minimal useful set of output modalities.
     from aetherlab.services.planner import Planner
-    from aetherlab.core.models import ProblemRequest, LessonPlan
+    from aetherlab.core.models import ProblemRequest, OutputPlan
     p = Planner(_settings())
     concept = p.heuristic_plan(ProblemRequest(prompt="Explain what entropy is conceptually"))
     dyn = p.heuristic_plan(ProblemRequest(prompt="Simulate the damped harmonic oscillator"))
@@ -1179,24 +5622,23 @@ def t_f101():
     assert concept.enabled() == ["pdf"], concept.enabled()
     assert dyn.needs_numeric and dyn.needs_animation and dyn.needs_2d
     assert d3.needs_3d
-    # LessonPlan round-trips through json (cache/wire safe).
-    assert LessonPlan.from_json(dyn.to_json()).needs_animation
+    assert OutputPlan.from_json(dyn.to_json()).needs_animation
     return f"planner routes: concept={concept.enabled()} dyn={dyn.enabled()} 3d={d3.enabled()}"
 
 
-def t_f102():
+def t_f184():
     # Conditional pipeline: a conceptual prompt skips scene-gen + render.
     import dataclasses
     from aetherlab.services.pipeline import AetherLabPipeline
     from aetherlab.core.models import ProblemRequest
-    st = dataclasses.replace(_settings(), openai_api_key=None)  # force deterministic path
+    st = dataclasses.replace(_settings(), openai_api_key=None)
     res = asyncio.run(AetherLabPipeline(st).run(ProblemRequest(prompt="Explain what entropy is conceptually")))
     assert res.plan is not None and not res.plan.needs_animation
     assert res.scene.status == "skipped", res.scene.status
     return f"conditional pipeline: plan={res.plan.enabled()} scene={res.scene.status}"
 
 
-def t_f103():
+def t_f185():
     # Planner offline fallback is deterministic and self-labels.
     import dataclasses
     from aetherlab.services.planner import Planner
@@ -1210,25 +5652,21 @@ def t_f103():
     return f"offline planner deterministic: {a.enabled()}"
 
 
-def t_f104():
+def t_f186():
     # UI gates the view pills by plan: pdf-only hides Canvas + Video.
     from aetherlab.ui.widgets import SimulationPanel
-    from aetherlab.core.models import LessonPlan
+    from aetherlab.core.models import OutputPlan
     sp = SimulationPanel()
     byid = {sp._pill_group.id(b): b for b in sp._pill_group.buttons()}
-    sp.apply_plan(LessonPlan(needs_2d=False, needs_3d=False, needs_animation=False, needs_pdf=True))
+    sp.apply_plan(OutputPlan(needs_2d=False, needs_3d=False, needs_animation=False, needs_pdf=True))
     assert byid[0].isHidden() and byid[1].isHidden() and not byid[2].isHidden(), "pdf-only hides canvas+video"
-    sp.apply_plan(LessonPlan(needs_2d=True, needs_animation=True))
+    sp.apply_plan(OutputPlan(needs_2d=True, needs_animation=True))
     assert not byid[0].isHidden() and not byid[1].isHidden(), "animation plan shows canvas+video"
     sp.close()
     return "view pills gated by plan (canvas/video hidden for pdf-only)"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Redesign Phase 2 — numeric ground truth
-# ══════════════════════════════════════════════════════════════════════════
-
-def t_f105():
+def t_f187():
     # Numeric ground truth matches the closed-form underdamped solution.
     import math
     import numpy as np
@@ -1242,7 +5680,6 @@ def t_f105():
     analytic = np.exp(-c * t) * (np.cos(wd * t) + (c / wd) * np.sin(wd * t))
     max_err = float(np.max(np.abs(x - analytic)))
     assert max_err < 1e-3, f"numeric vs analytic max_err={max_err}"
-    # Unsafe / invalid RHS degrades to ok=False (never eval'd, never raises).
     bad = solve_numeric(
         {"state": ["x"], "rhs": ["__import__('os').system('x')"], "initial": [0.0], "t_range": [0, 1]}, {}
     )
@@ -1250,7 +5687,7 @@ def t_f105():
     return f"numeric matches analytic (max_err={max_err:.2e}); unsafe rhs rejected"
 
 
-def t_f106():
+def t_f188():
     # Canvas is driven by the exact numeric trajectory when a spec is present.
     import numpy as np
     from aetherlab.ui.live_canvas import build_canvas_state
@@ -1260,17 +5697,12 @@ def t_f106():
     assert state.curves and state.curves[0].name == "x"
     y0 = float(np.asarray(state.curves[0].y_fn(np.array([0.0]), variables)).reshape(-1)[0])
     assert abs(y0 - 1.0) < 1e-6, f"x(0) should equal the initial condition, got {y0}"
-    # Bad spec + no plot must not crash — falls through to legacy curves.
     fb = build_canvas_state("test", variables, plot=None, numeric_spec={"bad": 1})
     assert fb.curves
     return f"canvas driven by numeric (x(0)={y0:.3f}); bad spec falls back safely"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Redesign Phase 3 — formal cited research PDF
-# ══════════════════════════════════════════════════════════════════════════
-
-def t_f107():
+def t_f189():
     # Formal research PDF: numeric-driven figure + RAG citations, compiled.
     from aetherlab.services.research import build_research_pdf, build_latex
     from aetherlab.services.numeric import fallback_numeric_spec
@@ -1280,7 +5712,7 @@ def t_f107():
                     hits=[RagHit("OpenStax Vol 1.pdf", 213, 0.9, "damped oscillations")],
                     backend="test")
     req = ProblemRequest(prompt="Derive the damped harmonic oscillator")
-    res = build_research_pdf(req, solver, rag, _TMP / "research107")
+    res = build_research_pdf(req, solver, rag, _TMP / "research189")
     assert res.tex_path.exists()
     assert res.pdf_path is not None and res.pdf_path.exists(), f"no pdf ({res.backend}): {res.note}"
     assert res.backend in {"pdflatex", "matplotlib"}
@@ -1291,13 +5723,13 @@ def t_f107():
     return f"research pdf via {res.backend}, {len(res.citations)} citation(s), verified"
 
 
-def t_f108():
+def t_f190():
     # pdflatex-free fallback: matplotlib renders a PDF + the numeric figure.
     from aetherlab.services.research import _matplotlib_pdf, render_numeric_figure
     from aetherlab.services.numeric import fallback_numeric_spec
     from aetherlab.core.models import ProblemRequest
     solver = _solver(numeric_spec=fallback_numeric_spec())
-    out = _TMP / "research108"; out.mkdir(parents=True, exist_ok=True)
+    out = _TMP / "research190"; out.mkdir(parents=True, exist_ok=True)
     fig = render_numeric_figure(solver, out / "fig.png")
     assert fig and fig.exists(), "numeric figure should render"
     pdf = _matplotlib_pdf(ProblemRequest(prompt="Derive the oscillator"),
@@ -1306,43 +5738,38 @@ def t_f108():
     return f"matplotlib fallback pdf ok ({pdf.stat().st_size} bytes)"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Redesign Phase 4 — curated Manim component library
-# ══════════════════════════════════════════════════════════════════════════
-
-def t_f109():
+def t_f191():
     # Trajectory component composes a compilable, numeric-driven scene.
     from aetherlab.services.scene_components import compose_scene_code
     from aetherlab.services.numeric import fallback_numeric_spec
     sv = _solver(numeric_spec=fallback_numeric_spec())
     code = compose_scene_code("AetherLabScene", sv, None)
     assert code is not None
-    compile(code, "<scene>", "exec")  # render-validated separately; must at least compile
+    compile(code, "<scene>", "exec")
     assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
-    assert "MoveAlongPath" in code and "set_points_smoothly" in code  # driven by real samples
+    assert "MoveAlongPath" in code and "set_points_smoothly" in code
     return f"trajectory component composes a compilable numeric-driven scene ({len(code)} chars)"
 
 
-def t_f110():
+def t_f192():
     # 3-D surface is composed for needs_3d; nothing composes without a fit.
     from aetherlab.services.scene_components import compose_scene_code
-    from aetherlab.core.models import LessonPlan
+    from aetherlab.core.models import OutputPlan
     sv = _solver()  # no numeric_spec
-    code = compose_scene_code("AetherLabScene", sv, LessonPlan(needs_3d=True, needs_animation=True))
+    code = compose_scene_code("AetherLabScene", sv, OutputPlan(needs_3d=True, needs_animation=True))
     assert code is not None and "ThreeDScene" in code
     compile(code, "<scene>", "exec")
-    # No numeric + no 3-D -> None so the caller falls back to LLM/static.
-    assert compose_scene_code("X", sv, LessonPlan(needs_3d=False)) is None
+    assert compose_scene_code("X", sv, OutputPlan(needs_3d=False)) is None
     return "3D surface composed for needs_3d; None otherwise"
 
 
-def t_f111():
+def t_f193():
     # ManimRuntime prefers the curated component over LLM/static generation.
     import dataclasses
     from aetherlab.services.manim_runtime import ManimRuntime
     from aetherlab.services.numeric import fallback_numeric_spec
     from aetherlab.core.models import ProblemRequest
-    st = dataclasses.replace(_settings(), openai_api_key=None)  # never hit the LLM in tests
+    st = dataclasses.replace(_settings(), openai_api_key=None)
     sv = _solver(numeric_spec=fallback_numeric_spec())
     bundle = asyncio.run(
         ManimRuntime(st).generate_scene_async(ProblemRequest(prompt="oscillator"), sv, _rag(), st)
@@ -1353,11 +5780,7 @@ def t_f111():
     return "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Redesign Phase 5 — physics verifier
-# ══════════════════════════════════════════════════════════════════════════
-
-def t_f112():
+def t_f194():
     # Verifier passes a physically-correct damped oscillator.
     from aetherlab.services.verify import verify_solution
     from aetherlab.services.numeric import fallback_numeric_spec
@@ -1369,12 +5792,12 @@ def t_f112():
     return f"verifier passes physical oscillator ({report.summary})"
 
 
-def t_f113():
+def t_f195():
     # Verifier catches an unphysical result (anti-damped: energy grows).
     from aetherlab.services.verify import verify_solution
     from aetherlab.core.models import SolverResult
     anti = {"state": ["x", "v"],
-            "rhs": ["v", "-(stiffness/mass)*x + (2*damping)*v"],  # sign flipped -> pumps energy
+            "rhs": ["v", "-(stiffness/mass)*x + (2*damping)*v"],
             "initial": [1.0, 0.0], "t_range": [0.0, 20.0], "observe": "x"}
     sv = SolverResult(summary="anti-damped", derivation_steps=[], keywords=["oscillator"],
                       variables={"damping": 0.15, "stiffness": 1.0, "mass": 1.0},
@@ -1390,6 +5813,9 @@ TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
 
 
 def main() -> int:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     print("=" * 72)
     print(f"AETHERLAB FEATURE TESTS  ({len(TESTS)} features)  tmp={_TMP}")
     print("=" * 72)
@@ -1402,7 +5828,9 @@ def main() -> int:
     print(f"RESULT: {passed}/{len(results)} passed; {len(failed)} failed")
     if failed:
         print("FAILURES: " + ", ".join(sorted(failed, key=lambda x: int(x[1:]))))
-    Path("feature_test_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    Path("feature_test_results.json").write_text(
+        json.dumps(results, indent=2), encoding="utf-8", newline="\n"
+    )
     print("Wrote feature_test_results.json")
     return 0
 

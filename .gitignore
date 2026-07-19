@@ -41,6 +41,11 @@ chroma/
 # Manim render cache
 media/
 
+# Pytest
+.pytest_cache/
+.pytest_tmp/
 # Generated sample artifacts (renders/exports, not source)
 *.mp4
 derivation.pdf
+.analysis/
+visual_regression/runs/

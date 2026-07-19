@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import traceback
-from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
 from aetherlab.core.models import (
-    LessonPlan,
+    OutputPlan,
     PipelineError,
     PipelineResult,
     ProblemRequest,
@@ -129,6 +128,10 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 return cached.rag
             self.status.emit("Worker B: searching local textbook memory.")
             rag = await LocalVectorRag(self.settings).search(solver.keywords)
+            if getattr(self.settings, "web_references", True):
+                self.status.emit("Worker B: fetching web references (Wikipedia).")
+                from aetherlab.services.pipeline import _merge_web_references
+                rag = await _merge_web_references(rag, solver.keywords, self.settings)
             cache.store_rag(key, rag)
             return rag
 
@@ -136,13 +139,27 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             if (
                 cached
                 and cached.scene
+                and _scene_cache_usable(cached.scene, self.settings)
                 and cached.scene.engine == current_engine
                 and cached.scene.status in {"compiled", "rendered"}
             ):
                 self.status.emit("Loaded generated Manim scene from SQLite cache.")
                 return cached.scene
             self.status.emit("Worker C: composing Manim scene (curated components / LLM).")
-            scene = await manim.generate_scene_async(self.request, solver, rag, self.settings, plan=plan)
+            if manim.scene_tournament_enabled(self.settings):
+                self.status.emit("Worker C: running scene candidate tournament.")
+                scene = await manim.generate_render_tournament(
+                    self.request,
+                    solver,
+                    rag,
+                    self.settings,
+                    quality=self.render_quality,
+                    brief=self.request.prompt,
+                    progress=lambda msg: self.status.emit(str(msg)),
+                    cancel_check=lambda: self._cancelled,
+                )
+            else:
+                scene = await manim.generate_scene_async(self.request, solver, rag, self.settings, plan=plan)
             cache.store_scene(key, scene)
             return scene
 
@@ -180,15 +197,26 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         quality_label = {"l": "480p", "m": "720p", "h": "1080p"}.get(self.render_quality, "480p")
         self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
         self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
+        from aetherlab.services.pipeline import _video_exists
+
         needs_render = scene.status == "compiled" or (
-            scene.status == "rendered" and not (scene.video_path and Path(scene.video_path).exists())
+            scene.status == "rendered" and not _video_exists(scene.video_path)
         )
+        if scene.status == "rendered" and needs_render:
+            scene.diagnostics.append("Cached rendered video missing; re-rendering.")
+            scene.status = "compiled"
+            scene.video_path = ""
         if needs_render:
             rendered_scene = await manim.render_scene_with_repair(
-                scene, self.settings, quality=self.render_quality
+                scene, self.settings, quality=self.render_quality,
+                brief=self.request.prompt,
+                progress=lambda msg: self.status.emit(str(msg)),
+                cancel_check=lambda: self._cancelled,
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
+            if any("Applied visual revision" in d for d in rendered_scene.diagnostics):
+                self.status.emit("Visual critic requested a revision; re-rendered.")
             cache.store_scene(key, rendered_scene)
         else:
             self.status.emit("Reusing cached rendered video.")
@@ -225,7 +253,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         if self.settings.library_path.exists():
             try:
                 ingestor = LibraryIngestor(self.settings)
-                count = ingestor.ingest()
+                count = ingestor.ingest(should_cancel=lambda: self._cancelled)
                 if count > 0:
                     self.status.emit(f"Ingested {count} chunks into ChromaDB.")
                     self.progress.emit(33, f"Ingested {count} chunks into ChromaDB")
@@ -238,3 +266,65 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         if solver.model_name not in {"deterministic-fallback", self.settings.llm_model}:
             return False
         return True
+
+
+class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
+    """Runs the topic-explainer LessonPipeline off the UI thread.
+
+    Cancellable (like the Solve path): ``cancel()`` sets a threading Event the
+    pipeline polls between chapters, so a long lesson stops promptly and returns
+    whatever rendered so far. ``regenerate`` bypasses the plan + chapter caches.
+    """
+
+    progress = QtCore.pyqtSignal(str, int, int)   # message, done, total
+    lesson_ready = QtCore.pyqtSignal(object)       # LessonBundle
+    failure = QtCore.pyqtSignal(object)            # PipelineError
+
+    def __init__(self, topic: str, settings: AppSettings, *,
+                 audience: str = "undergrad", quality: str = "l",
+                 regenerate: bool = False) -> None:
+        super().__init__()
+        self.topic = topic
+        self.settings = settings
+        self.audience = audience
+        self.quality = quality
+        self.regenerate = regenerate
+        import threading
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cancellation; the pipeline stops after the current chapter."""
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            from aetherlab.services.lesson_pipeline import LessonPipeline
+
+            pipeline = LessonPipeline(self.settings)
+            bundle = asyncio.run(
+                pipeline.run(
+                    self.topic,
+                    audience=self.audience,
+                    quality=self.quality,
+                    regenerate=self.regenerate,
+                    cancel_check=self._cancel.is_set,
+                    progress=lambda m, d, t: self.progress.emit(m, d, t),
+                )
+            )
+            self.lesson_ready.emit(bundle)
+        except Exception as exc:  # noqa: BLE001
+            self.failure.emit(
+                PipelineError(stage="lesson", message=str(exc), traceback=traceback.format_exc())
+            )
+
+
+def _scene_cache_usable(scene: SceneBundle, settings: AppSettings) -> bool:
+    if scene.status == "rendered":
+        from aetherlab.services.pipeline import _video_exists
+
+        if not _video_exists(scene.video_path):
+            return False
+    min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
+    if min_score <= 0:
+        return True
+    return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score

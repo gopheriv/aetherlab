@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import LessonPlan, PipelineResult, ProblemRequest, SceneBundle
+from aetherlab.core.models import OutputPlan, PipelineResult, ProblemRequest, SceneBundle
 from aetherlab.core.settings import AppSettings, load_settings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
@@ -41,25 +41,39 @@ class AetherLabPipeline:
         rag = cached.rag if cached and cached.rag else None
         if rag is None:
             rag = await self.rag.search(solver.keywords)
+            rag = await _merge_web_references(rag, solver.keywords, self.settings)
             self.cache.store_rag(key, rag)
 
         manim = self.manim
         current_engine, _ = manim.detect_engine()
 
         if not plan.needs_animation:
-            # Problem doesn't warrant a rendered animation — skip scene gen and
-            # the (expensive) Manim render entirely.
+            # Planner: this problem doesn't warrant a rendered animation — skip
+            # scene generation and the (expensive) Manim render entirely.
             scene = _skipped_scene(current_engine)
         else:
-            scene = cached.scene if cached and cached.scene else None
+            scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
             if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
-                scene = await manim.generate_scene_async(request, solver, rag, self.settings, plan=plan)
+                tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
+                if tournament_enabled(self.settings):
+                    scene = await manim.generate_render_tournament(
+                        request, solver, rag, self.settings, brief=request.prompt
+                    )
+                else:
+                    scene = await manim.generate_scene_async(request, solver, rag, self.settings, plan=plan)
                 self.cache.store_scene(key, scene)
+
+            if scene.status == "rendered" and not _video_exists(scene.video_path):
+                scene.diagnostics.append("Cached rendered video missing; re-rendering.")
+                scene.status = "compiled"
+                scene.video_path = ""
 
             # Render to MP4 (skip if a valid cached video already exists);
             # render-time API errors get a bounded LLM self-repair pass.
-            if scene.status == "compiled" or (scene.status == "rendered" and not _video_exists(scene.video_path)):
-                scene = await manim.render_scene_with_repair(scene, self.settings)
+            if scene.status == "compiled":
+                scene = await manim.render_scene_with_repair(
+                    scene, self.settings, brief=request.prompt
+                )
                 self.cache.store_scene(key, scene)
 
         return PipelineResult(
@@ -103,9 +117,37 @@ class AetherLabPipeline:
             return False
         return True
 
+    def _scene_cache_usable(self, scene) -> bool:
+        min_score = float(getattr(self.settings, "min_quality_score", 0.0) or 0.0)
+        if min_score <= 0:
+            return True
+        return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
+
 
 def _video_exists(video_path: str) -> bool:
-    return bool(video_path) and Path(video_path).exists()
+    if not video_path:
+        return False
+    path = Path(video_path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            stream = next(iter(container.streams.video), None)
+            if stream is None:
+                return False
+            for _frame in container.decode(stream):
+                return True
+            return False
+    except ImportError:
+        return size > 1024
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _skipped_scene(engine: str) -> SceneBundle:
@@ -116,4 +158,37 @@ def _skipped_scene(engine: str) -> SceneBundle:
         engine=engine,
         status="skipped",
         diagnostics=["Animation not required for this problem (planner)."],
+    )
+
+
+async def _merge_web_references(rag, keywords, settings):
+    """Append time-boxed web (Wikipedia) references to a RagResult. Fail-soft.
+
+    Local library hits stay first; web hits follow with origin="web". The
+    backend tag gains a "+web" suffix so the UI can show provenance.
+    """
+    import asyncio
+
+    from aetherlab.core.models import RagResult
+
+    if not getattr(settings, "web_references", True):
+        return rag
+    try:
+        from aetherlab.services.web_references import fetch_web_references
+
+        timeout = float(getattr(settings, "web_ref_timeout", 8.0))
+        web_hits = await asyncio.wait_for(
+            asyncio.to_thread(fetch_web_references, list(keywords), settings, 3),
+            timeout=timeout + 2,
+        )
+    except Exception:  # noqa: BLE001 — never let web refs break the pipeline
+        return rag
+    if not web_hits:
+        return rag
+    backend = rag.backend if "web" in rag.backend else f"{rag.backend}+web"
+    return RagResult(
+        keywords=rag.keywords or list(keywords),
+        hits=list(rag.hits) + web_hits,
+        backend=backend,
+        cached=rag.cached,
     )

@@ -21,11 +21,11 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=gpt-5.5 data_dir set timeout=60.0"
+    "note": "model=gpt-5.5 data_dir set timeout=60.0; bounded async client retries; manim-bot aliases load (BUG-34)"
   },
   "F07": {
     "status": "PASS",
-    "note": "save/load round-trip; None dropped; path honored"
+    "note": "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
   },
   "F08": {
     "status": "PASS",
@@ -37,7 +37,7 @@
   },
   "F10": {
     "status": "PASS",
-    "note": "dialog keys ok; Data path persists via config (BUG-4)"
+    "note": "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
   },
   "F11": {
     "status": "PASS",
@@ -69,7 +69,7 @@
   },
   "F18": {
     "status": "PASS",
-    "note": "cancel flag \u2192 _check_cancelled raises"
+    "note": "cancel stays honest and stops active render process promptly (BUG-49/56)"
   },
   "F19": {
     "status": "PASS",
@@ -81,7 +81,7 @@
   },
   "F21": {
     "status": "PASS",
-    "note": "closeEvent cancels + waits 5s"
+    "note": "close defers until pipeline and library QThreads finish (BUG-48/54)"
   },
   "F22": {
     "status": "PASS",
@@ -121,7 +121,7 @@
   },
   "F31": {
     "status": "PASS",
-    "note": "independent stage storage + column whitelist"
+    "note": "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)"
   },
   "F32": {
     "status": "PASS",
@@ -129,11 +129,11 @@
   },
   "F33": {
     "status": "PASS",
-    "note": "scene reused only on engine+status match"
+    "note": "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
   },
   "F34": {
     "status": "PASS",
-    "note": "_video_exists guards empty/missing"
+    "note": "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache"
   },
   "F35": {
     "status": "PASS",
@@ -169,7 +169,7 @@
   },
   "F43": {
     "status": "PASS",
-    "note": "ingest upserted 4; re-run 0 (incremental)"
+    "note": "ingest upserted 12; re-run 0; stale chunks purged on change"
   },
   "F44": {
     "status": "PASS",
@@ -181,15 +181,15 @@
   },
   "F46": {
     "status": "PASS",
-    "note": "incremental/full reindex via background worker"
+    "note": "index/download workers join app close barrier; cancel remains pending (BUG-54)"
   },
   "F47": {
     "status": "PASS",
-    "note": "starter dialog: 3 default book(s); cancel skips auto-index (BUG-6)"
+    "note": "starter dialog + cancel-safe completion: 3 defaults (BUG-54)"
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + free_disk_mb=244854 + skip-existing"
+    "note": "URL fallback + positive free_disk_mb + skip-existing"
   },
   "F49": {
     "status": "PASS",
@@ -201,7 +201,7 @@
   },
   "F51": {
     "status": "PASS",
-    "note": "static template compiles (2234 chars)"
+    "note": "static template compiles (1586 chars)"
   },
   "F52": {
     "status": "PASS",
@@ -217,11 +217,11 @@
   },
   "F55": {
     "status": "PASS",
-    "note": "tier=constrained fps=30"
+    "note": "tier=constrained fps=30; env override honored"
   },
   "F56": {
     "status": "PASS",
-    "note": "timeout_map + timeout/error statuses"
+    "note": "quality timeout statuses + whole process-tree termination (BUG-55)"
   },
   "F57": {
     "status": "PASS",
@@ -237,7 +237,7 @@
   },
   "F60": {
     "status": "PASS",
-    "note": "code viewer shows diagnostics prefixed with #"
+    "note": "diagnostics surfaced in the drawer (v2), code view stays clean"
   },
   "F61": {
     "status": "PASS",
@@ -313,7 +313,7 @@
   },
   "F79": {
     "status": "PASS",
-    "note": "history persists + reloads"
+    "note": "history persists; corrupt DB quarantined and rebuilt (BUG-52)"
   },
   "F80": {
     "status": "PASS",
@@ -341,7 +341,7 @@
   },
   "F86": {
     "status": "PASS",
-    "note": "compile_latex_to_pdf returned WindowsPath('C:/Users/sunak/AppData/Local/Temp/aetherlab_test_6p0hikvu/d.pdf') (None ok if no pdflatex)"
+    "note": "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)"
   },
   "F87": {
     "status": "PASS",
@@ -349,19 +349,19 @@
   },
   "F88": {
     "status": "PASS",
-    "note": "save video copies MP4"
+    "note": "video copy is backgrounded, cancellable, and atomic (BUG-57)"
   },
   "F89": {
     "status": "PASS",
-    "note": "gif export via ffmpeg w/ error handling"
+    "note": "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)"
   },
   "F90": {
     "status": "PASS",
-    "note": "QSS present (11421 chars)"
+    "note": "QSS present (15853 chars)"
   },
   "F91": {
     "status": "PASS",
-    "note": "responsive sizing formula"
+    "note": "responsive shell + command bar + media/canvas minimums fit small screens"
   },
   "F92": {
     "status": "PASS",
@@ -401,53 +401,381 @@
   },
   "F101": {
     "status": "PASS",
-    "note": "planner routes: concept=['pdf'] dyn=['numeric', '2d', 'animation', 'pdf'] 3d=['2d', '3d', 'animation', 'pdf']"
+    "note": "self-heal wired incl. timeout repair; non-compiled path safe (F101)"
   },
   "F102": {
     "status": "PASS",
-    "note": "conditional pipeline: plan=['pdf'] scene=skipped"
+    "note": "truncation guard raises in repair AND revise (F102)"
   },
   "F103": {
     "status": "PASS",
-    "note": "offline planner deterministic: ['numeric', '2d', 'animation', 'pdf']"
+    "note": "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)"
   },
   "F104": {
     "status": "PASS",
-    "note": "view pills gated by plan (canvas/video hidden for pdf-only)"
+    "note": "pitfall KB + persistent recurrence store + prompt wiring (F104)"
   },
   "F105": {
     "status": "PASS",
-    "note": "numeric matches analytic (max_err=3.98e-07); unsafe rhs rejected"
+    "note": "5 domains compile LaTeX-free; both fallback paths routed (F105)"
   },
   "F106": {
     "status": "PASS",
-    "note": "canvas driven by numeric (x(0)=1.000); bad spec falls back safely"
+    "note": "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
   },
   "F107": {
     "status": "PASS",
-    "note": "research pdf via pdflatex, 1 citation(s), verified"
+    "note": "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
   },
   "F108": {
     "status": "PASS",
-    "note": "matplotlib fallback pdf ok (60271 bytes)"
+    "note": "critique loop wired + fail-soft + final-frame sampling; sampled 3 frames via PyAV (F108)"
   },
   "F109": {
     "status": "PASS",
-    "note": "trajectory component composes a compilable numeric-driven scene (3591 chars)"
+    "note": "zoom anchors cursor; 120ms smooth-zoom animation wired"
   },
   "F110": {
     "status": "PASS",
-    "note": "3D surface composed for needs_3d; None otherwise"
+    "note": "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump"
   },
   "F111": {
     "status": "PASS",
-    "note": "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
+    "note": "snaps within 24px with (t,x,y); raw-coords fallback beyond"
   },
   "F112": {
     "status": "PASS",
-    "note": "verifier passes physical oscillator (3/3 physics checks passed.)"
+    "note": "one palette dict; zero stray hex in module body"
   },
   "F113": {
+    "status": "PASS",
+    "note": "viewport-independent sample cache; 1/t = 2 branches, no bridge"
+  },
+  "F114": {
+    "status": "PASS",
+    "note": "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated"
+  },
+  "F115": {
+    "status": "PASS",
+    "note": "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn"
+  },
+  "F116": {
+    "status": "PASS",
+    "note": "2x PNG written (73234 bytes) + signal"
+  },
+  "F117": {
+    "status": "PASS",
+    "note": "legend always shown, hit-testable, toggles visibility"
+  },
+  "F118": {
+    "status": "PASS",
+    "note": "mono param chip; 300ms fade only on first paint"
+  },
+  "F119": {
+    "status": "PASS",
+    "note": "cyan #22D3EE primary; stage/elev/hover/line-0 tokens; 56px rail"
+  },
+  "F120": {
+    "status": "PASS",
+    "note": "mathtext \u2192 pixmaps; symbol map; math/prose discriminator; safe on junk"
+  },
+  "F121": {
+    "status": "PASS",
+    "note": "hero banner: math\u2192pixmap, prose\u2192text; param symbols; ambient watermarks"
+  },
+  "F122": {
+    "status": "PASS",
+    "note": "parse repaired/revised/critique/duration; storyboard acts + hero bookmark"
+  },
+  "F123": {
+    "status": "PASS",
+    "note": "screening room widgets swapped in; code artifact + highlighter; act-click seeks"
+  },
+  "F124": {
+    "status": "PASS",
+    "note": "library spines + chunk counts + freshness; Settings vision\u00b7critique field"
+  },
+  "F125": {
+    "status": "PASS",
+    "note": "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)"
+  },
+  "F126": {
+    "status": "PASS",
+    "note": "merge: library-first + web-tagged; fail-soft on provider error; toggle wired"
+  },
+  "F127": {
+    "status": "PASS",
+    "note": "web/library card styling + dimming; provenance; backdrop; filament; settings toggle"
+  },
+  "F128": {
+    "status": "PASS",
+    "note": "ollama preset resolves; qwen gated; env wins (F128)"
+  },
+  "F129": {
+    "status": "PASS",
+    "note": "provider test is backgrounded + preset UI + CTA (0 local models) (BUG-53)"
+  },
+  "F130": {
+    "status": "PASS",
+    "note": "key_equations end-to-end: model\u2192fallback domains\u2192banner\u2192export (F130)"
+  },
+  "F131": {
+    "status": "PASS",
+    "note": "--version=1.0.0; rotating log; ico + taskbar wiring (F131)"
+  },
+  "F132": {
+    "status": "PASS",
+    "note": "LaTeX-aware prompts (latex=True); frozen manim relay + strict gate (F132)"
+  },
+  "F133": {
+    "status": "PASS",
+    "note": "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
+  },
+  "F134": {
+    "status": "PASS",
+    "note": "render isolated+disable_caching; discovery returns this render (F134)"
+  },
+  "F135": {
+    "status": "PASS",
+    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success; winner reuse (F135)"
+  },
+  "F136": {
+    "status": "PASS",
+    "note": "failure classified+dumped; failure_kind round-trips (F136)"
+  },
+  "F137": {
+    "status": "PASS",
+    "note": "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
+  },
+  "F138": {
+    "status": "PASS",
+    "note": "fit-to-video math + merge policy + fail-soft (avail=True) (F138)"
+  },
+  "F139": {
+    "status": "PASS",
+    "note": "narration derived from code+storyboard; wired + fail-soft (F139)"
+  },
+  "F140": {
+    "status": "PASS",
+    "note": "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)"
+  },
+  "F141": {
+    "status": "PASS",
+    "note": "lesson plan model round-trips; keyless domain templates coherent (F141)"
+  },
+  "F142": {
+    "status": "PASS",
+    "note": "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)"
+  },
+  "F143": {
+    "status": "PASS",
+    "note": "lesson pipeline: 4 chapters \u2192 assembled mp4; partial-render narration aligned (F143)"
+  },
+  "F144": {
+    "status": "PASS",
+    "note": "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)"
+  },
+  "F145": {
+    "status": "PASS",
+    "note": "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+  },
+  "F146": {
+    "status": "PASS",
+    "note": "aspect setup/evolution/math/recap \u2192 distinct, gate-passing scenes per domain (F146)"
+  },
+  "F147": {
+    "status": "PASS",
+    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'recap'] (F147)"
+  },
+  "F148": {
+    "status": "PASS",
+    "note": "produced lesson: cards + crossfades \u2192 11.8s 1280x720; chapter offsets [4.7, 7.9] past intro (F148)"
+  },
+  "F149": {
+    "status": "PASS",
+    "note": "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)"
+  },
+  "F150": {
+    "status": "PASS",
+    "note": "Learn cancellation reaches active chapter render and returns partial bundle (BUG-56)"
+  },
+  "F151": {
+    "status": "PASS",
+    "note": "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)"
+  },
+  "F152": {
+    "status": "PASS",
+    "note": "backend selection local/cloud/auto + stable cloud job ids (F152)"
+  },
+  "F153": {
+    "status": "PASS",
+    "note": "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)"
+  },
+  "F154": {
+    "status": "PASS",
+    "note": "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
+  },
+  "F155": {
+    "status": "PASS",
+    "note": "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
+  },
+  "F156": {
+    "status": "PASS",
+    "note": "cloud payload secret scan + token masking (F156)"
+  },
+  "F157": {
+    "status": "PASS",
+    "note": "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)"
+  },
+  "F158": {
+    "status": "PASS",
+    "note": "cloud render workflow + docs present; no cache:pip; bundle==file (F158)"
+  },
+  "F159": {
+    "status": "PASS",
+    "note": "precision-instrument graphic redesign hooks + notes (F159)"
+  },
+  "F160": {
+    "status": "PASS",
+    "note": "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+  },
+  "F161": {
+    "status": "PASS",
+    "note": "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
+  },
+  "F162": {
+    "status": "PASS",
+    "note": "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)"
+  },
+  "F163": {
+    "status": "PASS",
+    "note": "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
+  },
+  "F164": {
+    "status": "PASS",
+    "note": "feature-surface audit covers 69/69 current surfaces (F164)"
+  },
+  "F165": {
+    "status": "PASS",
+    "note": "tracker integrity: 195 features/195 stories/195 results/195 tests aligned (F165)"
+  },
+  "F166": {
+    "status": "PASS",
+    "note": "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+  },
+  "F167": {
+    "status": "PASS",
+    "note": "course progress persists quiz answers and updates lesson recommendation strip (F167)"
+  },
+  "F168": {
+    "status": "PASS",
+    "note": "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
+  },
+  "F169": {
+    "status": "PASS",
+    "note": "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
+  },
+  "F170": {
+    "status": "PASS",
+    "note": "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)"
+  },
+  "F171": {
+    "status": "PASS",
+    "note": "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
+  },
+  "F172": {
+    "status": "PASS",
+    "note": "aesthetic pitfall learning: critic issues feed the next generation prompt (F172)"
+  },
+  "F173": {
+    "status": "PASS",
+    "note": "exemplar promotion keys off the final HQ critique, not the draft score (F173)"
+  },
+  "F174": {
+    "status": "PASS",
+    "note": "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
+  },
+  "F175": {
+    "status": "PASS",
+    "note": "render-farm ledger + atomic concurrent JSON persistence across stores (F175)"
+  },
+  "F176": {
+    "status": "PASS",
+    "note": "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
+  },
+  "F177": {
+    "status": "PASS",
+    "note": "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+  },
+  "F178": {
+    "status": "PASS",
+    "note": "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
+  },
+  "F179": {
+    "status": "PASS",
+    "note": "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
+  },
+  "F180": {
+    "status": "PASS",
+    "note": "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+  },
+  "F181": {
+    "status": "PASS",
+    "note": "ledger report mines spend, winner margin, and the draft->HQ pair (F181)"
+  },
+  "F182": {
+    "status": "PASS",
+    "note": "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)"
+  },
+  "F183": {
+    "status": "PASS",
+    "note": "planner routes: concept=['pdf'] dyn=['numeric', '2d', 'animation', 'pdf'] 3d=['2d', '3d', 'animation', 'pdf']"
+  },
+  "F184": {
+    "status": "PASS",
+    "note": "conditional pipeline: plan=['pdf'] scene=skipped"
+  },
+  "F185": {
+    "status": "PASS",
+    "note": "offline planner deterministic: ['numeric', '2d', 'animation', 'pdf']"
+  },
+  "F186": {
+    "status": "PASS",
+    "note": "view pills gated by plan (canvas/video hidden for pdf-only)"
+  },
+  "F187": {
+    "status": "PASS",
+    "note": "numeric matches analytic (max_err=3.98e-07); unsafe rhs rejected"
+  },
+  "F188": {
+    "status": "PASS",
+    "note": "canvas driven by numeric (x(0)=1.000); bad spec falls back safely"
+  },
+  "F189": {
+    "status": "PASS",
+    "note": "research pdf via pdflatex, 1 citation(s), verified"
+  },
+  "F190": {
+    "status": "PASS",
+    "note": "matplotlib fallback pdf ok (60271 bytes)"
+  },
+  "F191": {
+    "status": "PASS",
+    "note": "trajectory component composes a compilable numeric-driven scene (3591 chars)"
+  },
+  "F192": {
+    "status": "PASS",
+    "note": "3D surface composed for needs_3d; None otherwise"
+  },
+  "F193": {
+    "status": "PASS",
+    "note": "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
+  },
+  "F194": {
+    "status": "PASS",
+    "note": "verifier passes physical oscillator (3/3 physics checks passed.)"
+  },
+  "F195": {
     "status": "PASS",
     "note": "verifier flags unphysical growth (1/3 physics checks passed.)"
   }

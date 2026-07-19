@@ -13,6 +13,10 @@ BG_DEEPEST = "#0A0A0F"
 BG_PANEL_1 = "#0D0D14"
 BG_PANEL_2 = "#13131A"
 BG_CANVAS_TOP = "#0F1520"
+STAGE = "#000000"        # v2: true-black screening-room letterbox
+ELEV = "#181822"         # v2: elevated controls / segmented fills
+HOVER_SURFACE = "#1C1C27"  # v2: hover surface
+LINE_0 = "#141A24"       # v2: faintest divider
 SURFACE_INPUT = "#0B0B12"
 SURFACE_INPUT_FOCUS = "#0E0E17"
 
@@ -24,11 +28,12 @@ TEXT_MID = "#94A3B8"
 TEXT_LOW = "#64748B"
 TEXT_ON_ACCENT = "#04141A"
 
-CYAN = "#06B6D4"
-CYAN_HOVER = "#22D3EE"
-CYAN_ACTIVE = "#0891B2"
-CYAN_TINT_10 = "rgba(6, 182, 212, 0.10)"
-CYAN_TINT_20 = "rgba(6, 182, 212, 0.20)"
+CYAN = "#22D3EE"          # v2 primary (v1 #06B6D4 kept as CYAN_DEEP)
+CYAN_DEEP = "#06B6D4"     # fills, spines, pressed states
+CYAN_HOVER = "#67E8F9"
+CYAN_ACTIVE = "#06B6D4"
+CYAN_TINT_10 = "rgba(34, 211, 238, 0.10)"
+CYAN_TINT_20 = "rgba(34, 211, 238, 0.20)"
 
 EMERALD = "#10B981"
 EMERALD_TINT_10 = "rgba(16, 185, 129, 0.10)"
@@ -40,8 +45,8 @@ ROSE = "#F43F5E"
 ROSE_HOVER = "#FB7185"
 ROSE_TINT_10 = "rgba(244, 63, 94, 0.10)"
 
-FONT_UI = "'Segoe UI', 'Inter', sans-serif"
-FONT_MONO = "'Cascadia Code', 'Consolas', monospace"
+FONT_UI = "DejaVu Sans"
+FONT_MONO = "DejaVu Sans"
 
 
 AETHERLAB_QSS = f"""
@@ -94,7 +99,7 @@ QToolButton#TitleIconButton {{
     border-radius: 6px;
     padding: 5px;
 }}
-QToolButton#TitleIconButton:hover {{ background-color: {BG_PANEL_2}; }}
+QToolButton#TitleIconButton:hover {{ background-color: {HOVER_SURFACE}; }}
 
 /* ═══════════════ Nav rail ═══════════════ */
 
@@ -113,7 +118,7 @@ QToolButton#NavRailItem {{
     letter-spacing: 0.3px;
     padding: 8px 2px;
 }}
-QToolButton#NavRailItem:hover {{ background-color: {BG_PANEL_2}; }}
+QToolButton#NavRailItem:hover {{ background-color: {HOVER_SURFACE}; }}
 QToolButton#NavRailItem:checked {{
     background-color: {CYAN_TINT_10};
     color: {CYAN};
@@ -348,7 +353,7 @@ QMenu::item {{
     padding: 8px 12px;
     border-radius: 4px;
 }}
-QMenu::item:selected {{ background-color: {BG_PANEL_1}; }}
+QMenu::item:selected {{ background-color: {HOVER_SURFACE}; }}
 
 /* ═══════════════ Inputs ═══════════════ */
 
@@ -431,13 +436,13 @@ QListWidget {{
 }}
 QListWidget::item {{
     background-color: {BG_PANEL_2};
-    border-bottom: 1px solid {BORDER_HAIRLINE};
+    border-bottom: 1px solid {LINE_0};
     color: {TEXT_HIGH};
     /* No padding: rows are embedded widgets (History/Library) that manage
        their own margins — QSS item padding offsets and clips them. */
     padding: 0;
 }}
-QListWidget::item:hover {{ background-color: {BG_PANEL_1}; }}
+QListWidget::item:hover {{ background-color: {HOVER_SURFACE}; }}
 QListWidget::item:selected {{
     background-color: {CYAN_TINT_10};
     color: {CYAN};
@@ -488,7 +493,7 @@ QPushButton#VideoControlBtn {{
     border-radius: 6px;
     padding: 5px;
 }}
-QPushButton#VideoControlBtn:hover {{ background-color: {BG_PANEL_1}; }}
+QPushButton#VideoControlBtn:hover {{ background-color: {ELEV}; }}
 
 QPushButton#VideoPlayBtn {{
     background-color: {CYAN};
@@ -541,4 +546,199 @@ QDialog {{
 QSplitter::handle {{ background-color: {BORDER_HAIRLINE}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
+
+/* ═══════════════ Focus rings (v2 §9: keyboard-first) ═══════════════ */
+/* A visible 1.5px cyan outline on every focusable control. */
+QComboBox:focus {{ border: 1.5px solid {CYAN}; }}
+QCheckBox:focus {{ outline: none; }}
+QCheckBox:focus::indicator {{ border: 1.5px solid {CYAN}; }}
+QPushButton#SecondaryButton:focus,
+QPushButton#GhostButton:focus,
+QPushButton#RunButton:focus,
+QPushButton#PrimaryButton:focus,
+QPushButton#CancelButton:focus {{ border: 1.5px solid {CYAN_HOVER}; }}
+QToolButton#NavRailItem:focus {{ background-color: {CYAN_TINT_10}; }}
+QSlider:focus {{ background: transparent; }}
+QSlider:focus::handle:horizontal {{ border: 2px solid {CYAN_HOVER}; }}
+
+/* ═══════════════ Command-bar focus filament ═══════════════ */
+/* The shell lifts to a cyan hairline while the prompt is focused. */
+QFrame#CommandBarShell[focused="true"] {{
+    border: 1px solid {CYAN};
+    background-color: {ELEV};
+}}
+
+/* ═════════════ Precision-instrument refinement pass ═════════════ */
+/* The appended rules intentionally override the older v2 base above. They keep
+   the cyan/math/stage DNA while tightening radius, focus, tabs, and telemetry
+   surfaces across widgets that still relied on platform defaults. */
+
+QFrame#CardFrame,
+QFrame#AnalysisCard,
+QFrame#CanvasFrame,
+QFrame#ListShell,
+QFrame#VideoControlsBar {{
+    border-radius: 8px;
+    background-color: {BG_PANEL_2};
+    border: 1px solid {LINE_0};
+}}
+
+QFrame#CardFrame:hover,
+QFrame#AnalysisCard:hover,
+QFrame#ListShell:hover {{
+    border-color: {BORDER_HAIRLINE};
+}}
+
+QFrame#AnalysisCard {{
+    background-color: {BG_PANEL_2};
+    border-top: 1px solid {CYAN_TINT_20};
+}}
+
+QWidget#SceneToolbar {{
+    background-color: {BG_PANEL_1};
+    border-bottom: 1px solid {LINE_0};
+}}
+
+QWidget#RunningStatusStrip {{
+    background-color: {BG_DEEPEST};
+    border-top: 1px solid {LINE_0};
+}}
+
+QFrame#SetupStrip,
+QFrame#LibraryEmptyState {{
+    background-color: {BG_PANEL_1};
+    border: 1px dashed {BORDER_STRONG};
+    border-radius: 8px;
+}}
+
+QWidget#BlueprintBackdrop {{
+    background-color: {BG_DEEPEST};
+}}
+
+QLabel#EquationBanner {{
+    background-color: {STAGE};
+    border: 1px solid {CYAN_TINT_20};
+    border-bottom: 2px solid {CYAN_DEEP};
+    border-radius: 8px;
+    color: {CYAN};
+    font-family: {FONT_MONO};
+    font-size: 18px;
+    padding: 18px 20px;
+}}
+
+QLabel#KeywordChip {{
+    border-radius: 6px;
+    border-color: {VIOLET};
+    background-color: {VIOLET_TINT_10};
+    padding: 3px 9px;
+}}
+
+QPushButton#ExampleChip {{
+    border-radius: 8px;
+    background-color: {ELEV};
+    border: 1px solid {LINE_0};
+    padding: 10px 14px;
+}}
+QPushButton#ExampleChip:hover {{
+    border-color: {CYAN};
+    background-color: {HOVER_SURFACE};
+}}
+
+QPushButton#PillTab {{
+    border-radius: 8px;
+    background-color: {BG_PANEL_1};
+    padding: 7px 14px;
+}}
+QPushButton#PillTab:checked {{
+    background-color: {CYAN_TINT_10};
+    border-color: {CYAN};
+    color: {CYAN};
+}}
+
+QFrame#CommandBarShell {{
+    border-radius: 8px;
+    background-color: {ELEV};
+    border-color: {BORDER_HAIRLINE};
+}}
+
+QComboBox#QualityCombo {{
+    font-family: {FONT_MONO};
+    color: {TEXT_HIGH};
+}}
+
+QTabWidget::pane {{
+    border: 1px solid {LINE_0};
+    border-radius: 8px;
+    background-color: {BG_PANEL_2};
+    top: -1px;
+}}
+QTabBar::tab {{
+    background-color: {BG_PANEL_1};
+    color: {TEXT_MID};
+    border: 1px solid {LINE_0};
+    border-bottom: none;
+    padding: 8px 14px;
+    margin-right: 4px;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QTabBar::tab:selected {{
+    color: {CYAN};
+    background-color: {BG_PANEL_2};
+    border-color: {CYAN_TINT_20};
+}}
+QTabBar::tab:hover {{
+    color: {TEXT_HIGH};
+    background-color: {HOVER_SURFACE};
+}}
+
+QProgressBar {{
+    background-color: {LINE_0};
+    border: none;
+    border-radius: 3px;
+    height: 6px;
+}}
+QProgressBar::chunk {{
+    background-color: {CYAN};
+    border-radius: 3px;
+}}
+
+QRadioButton {{
+    color: {TEXT_MID};
+    font-size: 12.5px;
+    spacing: 8px;
+}}
+QRadioButton::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid {BORDER_STRONG};
+    background: {BG_PANEL_2};
+}}
+QRadioButton::indicator:checked {{
+    border: 4px solid {CYAN};
+    background: {STAGE};
+}}
+
+QListWidget#HistoryList::item:selected,
+QListWidget::item:selected {{
+    border-left: 2px solid {CYAN};
+}}
+
+QToolButton#CanvasExportButton {{
+    background-color: rgba(24, 24, 34, 0.72);
+    border: 1px solid {LINE_0};
+    border-radius: 7px;
+}}
+QToolButton#CanvasExportButton:hover {{
+    border-color: {CYAN};
+    background-color: {HOVER_SURFACE};
+}}
+
+QFrame#ErrorBanner {{
+    background-color: {ROSE_TINT_10};
+    border-bottom: 2px solid {ROSE};
+}}
 """

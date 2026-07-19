@@ -1,0 +1,511 @@
+"""Domain-aware deterministic Manim scene templates.
+
+Every render path ultimately falls back to a deterministic template (no API
+key, LLM failure, exhausted self-heal). Previously that fallback was one
+generic damped-wave plot regardless of the problem. This module picks a
+visualization that matches the *domain* of the request — a swinging pendulum
+for pendulum problems, an elliptical orbit for Kepler problems, a travelling
+wave for wave/Fourier/heat problems, or a dipole field map for electrostatics
+— so the keyless experience is still about the user's physics.
+
+Constraints every template MUST satisfy (enforced by tests):
+- imports only from the code-safety allowlist (manim/manimlib/math/numpy),
+- compiles with ``compile(code, ..., "exec")``,
+- uses ``Text`` only — never ``MathTex``/``Tex`` — so no LaTeX is required,
+- short (a few seconds of animation) so low-quality renders stay fast.
+
+Standard library + zero project imports, like the other leaf modules.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+# Default video palette — matches the "Aether Dark" UI theme.
+DEFAULT_SCENE_PALETTE: dict[str, str] = {
+    "background": "#0A0A0F",
+    "curve": "#06B6D4",
+    "accent": "#F59E0B",
+    "text": "#F8FAFC",
+    "secondary": "#10B981",
+    "muted": "#94A3B8",
+}
+
+_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _resolve_palette(palette: dict[str, str] | None) -> dict[str, str]:
+    """Merge a user palette over the defaults, keeping only valid hexes."""
+    resolved = dict(DEFAULT_SCENE_PALETTE)
+    if palette:
+        for key in resolved:
+            value = palette.get(key)
+            if isinstance(value, str) and _HEX_RE.match(value.strip()):
+                resolved[key] = value.strip()
+    return resolved
+
+
+def load_scene_palette(data_dir: Path | None) -> dict[str, str] | None:
+    """Read the scene palette persisted by the UI theme (ui_prefs.json).
+
+    Stdlib-only on purpose: services must not import ``aetherlab.ui``. Returns
+    ``None`` when there are no prefs (callers then use the defaults).
+    """
+    if not data_dir:
+        return None
+    path = Path(data_dir) / "ui_prefs.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — a broken prefs file must not break renders
+        return None
+    palette = payload.get("scene_palette") if isinstance(payload, dict) else None
+    return palette if isinstance(palette, dict) else None
+
+
+# Keyword markers per domain, checked in order (first hit wins).
+_DOMAIN_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pendulum", ("pendulum",)),
+    ("orbit", ("orbit", "kepler", "two-body", "two body", "central force",
+               "planet", "satellite", "gravitation")),
+    ("em_field", ("electric", "electrostatic", "charge", "dipole",
+                  "field line", "field lines", "coulomb", "maxwell")),
+    ("wave", ("wave", "fourier", "heat equation", "diffusion", "string",
+              "standing", "interference")),
+)
+
+
+def detect_domain(keywords: list[str], variables: dict[str, float]) -> str:
+    """Map solver keywords/variables to a template domain.
+
+    Returns one of ``"pendulum" | "orbit" | "em_field" | "wave" | "oscillator"`` —
+    ``oscillator`` (the classic damped wave) is the safe default.
+    """
+    text = " ".join(keywords).lower()
+    for domain, markers in _DOMAIN_KEYWORDS:
+        if any(marker in text for marker in markers):
+            return domain
+    names = set(variables)
+    if {"gravity", "length"} & names:
+        return "pendulum"
+    return "oscillator"
+
+
+# Lesson "aspects": one topic renders across several chapters, and each chapter
+# is given an aspect so the SAME domain template produces a visually distinct
+# clip instead of N identical ones. The aspect changes the composition (how the
+# text is laid out and introduced) AND the pacing (run_time scale of the domain
+# animation), keyed off the chapter's role — not the domain.
+ASPECTS = ("setup", "evolution", "math", "recap", "full")
+
+
+def _aspect_knobs(aspect: str) -> dict:
+    """Composition + pacing knobs for a chapter aspect.
+
+    ``header`` selects one of the header layouts below; ``run`` scales the
+    domain animation's main sweep so an introductory chapter feels brisk and an
+    evolution chapter lingers on the motion.
+    """
+    table = {
+        "setup":     {"header": "hero",     "run": 0.75},
+        "evolution": {"header": "top",      "run": 1.30},
+        "math":      {"header": "equation", "run": 0.85},
+        "recap":     {"header": "bullets",  "run": 0.80},
+        "full":      {"header": "top",      "run": 1.00},
+    }
+    return table.get(aspect, table["full"])
+
+
+def build_scene(
+    class_name: str,
+    domain: str,
+    title: str,
+    summary: str,
+    steps: list[str],
+    variables: dict[str, float],
+    palette: dict[str, str] | None = None,
+    aspect: str = "full",
+) -> str:
+    """Build a complete, self-contained Manim scene for ``domain``.
+
+    ``title``/``summary``/``steps`` are raw strings (escaped here);
+    ``variables`` parameterize the animation; ``palette`` (hex strings, see
+    ``DEFAULT_SCENE_PALETTE``) colors the scene to match the UI theme;
+    ``aspect`` (see ``ASPECTS``) varies the composition + pacing so a lesson's
+    chapters look distinct even when they share a domain template.
+    """
+    builder = _BUILDERS.get(domain, _oscillator_scene)
+    pal = _resolve_palette(palette)
+    knobs = _aspect_knobs(aspect)
+    header = _header_block(class_name, title, summary, steps)
+    header["txt"] = _lit(pal["text"])
+    header["background"] = pal["background"]
+    header["run"] = float(knobs["run"])
+    header["header_code"] = _build_header_code(knobs["header"], header, pal)
+    return builder(header, variables, pal).strip() + "\n"
+
+
+# ── shared pieces ────────────────────────────────────────────────────────────
+
+# Manim COMMUNITY only. Rendering always runs `python -m manim` (CE); a
+# manimlib-first try/except here silently breaks on machines where ManimGL is
+# installed: `from manimlib import *` wins, the class subclasses GL's Scene,
+# and manim CE reports "There are no scenes inside that module" (exit 0, no
+# video). That exact latent bug shipped in the original runtime template.
+_IMPORT_BLOCK = '''\
+"""Generated by AetherLab (deterministic {domain} template)."""
+
+import math
+
+import numpy as np
+
+from manim import *
+
+config.background_color = "{background}"
+'''
+
+
+def _header_block(class_name: str, title: str, summary: str, steps: list[str]) -> dict:
+    """Common scene scaffolding values, escaped for embedding."""
+    step_lines = ",\n            ".join(
+        _lit(_shorten(step, 82)) for step in steps[:3]
+    ) or _lit("No derivation steps available.")
+    # The "equation/idea" hero line for the math aspect: the first derivation
+    # step reads as the governing idea, and it is plain Text (LaTeX-free) by the
+    # module's contract, so it renders with no TeX toolchain.
+    eqn = steps[0] if steps else summary
+    return {
+        "class_name": class_name,
+        "title": _lit(_shorten(title, 70)),
+        "summary": _lit(_shorten(summary, 110)),
+        "step_lines": step_lines,
+        "eqn": _lit(_shorten(eqn, 70)),
+    }
+
+
+def _build_header_code(style: str, header: dict, pal: dict[str, str]) -> str:
+    """Return construct-body code that lays out and reveals the chapter text.
+
+    Each style is a distinct composition so chapters of the same domain look
+    different: ``top`` is the classic title strip; ``hero`` opens with a big
+    centered title (the "setup"); ``equation`` frames the governing idea in a
+    boxed banner (the "math"); ``bullets`` reveals takeaways one by one (the
+    "recap"). All are Text-only and self-contained.
+    """
+    ctx = dict(header)
+    ctx["accent"] = _lit(pal["accent"])
+    ctx["curve"] = _lit(pal["curve"])
+    ctx["secondary"] = _lit(pal["secondary"])
+    template = _HEADER_STYLES.get(style, _HEADER_STYLES["top"])
+    return template.format(**ctx)
+
+
+# Classic title strip — the Solve path and "evolution"/"full" chapters. Static
+# (added, not played) so the domain animation owns the motion.
+_HEADER_TOP = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.5)
+        title.to_edge(UP)
+        summary = Text({summary}, color=TXT).scale(0.3)
+        summary.next_to(title, DOWN, buff=0.15)
+        steps = [
+            {step_lines}
+        ]
+        rows = VGroup(*[Text(f"{{i}}. {{s}}", color=TXT).scale(0.24) for i, s in enumerate(steps, 1)])
+        rows.arrange(DOWN, aligned_edge=LEFT, buff=0.12)
+        rows.next_to(summary, DOWN, buff=0.2)
+        self.add(title, summary, rows)
+'''
+
+# "setup": a big centered title that Writes on, then settles up — the chapter
+# opens by naming the question before the object animates in below.
+_HEADER_HERO = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.72)
+        summary = Text({summary}, color={accent}).scale(0.34)
+        summary.next_to(title, DOWN, buff=0.28)
+        head = VGroup(title, summary).move_to(ORIGIN).to_edge(UP, buff=0.7)
+        self.play(Write(title), run_time=1.0)
+        self.play(FadeIn(summary, shift=UP * 0.2), run_time=0.6)
+'''
+
+# "math": frame the governing idea in a boxed banner under a small title.
+_HEADER_EQUATION = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.42).to_edge(UP)
+        eqn = Text({eqn}, color={accent}).scale(0.42)
+        eqn.next_to(title, DOWN, buff=0.35)
+        box = SurroundingRectangle(eqn, color={curve}, buff=0.22, corner_radius=0.1)
+        self.play(Write(title), run_time=0.6)
+        self.play(FadeIn(eqn), Create(box), run_time=1.0)
+'''
+
+# "recap": reveal takeaway bullets one at a time under the title.
+_HEADER_BULLETS = '''
+        TXT = {txt}
+        title = Text({title}, color=TXT).scale(0.5).to_edge(UP)
+        _steps = [
+            {step_lines}
+        ]
+        rows = VGroup(*[Text("* " + s, color=TXT).scale(0.3) for s in _steps])
+        rows.arrange(DOWN, aligned_edge=LEFT, buff=0.24)
+        rows.next_to(title, DOWN, buff=0.4)
+        self.play(Write(title), run_time=0.6)
+        for _row in rows:
+            self.play(FadeIn(_row, shift=RIGHT * 0.25), run_time=0.4)
+'''
+
+_HEADER_STYLES = {
+    "top": _HEADER_TOP,
+    "hero": _HEADER_HERO,
+    "equation": _HEADER_EQUATION,
+    "bullets": _HEADER_BULLETS,
+}
+
+
+# ── oscillator (default) ─────────────────────────────────────────────────────
+
+
+def _oscillator_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    damping = float(variables.get("damping", 0.15))
+    stiffness = float(variables.get("stiffness", 1.0))
+    return _IMPORT_BLOCK.format(domain="oscillator", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        axes = Axes(x_range=[-3, 3, 1], y_range=[-2, 2, 1]).scale(0.5)
+        axes.to_edge(DOWN)
+        damping = ValueTracker({damping!r})
+        stiffness = ValueTracker({stiffness!r})
+
+        def curve_fn():
+            d = damping.get_value()
+            k = stiffness.get_value()
+            fn = lambda x: math.exp(-d * (x + 3)) * math.sin(k * x * 2)
+            if hasattr(axes, "plot"):
+                return axes.plot(fn, color={pal["curve"]!r})
+            return axes.get_graph(fn, color={pal["curve"]!r})
+
+        curve = always_redraw(curve_fn)
+        self.add(axes)
+        self.play(Create(curve_fn()), run_time={1.5 * header["run"]:.2f})
+        self.add(curve)
+        self.play(damping.animate.set_value({damping * 3 + 0.1!r}), run_time={2.5 * header["run"]:.2f},
+                  rate_func=there_and_back)
+        self.wait(1)
+'''
+
+
+# ── pendulum ─────────────────────────────────────────────────────────────────
+
+
+def _pendulum_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    gravity = float(variables.get("gravity", 9.81))
+    length = max(float(variables.get("length", 1.0)), 0.05)
+    damping = float(variables.get("damping", 0.12))
+    return _IMPORT_BLOCK.format(domain="pendulum", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        g = {gravity!r}
+        length = {length!r}
+        damping = {damping!r}
+        omega = math.sqrt(g / length)
+        theta0 = 0.9
+
+        pivot = np.array([-3.2, -0.4, 0.0])
+        rod_len = 1.9
+        t = ValueTracker(0.0)
+
+        def theta_at(time):
+            return theta0 * math.exp(-damping * time) * math.cos(omega * time)
+
+        def bob_pos():
+            th = theta_at(t.get_value())
+            return pivot + rod_len * np.array([math.sin(th), -math.cos(th), 0.0])
+
+        rod = always_redraw(lambda: Line(pivot, bob_pos(), color={pal["muted"]!r}, stroke_width=3))
+        bob = always_redraw(lambda: Dot(bob_pos(), color={pal["accent"]!r}, radius=0.14))
+        anchor = Dot(pivot, color=TXT, radius=0.05)
+
+        axes = Axes(x_range=[0, 8, 2], y_range=[-1, 1, 0.5]).scale(0.42)
+        axes.to_edge(DOWN).shift(RIGHT * 1.8)
+
+        def trace_fn():
+            end = max(t.get_value(), 0.01)
+            fn = lambda x: theta_at(x)
+            if hasattr(axes, "plot"):
+                return axes.plot(fn, x_range=[0, end], color={pal["secondary"]!r})
+            return axes.get_graph(fn, x_min=0, x_max=end, color={pal["secondary"]!r})
+
+        trace = always_redraw(trace_fn)
+        label = Text("theta(t)", color=TXT).scale(0.3)
+        label.next_to(axes, UP, buff=0.1)
+
+        self.add(anchor, rod, bob, axes, trace, label)
+        self.play(t.animate.set_value(8.0), run_time={6 * header["run"]:.2f}, rate_func=linear)
+        self.wait(0.5)
+'''
+
+
+# ── orbit ────────────────────────────────────────────────────────────────────
+
+
+def _orbit_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    ecc = min(max(float(variables.get("eccentricity", 0.55)), 0.0), 0.9)
+    return _IMPORT_BLOCK.format(domain="orbit", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        a = 2.6
+        e = {ecc!r}
+        b = a * math.sqrt(1 - e * e)
+        center = np.array([0.0, -1.3, 0.0])
+        focus = center + np.array([a * e, 0.0, 0.0])
+
+        orbit = Ellipse(width=2 * a, height=2 * b, color={pal["curve"]!r})
+        orbit.move_to(center)
+        star = Dot(focus, color={pal["accent"]!r}, radius=0.16)
+        t = ValueTracker(0.0)
+
+        def planet_pos():
+            ang = t.get_value()
+            return center + np.array([a * math.cos(ang), b * math.sin(ang), 0.0])
+
+        planet = always_redraw(lambda: Dot(planet_pos(), color={pal["secondary"]!r}, radius=0.1))
+        radius = always_redraw(lambda: Line(focus, planet_pos(), color={pal["muted"]!r},
+                                            stroke_width=2))
+
+        self.add(orbit, star, radius, planet)
+        self.play(t.animate.set_value(2 * math.pi), run_time={5 * header["run"]:.2f}, rate_func=linear)
+        self.wait(0.5)
+'''
+
+
+# ── wave ─────────────────────────────────────────────────────────────────────
+
+
+def _wave_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    stiffness = float(variables.get("stiffness", 1.0))
+    return _IMPORT_BLOCK.format(domain="wave", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        axes = Axes(x_range=[0, 8, 2], y_range=[-1.6, 1.6, 1]).scale(0.5)
+        axes.to_edge(DOWN)
+        k = {stiffness!r}
+        t = ValueTracker(0.0)
+
+        def wave_fn():
+            time = t.get_value()
+            fn = lambda x: math.sin(k * x - 2 * time) * math.exp(-0.06 * x)
+            if hasattr(axes, "plot"):
+                return axes.plot(fn, color={pal["curve"]!r})
+            return axes.get_graph(fn, color={pal["curve"]!r})
+
+        wave = always_redraw(wave_fn)
+        self.add(axes)
+        self.play(Create(wave_fn()), run_time={1.5 * header["run"]:.2f})
+        self.add(wave)
+        self.play(t.animate.set_value(2 * math.pi), run_time={4 * header["run"]:.2f}, rate_func=linear)
+        self.wait(0.5)
+'''
+
+
+# ── electrostatic field / dipole ─────────────────────────────────────────────
+
+
+def _em_field_scene(header: dict, variables: dict[str, float], pal: dict[str, str]) -> str:
+    separation = min(max(float(variables.get("separation", 2.2)), 1.2), 3.6)
+    return _IMPORT_BLOCK.format(domain="em_field", background=header["background"]) + f'''
+
+class {header["class_name"]}(Scene):
+    def construct(self):{header["header_code"]}
+        sep = {separation!r}
+        plus_pos = np.array([-sep / 2, -1.1, 0.0])
+        minus_pos = np.array([sep / 2, -1.1, 0.0])
+
+        def field_at(point):
+            r_plus = point - plus_pos
+            r_minus = point - minus_pos
+            d_plus = max(np.linalg.norm(r_plus), 0.22)
+            d_minus = max(np.linalg.norm(r_minus), 0.22)
+            return r_plus / (d_plus ** 3) - r_minus / (d_minus ** 3)
+
+        def make_line(angle):
+            point = plus_pos + 0.34 * np.array([math.cos(angle), math.sin(angle), 0.0])
+            pts = [point.copy()]
+            for _ in range(90):
+                vec = field_at(point)
+                norm = np.linalg.norm(vec)
+                if norm < 1e-6:
+                    break
+                point = point + 0.075 * vec / norm
+                pts.append(point.copy())
+                if np.linalg.norm(point - minus_pos) < 0.36:
+                    break
+                if abs(point[0]) > 3.7 or abs(point[1]) > 2.7:
+                    break
+            line = VMobject(color={pal["curve"]!r}, stroke_width=2.2)
+            line.set_points_smoothly(pts)
+            return line
+
+        field_lines = VGroup()
+        arrows = VGroup()
+        for angle in np.linspace(-2.65, 2.65, 11):
+            line = make_line(float(angle))
+            field_lines.add(line)
+            anchor = line.point_from_proportion(0.55)
+            vec = field_at(anchor)
+            norm = np.linalg.norm(vec)
+            if norm > 1e-6:
+                direction = vec / norm
+                arrows.add(Arrow(anchor - 0.08 * direction, anchor + 0.22 * direction,
+                                 buff=0, color={pal["muted"]!r}, stroke_width=2,
+                                 max_tip_length_to_length_ratio=0.5))
+
+        pulse = ValueTracker(0.0)
+        plus_halo = always_redraw(lambda: Circle(radius=0.38 + 0.04 * math.sin(pulse.get_value()),
+                                                 color={pal["accent"]!r}, stroke_width=2).move_to(plus_pos))
+        minus_halo = always_redraw(lambda: Circle(radius=0.38 + 0.04 * math.cos(pulse.get_value()),
+                                                  color={pal["secondary"]!r}, stroke_width=2).move_to(minus_pos))
+        plus = Dot(plus_pos, color={pal["accent"]!r}, radius=0.18)
+        minus = Dot(minus_pos, color={pal["secondary"]!r}, radius=0.18)
+        plus_label = Text("+", color={pal["background"]!r}).scale(0.55).move_to(plus_pos)
+        minus_label = Text("-", color={pal["background"]!r}).scale(0.65).move_to(minus_pos)
+        caption = Text("electric field lines: + source to - sink", color=TXT).scale(0.28)
+        caption.to_edge(DOWN)
+
+        self.add(plus_halo, minus_halo)
+        self.play(GrowFromCenter(plus), GrowFromCenter(minus),
+                  FadeIn(plus_label), FadeIn(minus_label), run_time={0.8 * header["run"]:.2f})
+        self.play(LaggedStart(*[Create(line) for line in field_lines], lag_ratio=0.08),
+                  run_time={2.5 * header["run"]:.2f})
+        self.play(FadeIn(arrows), FadeIn(caption), run_time={0.8 * header["run"]:.2f})
+        self.play(pulse.animate.set_value(2 * math.pi), run_time={1.5 * header["run"]:.2f},
+                  rate_func=linear)
+        self.wait(0.5)
+'''
+
+
+_BUILDERS = {
+    "oscillator": _oscillator_scene,
+    "pendulum": _pendulum_scene,
+    "orbit": _orbit_scene,
+    "em_field": _em_field_scene,
+    "wave": _wave_scene,
+}
+
+
+def _shorten(text: str, limit: int) -> str:
+    compact = " ".join(str(text).split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
+
+
+def _lit(text: str) -> str:
+    return repr(text)

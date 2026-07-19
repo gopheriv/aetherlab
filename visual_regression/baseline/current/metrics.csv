@@ -1,0 +1,8 @@
+id,kind,status,duration,fps,frame_count,blank_ratio,static_ratio,warning_count,contact_sheet
+scene_pendulum,scene,pass,6.5,30.0,195,0.0,0.0564,0,visual_regression\baseline\current\scene_pendulum_contact.jpg
+scene_kepler_orbit,scene,pass,5.5,30.0,165,0.0,0.0727,0,visual_regression\baseline\current\scene_kepler_orbit_contact.jpg
+scene_standing_wave,scene,pass,6.0,30.0,180,0.0,0.0667,0,visual_regression\baseline\current\scene_standing_wave_contact.jpg
+scene_fourier_series,scene,pass,6.0,30.0,180,0.0,0.0556,0,visual_regression\baseline\current\scene_fourier_series_contact.jpg
+scene_em_field,scene,pass,6.1,30.0,183,0.0,0.1366,0,visual_regression\baseline\current\scene_em_field_contact.jpg
+scene_derivation,scene,pass,5.0,30.0,150,0.0,0.2,0,visual_regression\baseline\current\scene_derivation_contact.jpg
+lesson_kepler_mode,lesson,pass,34.867,30.0,1046,0.0,0.2256,0,visual_regression\baseline\current\lesson_kepler_mode_contact.jpg

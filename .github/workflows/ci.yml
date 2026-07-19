@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # dev extra supplies pytest + pytest-asyncio for the focused regressions.
+          pip install -e .[rag,dev]
+          # imageio-ffmpeg (the app's optional 'narration' extra) gives the
+          # assembly tests (F143/F148) a portable ffmpeg binary; without it they
+          # skip the render-driven checks fail-soft. openpyxl backs the feature
+          # tracker .xlsx (build_feature_tracker + tracker_integrity_audit).
+          pip install manim matplotlib pillow imageio-ffmpeg openpyxl
+
+      - name: Run behavioural feature suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test_features.py
+
+      - name: Regenerate feature tracker
+        run: python build_feature_tracker.py
+
+      - name: Verify tracker artifact integrity
+        run: python tools/tracker_integrity_audit.py --check
+
+      - name: Verify feature surface coverage
+        run: python tools/feature_surface_audit.py --check
+
+      - name: Run focused pytest regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Compile source tree
+        run: python -m compileall -q aetherlab tests test_features.py build_feature_tracker.py tools
+
+      - name: Check whitespace
+        run: git diff --check
+
+      # NOTE: a byte-exact "committed matches regenerated" check is intentionally
+      # NOT run here. The regenerated artifacts are environment-dependent (the
+      # .xlsx embeds a write timestamp; feature_test_results.json / the CSV Notes
+      # column embed runner-specific text such as the Python path in F58 and a
+      # render duration in F148), so it can never match a commit from another
+      # machine. Cross-artifact consistency is already enforced above by
+      # `tracker_integrity_audit --check` against the generator + results.
+
+      - name: Upload tracker + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-tracker
+          path: |
+            AetherLab_Feature_Tracker.xlsx
+            AetherLab_Feature_Tracker.csv
+            feature_test_results.json
+
+      - name: Upload visual baseline summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-baseline-summary
+          path: |
+            visual_regression/baseline/current/summary.json
+            visual_regression/baseline/current/summary.md
+            visual_regression/baseline/current/metrics.csv
+            visual_regression/baseline/current/*_contact.jpg

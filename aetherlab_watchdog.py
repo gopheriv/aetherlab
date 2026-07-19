@@ -35,6 +35,9 @@ logger = logging.getLogger("aetherlab_watchdog")
 
 
 def main() -> None:
+    from aetherlab.core.console import configure_utf8_stdio
+
+    configure_utf8_stdio()
     delay = RESTART_DELAY_BASE
     restart_count = 0
 

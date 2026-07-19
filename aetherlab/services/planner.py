@@ -2,7 +2,7 @@
 
 A single OpenAI-compatible classification call (strict JSON) with a
 deterministic keyword-heuristic fallback, mirroring services/llm.py. Never
-raises — always returns a usable LessonPlan so the pipeline can gate its stages
+raises — always returns a usable OutputPlan so the pipeline can gate its stages
 (a purely conceptual question may need only the PDF; a 3-D field problem skips
 the 2-D canvas; a static definition skips the render entirely).
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 
-from aetherlab.core.models import LessonPlan, ProblemRequest
+from aetherlab.core.models import OutputPlan, ProblemRequest
 from aetherlab.core.settings import AppSettings
 
 _SYSTEM_PROMPT = (
@@ -63,7 +63,7 @@ class Planner:
         self.settings = settings
         self._client = None
 
-    async def plan(self, request: ProblemRequest) -> LessonPlan:
+    async def plan(self, request: ProblemRequest) -> OutputPlan:
         if self.settings.openai_api_key:
             try:
                 return await self._plan_remote(request)
@@ -72,7 +72,7 @@ class Planner:
                 return self.heuristic_plan(request)
         return self.heuristic_plan(request)
 
-    async def _plan_remote(self, request: ProblemRequest) -> LessonPlan:
+    async def _plan_remote(self, request: ProblemRequest) -> OutputPlan:
         from openai import AsyncOpenAI
 
         if self._client is None:
@@ -93,9 +93,9 @@ class Planner:
         )
         content = response.choices[0].message.content or ""
         payload = _parse_json(content)
-        return LessonPlan.from_json(payload, model_name=self.settings.llm_model)
+        return OutputPlan.from_json(payload, model_name=self.settings.llm_model)
 
-    def heuristic_plan(self, request: ProblemRequest) -> LessonPlan:
+    def heuristic_plan(self, request: ProblemRequest) -> OutputPlan:
         """Deterministic keyword classifier — the offline / fallback path."""
         text = request.normalized_prompt().lower()
 
@@ -109,7 +109,12 @@ class Planner:
 
         needs_numeric = dynamics
         needs_3d = three_d
-        needs_animation = dynamics or three_d or has(_MOTION)
+        # Animate by default: skip only when the ask is clearly conceptual or a
+        # purely static plot request. Defaulting to "skip" would silently drop
+        # the video for any prompt without an explicit motion cue.
+        needs_animation = (
+            dynamics or three_d or has(_MOTION) or not (conceptual or plot_ask)
+        )
         # 2-D unless it's a 3-D-only phenomenon or a purely conceptual question.
         needs_2d = dynamics or plot_ask or not (conceptual or three_d)
         needs_pdf = True
@@ -127,7 +132,7 @@ class Planner:
             "Heuristic plan from " + (", ".join(bits) if bits else "no strong signals")
             + f"; enabled: {', '.join(_enabled(needs_numeric, needs_2d, needs_3d, needs_animation, needs_pdf))}."
         )
-        return LessonPlan(
+        return OutputPlan(
             needs_numeric=needs_numeric,
             needs_2d=needs_2d,
             needs_3d=needs_3d,

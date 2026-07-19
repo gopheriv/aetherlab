@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -72,13 +73,13 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
         # Concentric rings
         for i, radius in enumerate([40, 80, 120, 160, 200]):
             opacity = max(0.08, 0.25 - i * 0.04)
-            color = QtGui.QColor("#06B6D4")
+            color = QtGui.QColor("#22D3EE")
             color.setAlphaF(opacity)
             painter.setPen(QtGui.QPen(color, 1))
             painter.drawEllipse(QtCore.QPoint(cx, cy), radius, radius)
 
         # Primary rotating arc
-        arc_pen = QtGui.QPen(QtGui.QColor("#06B6D4"), 3)
+        arc_pen = QtGui.QPen(QtGui.QColor("#22D3EE"), 3)
         arc_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
         painter.setPen(arc_pen)
         painter.drawArc(cx - 35, cy - 35, 70, 70, int(self._angle * 16), 100 * 16)
@@ -91,7 +92,7 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Orbiting dots
         for radius, speed, color_hex, dot_r in [
-            (80, 1.0, "#06B6D4", 4),
+            (80, 1.0, "#22D3EE", 4),
             (120, -0.7, "#10B981", 3),
             (160, 0.5, "#8B5CF6", 3),
         ]:
@@ -104,10 +105,10 @@ class BlueprintLoadingOverlay(QtWidgets.QWidget):
 
         # Center dot with glow
         glow = QtGui.QRadialGradient(float(cx), float(cy), 16)
-        glow.setColorAt(0, QtGui.QColor("#06B6D440"))
+        glow.setColorAt(0, QtGui.QColor("#22D3EE40"))
         glow.setColorAt(1, QtGui.QColor("#00000000"))
         painter.fillRect(cx - 16, cy - 16, 32, 32, glow)
-        painter.setBrush(QtGui.QColor("#06B6D4"))
+        painter.setBrush(QtGui.QColor("#22D3EE"))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(QtCore.QPoint(cx, cy), 5, 5)
 
@@ -125,12 +126,13 @@ class _NavRailButton(QtWidgets.QToolButton):
         self.setObjectName("NavRailItem")
         self._icon_name = icon_name
         self.setText(label)
-        self.setToolTip(tooltip)
+        self.setToolTip(f"{label} - {tooltip}")
         self.setCheckable(True)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.setIconSize(QtCore.QSize(18, 18))
-        self.setFixedSize(64, 56)
+        # v2: 56px rail is icon-first; the label lives in the tooltip.
+        self.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.setIconSize(QtCore.QSize(20, 20))
+        self.setFixedSize(44, 46)
         self._sync_icon()
         self.toggled.connect(lambda _checked: self._sync_icon())
 
@@ -138,7 +140,7 @@ class _NavRailButton(QtWidgets.QToolButton):
         if not self.isEnabled():
             color = "#3D4B5F"
         elif self.isChecked():
-            color = "#06B6D4"
+            color = "#22D3EE"
         else:
             color = "#94A3B8"
         self.setIcon(icons.icon(self._icon_name, 18, color))
@@ -154,7 +156,7 @@ class _NavRailButton(QtWidgets.QToolButton):
             painter = QtGui.QPainter(self)
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.setBrush(QtGui.QColor("#06B6D4"))
+            painter.setBrush(QtGui.QColor("#22D3EE"))
             painter.drawRoundedRect(QtCore.QRectF(0, self.height() / 2 - 10, 3, 20), 1.5, 1.5)
 
 
@@ -177,7 +179,7 @@ class SidebarNav(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("NavRail")
-        self.setFixedWidth(84)
+        self.setFixedWidth(56)  # v2: 56px rail
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 16, 10, 16)
@@ -249,7 +251,7 @@ class PipelineStepper(QtWidgets.QWidget):
 
     _COLORS = {
         "pending": "#64748B",
-        "active": "#06B6D4",
+        "active": "#22D3EE",
         "complete": "#10B981",
         "error": "#F43F5E",
     }
@@ -375,7 +377,7 @@ class PipelineStepper(QtWidgets.QWidget):
             painter.setBrush(
                 QtGui.QColor(self._COLORS["complete"])
                 if status == "complete"
-                else QtGui.QColor("#0D0D14")
+                else QtGui.QColor("#000000" if status == "active" else "#0D0D14")
             )
             painter.drawEllipse(center, r, r)
 
@@ -508,7 +510,22 @@ class HistoryPanel(QtWidgets.QWidget):
         """Set up SQLite persistence and load saved entries (#5)."""
         self._db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        import sqlite3
+        try:
+            rows = self._load_history_rows(db_path)
+        except sqlite3.DatabaseError as exc:
+            from aetherlab.core.sqlite_recovery import (
+                is_sqlite_corruption,
+                quarantine_sqlite,
+            )
+
+            if not is_sqlite_corruption(exc):
+                raise
+            quarantine_sqlite(db_path)
+            rows = self._load_history_rows(db_path)
+        for prompt, cache_key, scene_status, num_refs, created_at in reversed(rows):
+            self._add_entry_ui(prompt, cache_key, scene_status, num_refs, created_at)
+
+    def _load_history_rows(self, db_path: Path) -> list[tuple]:
         conn = sqlite3.connect(str(db_path))
         try:
             conn.execute(self._HISTORY_TABLE_SQL)
@@ -520,15 +537,13 @@ class HistoryPanel(QtWidgets.QWidget):
             ).fetchall()
         finally:
             conn.close()
-        for prompt, cache_key, scene_status, num_refs, created_at in reversed(rows):
-            self._add_entry_ui(prompt, cache_key, scene_status, num_refs, created_at)
+        return rows
 
     def add_entry(self, prompt: str, cache_key: str, scene_status: str, num_refs: int) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self._add_entry_ui(prompt, cache_key, scene_status, num_refs, ts)
         # Persist to SQLite
         if self._db_path:
-            import sqlite3
             conn = sqlite3.connect(str(self._db_path))
             try:
                 conn.execute(self._HISTORY_TABLE_SQL)
@@ -592,7 +607,6 @@ class HistoryPanel(QtWidgets.QWidget):
         self._entries.clear()
         self._count_label.setText("0 entries")
         if self._db_path:
-            import sqlite3
             conn = sqlite3.connect(str(self._db_path))
             try:
                 conn.execute("DELETE FROM history")
@@ -634,6 +648,7 @@ class CommandBar(QtWidgets.QWidget):
 
     submitted = QtCore.pyqtSignal(str)
     cancel_requested = QtCore.pyqtSignal()
+    learn_requested = QtCore.pyqtSignal(str)  # topic → build a full lesson
 
     _QUALITIES = {"Draft": "l", "Standard": "m", "High": "h"}
 
@@ -646,9 +661,16 @@ class CommandBar(QtWidgets.QWidget):
 
         shell = QtWidgets.QFrame()
         shell.setObjectName("CommandBarShell")
-        layout = QtWidgets.QHBoxLayout(shell)
+        layout = QtWidgets.QVBoxLayout(shell)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
+
+        input_row = QtWidgets.QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(10)
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(10)
 
         # Examples popup button (ghost, menu anchored above the bar)
         self._examples_btn = QtWidgets.QPushButton("Examples")
@@ -656,12 +678,12 @@ class CommandBar(QtWidgets.QWidget):
         self._examples_btn.setIcon(icons.icon("lightbulb", 14, "#94A3B8"))
         self._examples_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._examples_btn.clicked.connect(self._show_examples_menu)
-        layout.addWidget(self._examples_btn)
+        input_row.addWidget(self._examples_btn)
 
         divider = QtWidgets.QFrame()
         divider.setObjectName("VDivider")
         divider.setFixedWidth(1)
-        layout.addWidget(divider)
+        input_row.addWidget(divider)
 
         # Prompt field - transparent inside the shell
         self.input = QtWidgets.QLineEdit()
@@ -670,7 +692,15 @@ class CommandBar(QtWidgets.QWidget):
             "Describe a physics or math problem…  (Ctrl+Enter to run)"
         )
         self.input.returnPressed.connect(self._submit)
-        layout.addWidget(self.input, 1)
+        # Command-bar focus filament: the shell lifts to a cyan hairline while
+        # the prompt is focused (design v2 restrained-glow guideline).
+        self._shell = shell
+        self.input.installEventFilter(self)
+        self.input.setMinimumWidth(220)
+        input_row.addWidget(self.input, 1)
+
+        layout.addLayout(input_row)
+        action_row.addStretch(1)
 
         # Render quality selector
         self._quality = QtWidgets.QComboBox()
@@ -681,7 +711,16 @@ class CommandBar(QtWidgets.QWidget):
         self._quality.setToolTip(
             "Render quality — Draft 480p / Standard 720p / High 1080p"
         )
-        layout.addWidget(self._quality)
+        action_row.addWidget(self._quality)
+
+        # Learn button (topic explainer): build a full narrated lesson.
+        self.learn_button = QtWidgets.QPushButton("Learn")
+        self.learn_button.setObjectName("SecondaryButton")
+        self.learn_button.setIcon(icons.icon("book-open", 14, "#94A3B8"))
+        self.learn_button.setToolTip("Build a full multi-chapter video lesson for this topic")
+        self.learn_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.learn_button.clicked.connect(self._learn)
+        action_row.addWidget(self.learn_button)
 
         # Run button (primary) / Cancel (danger) swap
         self.run_button = QtWidgets.QPushButton("Run")
@@ -689,7 +728,7 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.setIcon(icons.icon("play", 14, "#04141A"))
         self.run_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.run_button.clicked.connect(self._submit)
-        layout.addWidget(self.run_button)
+        action_row.addWidget(self.run_button)
 
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.cancel_button.setObjectName("CancelButton")
@@ -697,9 +736,24 @@ class CommandBar(QtWidgets.QWidget):
         self.cancel_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
         self.cancel_button.hide()
-        layout.addWidget(self.cancel_button)
+        action_row.addWidget(self.cancel_button)
+
+        layout.addLayout(action_row)
 
         outer.addWidget(shell)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.input:
+            if event.type() == QtCore.QEvent.Type.FocusIn:
+                self._set_shell_focused(True)
+            elif event.type() == QtCore.QEvent.Type.FocusOut:
+                self._set_shell_focused(False)
+        return super().eventFilter(obj, event)
+
+    def _set_shell_focused(self, focused: bool) -> None:
+        self._shell.setProperty("focused", "true" if focused else "false")
+        self._shell.style().unpolish(self._shell)
+        self._shell.style().polish(self._shell)
 
     def _show_examples_menu(self) -> None:
         menu = QtWidgets.QMenu(self)
@@ -734,6 +788,7 @@ class CommandBar(QtWidgets.QWidget):
 
     def set_busy(self, busy: bool) -> None:
         self.run_button.setVisible(not busy)
+        self.learn_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.input.setDisabled(busy)
 
@@ -741,6 +796,12 @@ class CommandBar(QtWidgets.QWidget):
         prompt = self.input.text().strip()
         if prompt and self.run_button.isVisible():
             self.submitted.emit(prompt)
+            self.input.clear()
+
+    def _learn(self) -> None:
+        topic = self.input.text().strip()
+        if topic and self.learn_button.isVisible():
+            self.learn_requested.emit(topic)
             self.input.clear()
 
 
@@ -827,9 +888,9 @@ class ParameterDock(QtWidgets.QWidget):
             spinbox.setFixedWidth(90)
             spinbox.setStyleSheet(
                 "QDoubleSpinBox { background-color: #0F0F17; border: 1px solid #1E293B; "
-                "border-radius: 4px; color: #06B6D4; padding: 2px 4px; "
+                "border-radius: 4px; color: #22D3EE; padding: 2px 4px; "
                 "font-family: 'Cascadia Code', monospace; font-size: 11px; }"
-                "QDoubleSpinBox:focus { border-color: #06B6D4; }"
+                "QDoubleSpinBox:focus { border-color: #22D3EE; }"
             )
             spinbox.valueChanged.connect(
                 lambda val, key=name: self._on_spinbox_change(key, val)
@@ -857,7 +918,24 @@ class ParameterDock(QtWidgets.QWidget):
             row_layout.addWidget(reset_btn)
 
             self._sliders[name] = (slider, spinbox, QtWidgets.QLabel(), value)
-            self._container_layout.addRow(name, row_widget)
+            self._container_layout.addRow(self._symbol_label(name), row_widget)
+
+    def _symbol_label(self, name: str) -> QtWidgets.QWidget:
+        """Typeset parameter symbol (design v2 §5.5), text fallback."""
+        from aetherlab.services.mathtext import render_param_symbol
+
+        pixmap = render_param_symbol(name, px_size=13, color="#F8FAFC")
+        label = QtWidgets.QLabel()
+        if pixmap is not None:
+            label.setPixmap(pixmap)
+        else:
+            label.setText(name)
+        label.setToolTip(name)
+        label.setMinimumWidth(34)
+        label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        return label
 
     def _on_slider_change(self, name: str, raw: int) -> None:
         span = self._spans.get(name, 1.0)
@@ -949,7 +1027,7 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
 
         step_num = QtWidgets.QLabel(f"Step {index}")
         step_num.setStyleSheet(
-            "color: #06B6D4; font-size: 11px; font-weight: 700; "
+            "color: #22D3EE; font-size: 11px; font-weight: 700; "
             "font-family: 'Cascadia Code', monospace;"
         )
         header_layout.addWidget(step_num)
@@ -990,7 +1068,7 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         self._body.setVisible(self._expanded)
         self._arrow.setText("\u25bc" if self._expanded else "\u25b6")
         self._arrow.setStyleSheet(
-            f"color: {'#06B6D4' if self._expanded else '#475569'}; font-size: 10px;"
+            f"color: {'#22D3EE' if self._expanded else '#475569'}; font-size: 10px;"
         )
 
 
@@ -1022,7 +1100,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         layout.setSpacing(12)
 
         card = QtWidgets.QFrame()
-        card.setObjectName("CardFrame")
+        card.setObjectName("AnalysisCard")
         card_layout = QtWidgets.QVBoxLayout(card)
         card_layout.setContentsMargins(20, 20, 20, 16)
         card_layout.setSpacing(14)
@@ -1121,7 +1199,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         menu.exec(anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4)))
 
     def _copy_all(self) -> None:
-        parts = [self.summary.text()]
+        parts = [getattr(self, "_summary_text", "") or self.summary.text()]
         parts += [f"{i}. {s}" for i, s in enumerate(self._steps_text, start=1)]
         _copy_to_clipboard("\n".join(p for p in parts if p))
 
@@ -1136,7 +1214,24 @@ class AnalysisPanel(QtWidgets.QWidget):
 
     def set_solver_result(self, solver: SolverResult) -> None:
         cache_note = "  [cache]" if solver.cached else ""
-        self.summary.setText(f"{solver.summary}{cache_note}")
+        self._summary_text = f"{solver.summary}{cache_note}"
+        # Hero equation banner (design v2 §5.1): the solver's first governing
+        # equation, typeset large; else typeset the summary when it reads as
+        # math; prose keeps the styled-text banner. Fail-soft at every step.
+        from aetherlab.services.mathtext import looks_like_math, render_math
+
+        pixmap = None
+        equations = getattr(solver, "key_equations", None) or []
+        if equations:
+            pixmap = render_math(equations[0], px_size=30, color="#22D3EE")
+        if pixmap is None and looks_like_math(solver.summary):
+            pixmap = render_math(solver.summary, px_size=26, color="#22D3EE")
+        if pixmap is not None:
+            self.summary.setPixmap(pixmap)
+            self.summary.setToolTip(self._summary_text)
+        else:
+            self.summary.setText(self._summary_text)
+            self.summary.setToolTip("")
         self._empty_label.hide()
 
         # Keyword chips
@@ -1181,26 +1276,42 @@ class _RagHitCard(QtWidgets.QFrame):
     """
 
     def __init__(self, source: str, page: int | None, score: float, excerpt: str,
-                 source_path: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+                 source_path: str = "", is_web: bool = False,
+                 parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("CardFrame")
+        # Low-relevance cards read dimmer (design v2: reference card "dimmed" state).
+        if score < 0.5:
+            eff = QtWidgets.QGraphicsOpacityEffect(self)
+            eff.setOpacity(0.6)
+            self.setGraphicsEffect(eff)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        # Header row: icon + source + page + score pill + copy
+        # Header row: icon + source + page + origin badge + score pill + copy
         header = QtWidgets.QWidget()
         h_layout = QtWidgets.QHBoxLayout(header)
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(8)
 
-        h_layout.addWidget(icons.icon_label("book-open", 14, "#06B6D4"))
+        # Web references get a globe + violet accent; library keeps the book/cyan.
+        icon_name = "globe" if is_web else "book-open"
+        icon_color = "#8B5CF6" if is_web else "#22D3EE"
+        h_layout.addWidget(icons.icon_label(icon_name, 14, icon_color))
 
         src_label = QtWidgets.QLabel(source)
         src_label.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
         h_layout.addWidget(src_label)
 
-        if page:
+        if is_web:
+            web_badge = QtWidgets.QLabel("Wikipedia")
+            web_badge.setStyleSheet(
+                "color: #8B5CF6; border: 1px solid #8B5CF6; border-radius: 8px; "
+                "padding: 0px 7px; font-size: 9.5px; font-weight: 600;"
+            )
+            h_layout.addWidget(web_badge)
+        elif page:
             page_label = QtWidgets.QLabel(f"p.{page}")
             page_label.setStyleSheet("color: #64748B; font-size: 11px;")
             h_layout.addWidget(page_label)
@@ -1233,18 +1344,16 @@ class _RagHitCard(QtWidgets.QFrame):
         excerpt_label.setStyleSheet("color: #94A3B8; font-size: 12px;")
         layout.addWidget(excerpt_label)
 
-        # Open link (design: "Open" + arrow-up-right)
+        # Open link — a local file opens in the OS viewer, a URL in the browser.
         if source_path:
-            open_btn = QtWidgets.QPushButton("Open")
+            open_btn = QtWidgets.QPushButton("Open article" if is_web else "Open")
             open_btn.setObjectName("LinkButton")
-            open_btn.setIcon(icons.icon("arrow-up-right", 12, "#06B6D4"))
+            open_btn.setIcon(icons.icon("arrow-up-right", 12, icon_color))
             open_btn.setLayoutDirection(QtCore.Qt.LayoutDirection.RightToLeft)
             open_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            open_btn.clicked.connect(
-                lambda: QtGui.QDesktopServices.openUrl(
-                    QtCore.QUrl.fromLocalFile(source_path)
-                )
-            )
+            is_url = source_path.startswith(("http://", "https://"))
+            url = QtCore.QUrl(source_path) if is_url else QtCore.QUrl.fromLocalFile(source_path)
+            open_btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(url))
             row = QtWidgets.QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.addWidget(open_btn)
@@ -1311,7 +1420,12 @@ class ReferencePanel(QtWidgets.QWidget):
             return
 
         self._empty_label.hide()
-        self._backend_label.setText(f"{rag.backend} · {len(rag.hits)} hits")
+        n_web = sum(1 for h in rag.hits if getattr(h, "is_web", False))
+        n_lib = len(rag.hits) - n_web
+        provenance = f"{n_lib} library"
+        if n_web:
+            provenance += f" · {n_web} web"
+        self._backend_label.setText(f"{rag.backend} · {provenance}")
 
         for hit in rag.hits:
             card = _RagHitCard(
@@ -1320,6 +1434,7 @@ class ReferencePanel(QtWidgets.QWidget):
                 score=hit.score,
                 excerpt=hit.excerpt,
                 source_path=hit.source_path,
+                is_web=getattr(hit, "is_web", False),
             )
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
 
@@ -1338,6 +1453,7 @@ class SimulationPanel(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._frame_step_ms = 33
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -1389,8 +1505,8 @@ class SimulationPanel(QtWidgets.QWidget):
 
         # Top bar with pill tabs for view switching + phase portrait toggle
         top_bar = QtWidgets.QWidget()
+        top_bar.setObjectName("SceneToolbar")
         top_bar.setFixedHeight(48)
-        top_bar.setStyleSheet("background-color: #0D0D14; border-bottom: 1px solid #1E293B;")
         top_layout = QtWidgets.QHBoxLayout(top_bar)
         top_layout.setContentsMargins(16, 6, 16, 6)
         top_layout.setSpacing(8)
@@ -1400,13 +1516,23 @@ class SimulationPanel(QtWidgets.QWidget):
         self.status.setStyleSheet("font-size: 12px;")
         top_layout.addWidget(self.status, 1)
 
+        # Self-heal / revision pills (design v2 \u00a74) \u2014 hidden until they apply
+        self._repaired_pill = _Pill("repaired", "#F59E0B")
+        self._repaired_pill.setToolTip("Render errors the pipeline auto-fixed")
+        self._repaired_pill.hide()
+        top_layout.addWidget(self._repaired_pill)
+        self._revised_pill = _Pill("revised", "#8B5CF6")
+        self._revised_pill.setToolTip("Aesthetic revisions applied after visual critique")
+        self._revised_pill.hide()
+        top_layout.addWidget(self._revised_pill)
+
         # Phase portrait toggle checkbox
         self._phase_check = QtWidgets.QCheckBox("Phase-portrait overlay")
         self._phase_check.setStyleSheet(
             "QCheckBox { color: #94A3B8; font-size: 11px; font-weight: 600; spacing: 6px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px;"
             "  border: 1px solid #334155; background: #13131A; }"
-            "QCheckBox::indicator:checked { background: #06B6D4; border-color: #06B6D4; }"
+            "QCheckBox::indicator:checked { background: #22D3EE; border-color: #22D3EE; }"
         )
         self._phase_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._phase_check.setToolTip("Toggle phase portrait overlay")
@@ -1472,11 +1598,28 @@ class SimulationPanel(QtWidgets.QWidget):
         export_code_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         export_code_btn.clicked.connect(self.export_scene_requested.emit)
         ch_layout.addWidget(export_code_btn)
+        # Engine / status / duration chips (design v2 §6: code view is an artifact)
+        self._code_chips = QtWidgets.QWidget()
+        chips_layout = QtWidgets.QHBoxLayout(self._code_chips)
+        chips_layout.setContentsMargins(0, 2, 0, 2)
+        chips_layout.setSpacing(6)
+        self._engine_chip = _Pill("engine", "#64748B")
+        self._status_chip = _Pill("status", "#64748B")
+        self._backend_chip = _Pill("local", "#64748B")
+        self._duration_chip = _Pill("duration", "#64748B")
+        for chip in (self._engine_chip, self._status_chip, self._backend_chip, self._duration_chip):
+            chip.hide()
+            chips_layout.addWidget(chip)
+        chips_layout.addStretch()
         code_layout.addWidget(code_header)
+        code_layout.addWidget(self._code_chips)
 
-        self.code = QtWidgets.QPlainTextEdit()
-        self.code.setReadOnly(True)
-        code_layout.addWidget(self.code)
+        self.code = CodeArtifactView()
+        code_layout.addWidget(self.code, 1)
+
+        # Diagnostics drawer (design v2 §4: repaired/critique surfaced, not dumped)
+        self._diag_drawer = _DiagnosticsDrawer()
+        code_layout.addWidget(self._diag_drawer)
 
         self._stack.addWidget(self._loading)
         self._stack.addWidget(self._live_canvas)
@@ -1531,12 +1674,36 @@ class SimulationPanel(QtWidgets.QWidget):
         container_layout.setContentsMargins(12, 8, 12, 8)
         container_layout.setSpacing(8)
 
+        # Screening room: true-black letterbox stage (design v2 §6)
+        stage = QtWidgets.QWidget()
+        stage.setObjectName("VideoStage")
+        stage.setStyleSheet("QWidget#VideoStage { background-color: #000000; border-radius: 8px; }")
+        stage_layout = QtWidgets.QGridLayout(stage)
+        stage_layout.setContentsMargins(0, 0, 0, 0)
         self._video_widget = QVideoWidget()
-        self._video_widget.setMinimumSize(400, 225)
-        self._video_widget.setStyleSheet(
-            "background-color: #0A0A0F; border-radius: 8px;"
+        self._video_widget.setMinimumSize(280, 158)
+        self._video_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        container_layout.addWidget(self._video_widget, 1)
+        self._video_widget.setStyleSheet("background-color: #000000;")
+        stage_layout.addWidget(self._video_widget, 0, 0)
+        self._manim_badge = ManimBadge(small=True)
+        badge_wrap = QtWidgets.QWidget()
+        bw = QtWidgets.QHBoxLayout(badge_wrap)
+        bw.setContentsMargins(0, 0, 12, 12)
+        bw.addStretch()
+        bw.addWidget(self._manim_badge, 0, QtCore.Qt.AlignmentFlag.AlignBottom)
+        badge_wrap.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        stage_layout.addWidget(badge_wrap, 0, 0)
+        container_layout.addWidget(stage, 1)
+
+        # Docked critique badge + storyboard strip (design v2 §4/§6)
+        self._critique_badge = CritiqueBadge()
+        container_layout.addWidget(self._critique_badge)
+        self._storyboard_strip = StoryboardStrip()
+        self._storyboard_strip.act_seek_requested.connect(self._seek_fraction)
+        container_layout.addWidget(self._storyboard_strip)
 
         # Controls bar (design: components/media/VideoControls.jsx)
         controls = QtWidgets.QFrame()
@@ -1578,9 +1745,9 @@ class SimulationPanel(QtWidgets.QWidget):
         self._next_frame_btn.setObjectName("VideoControlBtn")
         self._next_frame_btn.setToolTip("Next frame")
 
-        self._seek_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._seek_slider = ActSeekSlider()
         self._seek_slider.setRange(0, 0)
-        self._seek_slider.setToolTip("Seek")
+        self._seek_slider.setToolTip("Seek (violet = act starts, amber = hero frame)")
         self._seek_slider.setObjectName("VideoSeekSlider")
         self._seeking = False
 
@@ -1635,9 +1802,8 @@ class SimulationPanel(QtWidgets.QWidget):
         self._seek_slider.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
         self._seek_slider.sliderReleased.connect(self._on_seek_released)
 
-        # Frame stepping: assume ~30fps, step by ~33ms (#14)
-        self._prev_frame_btn.clicked.connect(lambda: self._step_frame(-33))
-        self._next_frame_btn.clicked.connect(lambda: self._step_frame(33))
+        self._prev_frame_btn.clicked.connect(lambda: self._step_frame(-self._frame_step_ms))
+        self._next_frame_btn.clicked.connect(lambda: self._step_frame(self._frame_step_ms))
 
         self._play_btn.clicked.connect(self._player.play)
         self._pause_btn.clicked.connect(self._player.pause)
@@ -1674,7 +1840,7 @@ class SimulationPanel(QtWidgets.QWidget):
         self._seeking = False
 
     def _step_frame(self, delta_ms: int) -> None:
-        """Step forward/backward by ~1 frame (33ms at 30fps) (#14)."""
+        """Step forward/backward by one decoded frame."""
         self._player.pause()
         new_pos = max(0, self._player.position() + delta_ms)
         self._player.setPosition(new_pos)
@@ -1691,8 +1857,12 @@ class SimulationPanel(QtWidgets.QWidget):
         current = getattr(self._live_canvas, "_state", None)
         if current and current.params:
             params.update(current.params)
+        from aetherlab.services.mathtext import plain_math
+
+        raw_title = self._solver.summary or "Simulation"
+        title = plain_math(raw_title)[:70]
         state = build_canvas_state(
-            title=self._solver.summary[:60] if self._solver.summary else "Simulation",
+            title=title,
             params=params,
             phase_portrait=self._phase_check.isChecked(),
             plot=getattr(self._solver, "plot", None),
@@ -1737,6 +1907,47 @@ class SimulationPanel(QtWidgets.QWidget):
         if pills:
             pills[0].setChecked(True)
 
+    def _apply_scene_meta(self, scene: SceneBundle) -> None:
+        """Populate v2 code chips, diagnostics drawer, storyboard, critique."""
+        meta = parse_scene_meta(scene)
+
+        self._engine_chip.setText(scene.engine)
+        self._engine_chip.show()
+        self._status_chip.setText(scene.status)
+        self._status_chip.show()
+        if any("Rendered via GitHub Actions" in d or "Cloud render cache hit" in d for d in scene.diagnostics):
+            self._backend_chip.setText("Cloud")
+            self._backend_chip.setStyleSheet("background: rgba(14,165,233,0.18); color: #38BDF8; border-radius: 8px; padding: 2px 8px;")
+        elif any("Cloud render unavailable; rendered locally." in d for d in scene.diagnostics):
+            self._backend_chip.setText("Local fallback")
+            self._backend_chip.setStyleSheet("background: rgba(245,158,11,0.18); color: #F59E0B; border-radius: 8px; padding: 2px 8px;")
+        else:
+            self._backend_chip.setText("Local")
+            self._backend_chip.setStyleSheet("background: rgba(100,116,139,0.18); color: #94A3B8; border-radius: 8px; padding: 2px 8px;")
+        self._backend_chip.show()
+        if meta["duration"]:
+            self._duration_chip.setText(meta["duration"])
+            self._duration_chip.show()
+        else:
+            self._duration_chip.hide()
+
+        self._diag_drawer.set_diagnostics(scene.diagnostics)
+
+        storyboard = getattr(scene, "storyboard", None)
+        self._storyboard_strip.set_storyboard(storyboard)
+        acts = _storyboard_acts(storyboard)
+        self._seek_slider.set_acts(acts)
+
+        self._critique_badge.set_critique(meta["critique"])
+
+        # Repaired / revised pills in the top bar
+        self._repaired_pill.setVisible(meta["repaired"] > 0)
+        if meta["repaired"]:
+            self._repaired_pill.setText(f"repaired ×{meta['repaired']}")
+        self._revised_pill.setVisible(meta["revised"] > 0)
+        if meta["revised"]:
+            self._revised_pill.setText(f"revised ×{meta['revised']}")
+
     def set_scene_bundle(self, scene: SceneBundle) -> None:
         self._stack.setCurrentIndex(1)
         if scene.status == "skipped":
@@ -1759,21 +1970,18 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
-        if scene.diagnostics:
-            diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-            self.code.setPlainText(f"{scene.code}\n\n# Diagnostics:\n{diag_lines}")
-        else:
-            self.code.setPlainText(scene.code)
+        self.code.setPlainText(scene.code)  # diagnostics now live in the drawer
+        self._apply_scene_meta(scene)
         pills = self._pill_group.buttons()
         if pills:
             pills[0].setChecked(True)
 
     def set_video(self, scene: SceneBundle) -> None:
         from PyQt6.QtCore import QUrl
-        from PyQt6.QtMultimedia import QMediaPlayer
 
         if scene.video_path and Path(scene.video_path).exists():
             self._stack.setCurrentIndex(2)
+            self._frame_step_ms = _frame_step_ms_for_video(Path(scene.video_path))
             self._player.setSource(QUrl.fromLocalFile(scene.video_path))
             # Play when media is loaded (async loading)
             try:
@@ -1781,14 +1989,16 @@ class SimulationPanel(QtWidgets.QWidget):
             except (TypeError, RuntimeError):
                 pass
             self._player.mediaStatusChanged.connect(self._auto_play)
-            self.status.setText(f"\U0001f3ac Loading: {Path(scene.video_path).name}")
+            self.status.setText(f"Loading: {Path(scene.video_path).name}")
             self.status.setObjectName("StatusReady")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
+            self._apply_scene_meta(scene)
             pills = self._pill_group.buttons()
             if len(pills) > 1:
                 pills[1].setChecked(True)
         else:
+            self.code.setPlainText(scene.code)  # diagnostics live in the drawer (v2 §4)
             self.show_code()
             if scene.video_path:
                 self.status.setText(f"Video path set but file missing: {scene.video_path}")
@@ -1797,9 +2007,14 @@ class SimulationPanel(QtWidgets.QWidget):
             self.status.setObjectName("StatusError")
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
-            if scene.diagnostics:
-                diag_lines = "\n".join(f"# {line}" for line in scene.diagnostics)
-                self.code.setPlainText(scene.code + "\n\n# Diagnostics:\n" + diag_lines)
+            self._apply_scene_meta(scene)
+
+    def _seek_fraction(self, frac: float) -> None:
+        """Seek the video to a fraction of its duration (storyboard act click)."""
+        dur = self._player.duration()
+        if dur > 0:
+            self._player.setPosition(int(frac * dur))
+            self._player.play()
 
     def _auto_play(self, media_status) -> None:
         """Play video once media is loaded."""
@@ -1810,7 +2025,7 @@ class SimulationPanel(QtWidgets.QWidget):
                 self._player.mediaStatusChanged.disconnect(self._auto_play)
             except (TypeError, RuntimeError):
                 pass
-            self.status.setText(f"\U0001f3ac Playing")
+            self.status.setText("Playing")
 
     def apply_parameter_update(self, name: str, value: float) -> None:
         self.status.setText(f"Parameter: {name} = {value:g}")
@@ -1868,7 +2083,7 @@ class TitleBar(QtWidgets.QWidget):
         layout.setContentsMargins(16, 0, 10, 0)
         layout.setSpacing(10)
 
-        layout.addWidget(icons.icon_label("atom", 16, "#06B6D4"))
+        layout.addWidget(icons.icon_label("atom", 16, "#22D3EE"))
 
         wordmark = QtWidgets.QLabel("AetherLab")
         wordmark.setObjectName("TitleWordmark")
@@ -1898,7 +2113,7 @@ class Toast(QtWidgets.QFrame):
         "error": ("#F43F5E", "rgba(244, 63, 94, 0.10)", "alert-triangle"),
         "warning": ("#F59E0B", "rgba(245, 158, 11, 0.10)", "alert-circle"),
         "success": ("#10B981", "rgba(16, 185, 129, 0.10)", "check-circle"),
-        "info": ("#06B6D4", "rgba(6, 182, 212, 0.10)", "info"),
+        "info": ("#22D3EE", "rgba(34, 211, 238, 0.10)", "info"),
     }
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -1965,15 +2180,28 @@ class EmptyStateView(QtWidgets.QWidget):
     example_picked = QtCore.pyqtSignal(str)
     settings_requested = QtCore.pyqtSignal()
     library_requested = QtCore.pyqtSignal()
+    ollama_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        # Ambient math watermarks (design v2 §5.4): rendered once, painted at
+        # <=6% opacity behind a fine dot grid in paintEvent. Decorative only.
+        self._watermarks: list = []
+        try:
+            from aetherlab.services.mathtext import WATERMARK_FORMULAS, render_math
+            for formula in WATERMARK_FORMULAS[:3]:
+                pm = render_math(formula, px_size=34, color="#22D3EE")
+                if pm is not None:
+                    self._watermarks.append(pm)
+        except Exception:  # noqa: BLE001 — texture is optional
+            pass
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(24)
         layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        mark = icons.icon_label("atom", 40, "#06B6D4")
+        mark = icons.icon_label("atom", 40, "#22D3EE")
         layout.addWidget(mark, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         headline = QtWidgets.QLabel("Describe a problem to begin")
@@ -2008,9 +2236,10 @@ class EmptyStateView(QtWidgets.QWidget):
 
         # Setup status strip (dashed border, API key / library CTAs)
         self._setup_strip = QtWidgets.QFrame()
+        self._setup_strip.setObjectName("SetupStrip")
         self._setup_strip.setStyleSheet(
-            "QFrame { background-color: #0D0D14; border: 1px dashed #334155; "
-            "border-radius: 12px; }"
+            "QFrame#SetupStrip { background-color: #0D0D14; border: 1px dashed #334155; "
+            "border-radius: 8px; }"
             "QLabel, QPushButton { border: none; background: transparent; }"
         )
         strip_layout = QtWidgets.QHBoxLayout(self._setup_strip)
@@ -2023,10 +2252,20 @@ class EmptyStateView(QtWidgets.QWidget):
         self._key_label.setStyleSheet("color: #94A3B8; font-size: 12.5px;")
         strip_layout.addWidget(self._key_label)
         key_btn = QtWidgets.QPushButton("Open Settings")
-        key_btn.setStyleSheet("color: #06B6D4; font-size: 12.5px; font-weight: 600;")
+        key_btn.setStyleSheet("color: #22D3EE; font-size: 12.5px; font-weight: 600;")
         key_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         key_btn.clicked.connect(self.settings_requested.emit)
         strip_layout.addWidget(key_btn)
+        # One-click local-AI enable, shown only when a background probe finds
+        # a running Ollama and no key is configured (offer_ollama).
+        self._ollama_btn = QtWidgets.QPushButton("Use local AI (Ollama)")
+        self._ollama_btn.setStyleSheet(
+            "color: #10B981; font-size: 12.5px; font-weight: 600;"
+        )
+        self._ollama_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._ollama_btn.clicked.connect(self.ollama_requested.emit)
+        self._ollama_btn.hide()
+        strip_layout.addWidget(self._ollama_btn)
 
         div = QtWidgets.QFrame()
         div.setFixedWidth(1)
@@ -2038,7 +2277,7 @@ class EmptyStateView(QtWidgets.QWidget):
         self._lib_label.setStyleSheet("color: #94A3B8; font-size: 12.5px;")
         strip_layout.addWidget(self._lib_label)
         lib_btn = QtWidgets.QPushButton("Add textbooks")
-        lib_btn.setStyleSheet("color: #06B6D4; font-size: 12.5px; font-weight: 600;")
+        lib_btn.setStyleSheet("color: #22D3EE; font-size: 12.5px; font-weight: 600;")
         lib_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         lib_btn.clicked.connect(self.library_requested.emit)
         strip_layout.addWidget(lib_btn)
@@ -2046,10 +2285,31 @@ class EmptyStateView(QtWidgets.QWidget):
         layout.addSpacing(6)
         layout.addWidget(self._setup_strip, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        """Ambient math texture (v2 §5.4). The dot/line grid now comes from the
+        shared BlueprintBackdrop behind the workspace, so this only paints the
+        watermark formulas over it."""
+        painter = QtGui.QPainter(self)
+        rect = self.rect()
+
+        # Watermark formulas: corners, never behind the centered content.
+        if self._watermarks:
+            painter.setOpacity(0.06)
+            positions = [
+                QtCore.QPointF(rect.width() * 0.04, rect.height() * 0.10),
+                QtCore.QPointF(rect.width() * 0.62, rect.height() * 0.82),
+                QtCore.QPointF(rect.width() * 0.06, rect.height() * 0.84),
+            ]
+            for pm, pos in zip(self._watermarks, positions):
+                painter.drawPixmap(pos, pm)
+            painter.setOpacity(1.0)
+        super().paintEvent(event)
+
     def set_status(self, has_api_key: bool, model: str, library_count: int) -> None:
         if has_api_key:
             self._key_icon.setPixmap(icons.icon_pixmap("check-circle", 16, "#10B981"))
             self._key_label.setText(f"Model: {model}")
+            self._ollama_btn.hide()
         else:
             self._key_icon.setPixmap(icons.icon_pixmap("key-round", 16, "#F59E0B"))
             self._key_label.setText("No API key configured")
@@ -2058,6 +2318,15 @@ class EmptyStateView(QtWidgets.QWidget):
             self._lib_label.setText(f"{library_count} textbook{plural} in library")
         else:
             self._lib_label.setText("No textbooks indexed")
+
+    def offer_ollama(self, model_count: int) -> None:
+        """Show the one-click local-AI CTA (called when a probe finds Ollama
+        running and no key is configured)."""
+        self._key_label.setText(
+            f"Ollama detected — {model_count} local model{'s' if model_count != 1 else ''} ready"
+        )
+        self._key_icon.setPixmap(icons.icon_pixmap("check-circle", 16, "#10B981"))
+        self._ollama_btn.show()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2078,7 +2347,7 @@ class RunningView(QtWidgets.QWidget):
         layout.addWidget(self._overlay, 1)
 
         strip = QtWidgets.QWidget()
-        strip.setStyleSheet("background-color: #0A0A0F;")
+        strip.setObjectName("RunningStatusStrip")
         strip_layout = QtWidgets.QVBoxLayout(strip)
         strip_layout.setContentsMargins(20, 8, 20, 24)
         strip_layout.setSpacing(4)
@@ -2328,7 +2597,7 @@ class LibraryPanel(QtWidgets.QWidget):
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setStyleSheet(
             "QProgressBar { background-color: #1E293B; border: none; border-radius: 3px; }"
-            "QProgressBar::chunk { background-color: #06B6D4; border-radius: 3px; }"
+            "QProgressBar::chunk { background-color: #22D3EE; border-radius: 3px; }"
         )
         strip_layout.addWidget(self._progress_bar, 2)
 
@@ -2358,8 +2627,9 @@ class LibraryPanel(QtWidgets.QWidget):
 
         # Empty state (design: ReferenceEmptyState — dashed border + actions)
         self._empty = QtWidgets.QFrame()
+        self._empty.setObjectName("LibraryEmptyState")
         self._empty.setStyleSheet(
-            "QFrame { border: 1px dashed #334155; border-radius: 12px; }"
+            "QFrame#LibraryEmptyState { background-color: #0D0D14; border: 1px dashed #334155; border-radius: 8px; }"
             "QLabel, QPushButton { border: none; }"
         )
         empty_layout = QtWidgets.QVBoxLayout(self._empty)
@@ -2423,19 +2693,40 @@ class LibraryPanel(QtWidgets.QWidget):
         self._list_shell.setVisible(bool(files))
         self._empty.setVisible(not files)
 
-        indexed_paths = self._indexed_paths()
-        for path in files:
+        manifest = self._manifest()
+        # Research-bookshelf spine colors, assigned stably per file.
+        spine_cycle = ("#22D3EE", "#8B5CF6", "#10B981", "#F59E0B", "#F43F5E")
+        for i, path in enumerate(files):
             item = QtWidgets.QListWidgetItem()
             row = QtWidgets.QWidget()
             row_layout = QtWidgets.QHBoxLayout(row)
             row_layout.setContentsMargins(14, 8, 14, 8)
             row_layout.setSpacing(12)
-            row_layout.addWidget(icons.icon_label("file-text", 15, "#64748B"))
+
+            # Painted book spine (design v2 §4: research bookshelf)
+            entry = manifest.get(str(path))
+            indexed = entry is not None
+            reindexing = bool(getattr(self, "_worker", None)
+                              and self._worker and self._worker.isRunning())
+            spine = _BookSpine(spine_cycle[i % len(spine_cycle)])
+            row_layout.addWidget(spine)
+
             name = QtWidgets.QLabel(path.name)
             name.setStyleSheet(
                 "color: #F8FAFC; font-size: 12.5px; background: transparent;"
             )
             row_layout.addWidget(name, 1)
+
+            # chunk count from the manifest (freshness)
+            chunks = int(entry.get("chunks", 0)) if entry else 0
+            if chunks:
+                chunk_lbl = QtWidgets.QLabel(f"{chunks:,} chunks")
+                chunk_lbl.setStyleSheet(
+                    "color: #64748B; font-size: 10.5px; "
+                    "font-family: 'Cascadia Code', monospace; background: transparent;"
+                )
+                row_layout.addWidget(chunk_lbl)
+
             size_kb = path.stat().st_size / 1024
             size = QtWidgets.QLabel(
                 f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
@@ -2445,11 +2736,17 @@ class LibraryPanel(QtWidgets.QWidget):
                 "font-family: 'Cascadia Code', monospace; background: transparent;"
             )
             row_layout.addWidget(size)
-            indexed = str(path) in indexed_paths
-            chip = QtWidgets.QLabel("Indexed" if indexed else "Pending")
-            chip_color = "#10B981" if indexed else "#06B6D4"
+
+            # Freshness dot + status (emerald indexed / amber re-indexing / grey pending)
+            if reindexing and not indexed:
+                status_text, dot = "Re-indexing", "#F59E0B"
+            elif indexed:
+                status_text, dot = "Indexed", "#10B981"
+            else:
+                status_text, dot = "Pending", "#64748B"
+            chip = QtWidgets.QLabel(status_text)
             chip.setStyleSheet(
-                f"color: {chip_color}; border: 1px solid {chip_color}; "
+                f"color: {dot}; border: 1px solid {dot}; "
                 "border-radius: 9px; padding: 1px 9px; font-size: 11px; "
                 "background: transparent;"
             )
@@ -2458,17 +2755,20 @@ class LibraryPanel(QtWidgets.QWidget):
             self._list.addItem(item)
             self._list.setItemWidget(item, row)
 
-    def _indexed_paths(self) -> set[str]:
-        """Paths recorded in the ingest manifest (per-file 'Indexed' chips)."""
+    def _manifest(self) -> dict:
+        """The ingest manifest {path: {mtime, size, chunks}}."""
         if not self._settings:
-            return set()
+            return {}
         try:
             from aetherlab.services.ingestion import LibraryIngestor
 
-            ingestor = LibraryIngestor(self._settings)
-            return set(ingestor._load_manifest().keys())
+            return LibraryIngestor(self._settings)._load_manifest()
         except Exception:  # noqa: BLE001
-            return set()
+            return {}
+
+    def _indexed_paths(self) -> set[str]:
+        """Paths recorded in the ingest manifest (per-file 'Indexed' chips)."""
+        return set(self._manifest().keys())
 
     # ── starter library download flow ──
 
@@ -2529,10 +2829,6 @@ class LibraryPanel(QtWidgets.QWidget):
     def _on_downloads_done(self, ok: int, bad: int) -> None:
         from aetherlab.services.starter_library import write_attribution
 
-        # BUG-6: a user-cancelled run must not silently roll into indexing.
-        # Cancel just hid the progress strip; auto-starting the ingest here
-        # re-shows it and keeps the machine busy against the user's intent.
-        # Index what already arrived only on a natural, uncancelled finish.
         cancelled = bool(
             self._downloader and self._downloader.isInterruptionRequested()
         )
@@ -2541,13 +2837,12 @@ class LibraryPanel(QtWidgets.QWidget):
         self.refresh()
         if cancelled:
             self._progress_strip.hide()
-            if ok:
-                self.status_message.emit(
-                    f"Download cancelled — {ok} book{'s' if ok != 1 else ''} saved; "
-                    "click Re-index to add them to references."
-                )
-            else:
-                self.status_message.emit("Download cancelled.")
+            self._reindex_btn.setEnabled(True)
+            self._reindex_btn.setText("Re-index")
+            self.status_message.emit(
+                f"Starter download cancelled; {ok} completed book"
+                f"{'s were' if ok != 1 else ' was'} kept."
+            )
             return
         if ok == 0:
             self._progress_strip.hide()
@@ -2598,10 +2893,15 @@ class LibraryPanel(QtWidgets.QWidget):
         )
 
     def _on_ingested(self, count: int) -> None:
+        cancelled = bool(self._worker and self._worker.isInterruptionRequested())
         self._reindex_btn.setEnabled(True)
         self._reindex_btn.setText("Re-index")
         self._progress_strip.hide()
-        if count:
+        if cancelled:
+            self.status_message.emit(
+                "Indexing cancelled; completed progress was saved."
+            )
+        elif count:
             self.status_message.emit(f"Indexed {count:,} chunks into ChromaDB.")
         else:
             self.status_message.emit("Library index is already up to date.")
@@ -2613,18 +2913,36 @@ class LibraryPanel(QtWidgets.QWidget):
         self._progress_strip.hide()
         self.status_message.emit(f"Indexing failed: {message}")
 
-    def _cancel_work(self) -> None:
+    def active_workers(self) -> tuple[QtCore.QThread, ...]:
+        """Return live library threads for the application shutdown barrier."""
+        return tuple(
+            worker
+            for worker in (self._downloader, self._worker)
+            if worker is not None and worker.isRunning()
+        )
+
+    def request_background_cancel(self, *, update_ui: bool = False) -> None:
+        """Request cooperative cancellation without claiming work has stopped."""
+        cancelling = False
         if self._downloader and self._downloader.isRunning():
             self._downloader.requestInterruption()
-            self.status_message.emit("Cancelling download…")
+            cancelling = True
+            if update_ui:
+                self.status_message.emit("Cancelling download…")
         if self._worker and self._worker.isRunning():
             self._worker.requestInterruption()
-            self.status_message.emit(
-                "Cancelling indexing — progress is saved and resumes on Re-index."
-            )
-        self._progress_strip.hide()
-        self._reindex_btn.setEnabled(True)
-        self._reindex_btn.setText("Re-index")
+            cancelling = True
+            if update_ui:
+                self.status_message.emit(
+                    "Cancelling indexing — progress is saved and resumes on Re-index."
+                )
+        if update_ui and cancelling:
+            self._progress_strip.show()
+            self._progress_label.setText("Cancelling background work…")
+            self._reindex_btn.setEnabled(False)
+
+    def _cancel_work(self) -> None:
+        self.request_background_cancel(update_ui=True)
 
     # ── add folder ──
 
@@ -2651,3 +2969,962 @@ class LibraryPanel(QtWidgets.QWidget):
         self.refresh()
         if copied:
             self._reindex()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# v2 §6 — Screening room, storyboard, critique, code artifact
+# ════════════════════════════════════════════════════════════════════════════
+
+# Design v2 tokens (mirror ui/style.py; kept local so this block is self-contained)
+_V2 = {
+    "stage": "#000000", "panel": "#0D0D14", "panel2": "#13131A", "elev": "#181822",
+    "line": "#1E293B", "line2": "#334155",
+    "tx": "#F8FAFC", "tx2": "#94A3B8", "tx3": "#64748B",
+    "cyan": "#22D3EE", "cyan_deep": "#06B6D4", "emerald": "#10B981",
+    "violet": "#8B5CF6", "amber": "#F59E0B", "rose": "#F43F5E",
+}
+
+
+def parse_scene_meta(scene: "SceneBundle") -> dict:
+    """Distill a SceneBundle's diagnostics into structured v2 UI state.
+
+    Returns {repaired:int, revised:int, critique:{verdict,score,issues}|None,
+    duration:str|None}. Pure — no Qt. Storyboard rides on scene.storyboard.
+    """
+    import re as _re
+
+    diags = list(getattr(scene, "diagnostics", []) or [])
+    repaired = sum(1 for d in diags if d.startswith("Applied render repair"))
+    revised = sum(1 for d in diags if d.startswith("Applied visual revision"))
+
+    critique = None
+    for d in diags:
+        m = _re.search(r"Visual critique round \d+: (\w+) \(score ([\d.]+)\)(?: — (.+))?", d)
+        if m:
+            verdict, score, issues = m.group(1), float(m.group(2)), m.group(3)
+            critique = {
+                "verdict": verdict,
+                "score": score,
+                "issues": [s.strip() for s in issues.split(";")] if issues else [],
+            }
+    duration = None
+    for d in diags:
+        m = _re.search(r"Estimated duration ~(\d+)s", d)
+        if m:
+            duration = f"~{m.group(1)}s"
+    return {"repaired": repaired, "revised": revised,
+            "critique": critique, "duration": duration}
+
+
+def _frame_step_ms_for_video(path: Path) -> int:
+    """Best-effort one-frame seek step from the video's encoded frame rate."""
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0] if container.streams.video else None
+            rate = float(stream.average_rate) if stream and stream.average_rate else 0.0
+            if rate > 0:
+                return max(1, int(round(1000.0 / rate)))
+    except Exception:  # noqa: BLE001
+        pass
+    return 33
+
+
+def _storyboard_acts(storyboard: dict | None) -> list[dict]:
+    """Normalized [{name, duration_s, beats, narration}] from a storyboard dict."""
+    if not isinstance(storyboard, dict):
+        return []
+    acts = storyboard.get("acts")
+    if not isinstance(acts, list):
+        return []
+    narration = storyboard.get("narration")
+    out = []
+    for i, act in enumerate(acts):
+        if not isinstance(act, dict):
+            continue
+        line = ""
+        if isinstance(narration, list) and i < len(narration):
+            line = str(narration[i])
+        try:
+            dur = float(act.get("duration_s", 0) or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        out.append({
+            "name": str(act.get("name", f"ACT {i + 1}")),
+            "duration_s": dur,
+            "beats": [str(b) for b in act.get("beats", []) if b],
+            "narration": line,
+        })
+    return out
+
+
+class _Pill(QtWidgets.QLabel):
+    """Small status pill (repaired ×N / revised ×N / verdict)."""
+
+    def __init__(self, text: str, color: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setStyleSheet(
+            f"color: {color}; border: 1px solid {color}; border-radius: 9px; "
+            "padding: 1px 9px; font-size: 10.5px; font-weight: 600; "
+            "font-family: 'Cascadia Code', monospace; background: transparent;"
+        )
+
+
+class ManimBadge(QtWidgets.QFrame):
+    """"Rendered with Manim Community" attribution (design v2 §6)."""
+
+    def __init__(self, small: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ManimBadge")
+        self.setStyleSheet(
+            "QFrame#ManimBadge { background: rgba(10,10,15,0.72); border: 1px solid "
+            f"{_V2['line']}; border-radius: 6px; }}"
+        )
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 8, 3)
+        lay.setSpacing(6)
+        glyph = icons.icon_label("aperture", 13 if small else 15, _V2["cyan"])
+        lay.addWidget(glyph)
+        text = QtWidgets.QLabel("Rendered with Manim Community")
+        text.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: {9 if small else 10.5}px; "
+            "background: transparent; border: none;"
+        )
+        if small:
+            text.setText("Manim CE")
+        lay.addWidget(text)
+
+
+class ActSeekSlider(QtWidgets.QSlider):
+    """Seek slider that paints storyboard act ticks (violet) and an amber
+    hero-frame bookmark over the groove (design v2 §6)."""
+
+    hero_seek_requested = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
+        self._act_fracs: list[tuple[float, str]] = []   # (start_frac, name)
+        self._hero_frac: float | None = None
+
+    def set_acts(self, acts: list[dict]) -> None:
+        total = sum(a["duration_s"] for a in acts) or 0.0
+        self._act_fracs = []
+        self._hero_frac = None
+        if total <= 0:
+            self.update()
+            return
+        cum = 0.0
+        for act in acts:
+            self._act_fracs.append((cum / total, act["name"]))
+            # Hero frame lives in the REVEAL act (cinematic §5): bookmark its start.
+            if act["name"].upper().startswith("REVEAL"):
+                self._hero_frac = cum / total
+            cum += act["duration_s"]
+        if self._hero_frac is None and self._act_fracs:
+            self._hero_frac = self._act_fracs[-1][0]
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self._act_fracs:
+            return
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        mid = self.height() / 2
+        for frac, _name in self._act_fracs:
+            x = frac * w
+            pen = QtGui.QPen(QtGui.QColor(_V2["violet"]), 1.5)
+            painter.setPen(pen)
+            painter.drawLine(QtCore.QPointF(x, mid - 6), QtCore.QPointF(x, mid + 6))
+        if self._hero_frac is not None:
+            x = self._hero_frac * w
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(_V2["amber"]))
+            painter.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(x, mid - 7), QtCore.QPointF(x - 4, mid - 12),
+                QtCore.QPointF(x + 4, mid - 12),
+            ]))
+
+
+class StoryboardStrip(QtWidgets.QWidget):
+    """Docked act strip: ESTABLISH / EVOLVE / REVEAL cards. Clicking an act
+    emits its start fraction so the video can seek there (design v2 §6)."""
+
+    act_seek_requested = QtCore.pyqtSignal(float)
+
+    _ACT_COLORS = {"ESTABLISH": _V2["cyan"], "EVOLVE": _V2["emerald"],
+                   "REVEAL": _V2["amber"]}
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._layout = QtWidgets.QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._empty = QtWidgets.QLabel("No storyboard for this scene.")
+        self._empty.setStyleSheet(f"color: {_V2['tx3']}; font-size: 11px;")
+        self._layout.addWidget(self._empty)
+
+    def set_storyboard(self, storyboard: dict | None) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        acts = _storyboard_acts(storyboard)
+        if not acts:
+            self._empty = QtWidgets.QLabel("No storyboard for this scene.")
+            self._empty.setStyleSheet(f"color: {_V2['tx3']}; font-size: 11px;")
+            self._layout.addWidget(self._empty)
+            return
+        total = sum(a["duration_s"] for a in acts) or 1.0
+        cum = 0.0
+        for act in acts:
+            frac = cum / total
+            cum += act["duration_s"]
+            self._layout.addWidget(self._make_card(act, frac), 1)
+
+    def _make_card(self, act: dict, frac: float) -> QtWidgets.QWidget:
+        name = act["name"].upper()
+        color = self._ACT_COLORS.get(name.split()[0] if name else "", _V2["violet"])
+        card = QtWidgets.QFrame()
+        card.setObjectName("ActCard")
+        card.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        card.setStyleSheet(
+            f"QFrame#ActCard {{ background: {_V2['panel2']}; border: 1px solid {_V2['line']}; "
+            f"border-left: 3px solid {color}; border-radius: 8px; }}"
+            f"QFrame#ActCard:hover {{ background: {_V2['elev']}; }}"
+        )
+        lay = QtWidgets.QVBoxLayout(card)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(3)
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        label = QtWidgets.QLabel(act["name"])
+        label.setStyleSheet(
+            f"color: {color}; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 0.8px; background: transparent; border: none;"
+        )
+        head.addWidget(label)
+        head.addStretch()
+        dur = QtWidgets.QLabel(f"{act['duration_s']:g}s")
+        dur.setStyleSheet(
+            f"color: {_V2['tx3']}; font-size: 10px; font-family: 'Cascadia Code', "
+            "monospace; background: transparent; border: none;"
+        )
+        head.addWidget(dur)
+        lay.addLayout(head)
+        if act["narration"]:
+            script = QtWidgets.QLabel(act["narration"])
+            script.setWordWrap(True)
+            script.setStyleSheet(
+                f"color: {_V2['tx2']}; font-size: 11px; font-style: italic; "
+                "background: transparent; border: none;"
+            )
+            lay.addWidget(script)
+        card.mousePressEvent = lambda e, f=frac: self.act_seek_requested.emit(f)
+        return card
+
+
+class CritiqueBadge(QtWidgets.QFrame):
+    """Verdict + 0–10 score + expandable issues (design v2 §4/§6)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CritiqueBadge")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(4)
+
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        self._icon = QtWidgets.QLabel()
+        self._icon.setFixedSize(16, 16)
+        head.addWidget(self._icon)
+        self._verdict = QtWidgets.QLabel("")
+        self._verdict.setStyleSheet(
+            f"color: {_V2['tx']}; font-size: 12px; font-weight: 600; "
+            "background: transparent; border: none;"
+        )
+        head.addWidget(self._verdict)
+        self._score = QtWidgets.QLabel("")
+        self._score.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: 11px; font-family: 'Cascadia Code', "
+            "monospace; background: transparent; border: none;"
+        )
+        head.addWidget(self._score)
+        head.addStretch()
+        self._toggle = QtWidgets.QPushButton("Issues")
+        self._toggle.setObjectName("GhostButton")
+        self._toggle.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._toggle.clicked.connect(self._toggle_issues)
+        head.addWidget(self._toggle)
+        lay.addLayout(head)
+
+        self._issues = QtWidgets.QLabel("")
+        self._issues.setWordWrap(True)
+        self._issues.setStyleSheet(
+            f"color: {_V2['tx2']}; font-size: 11px; padding: 2px 0 2px 24px; "
+            "background: transparent; border: none;"
+        )
+        self._issues.hide()
+        lay.addWidget(self._issues)
+        self.hide()
+
+    def _toggle_issues(self) -> None:
+        self._issues.setVisible(not self._issues.isVisible())
+
+    def set_critique(self, critique: dict | None) -> None:
+        if not critique:
+            self.hide()
+            return
+        verdict = critique["verdict"]
+        color = {"ship": _V2["emerald"], "revise": _V2["amber"]}.get(verdict, _V2["tx3"])
+        icon_name = {"ship": "check-circle", "revise": "alert-circle"}.get(verdict, "info")
+        self._icon.setPixmap(icons.icon_pixmap(icon_name, 15, color))
+        self._verdict.setText(
+            {"ship": "Ready to ship", "revise": "Revision suggested"}.get(
+                verdict, verdict.title())
+        )
+        self._score.setText(f"{critique['score']:.1f}/10")
+        issues = critique.get("issues") or []
+        if issues:
+            self._issues.setText("• " + "\n• ".join(issues))
+            self._toggle.show()
+        else:
+            self._toggle.hide()
+        self.setStyleSheet(
+            f"QFrame#CritiqueBadge {{ background: {_V2['panel2']}; "
+            f"border: 1px solid {color}; border-radius: 8px; }}"
+        )
+        self.show()
+
+
+class _ManimHighlighter(QtGui.QSyntaxHighlighter):
+    """Manim-aware syntax accents (design v2 syntax map)."""
+
+    _KEYWORDS = {
+        "import", "from", "as", "def", "class", "return", "for", "while", "if",
+        "elif", "else", "with", "in", "and", "or", "not", "lambda", "self",
+        "True", "False", "None", "yield", "pass", "break", "continue",
+    }
+    _PLAY_VERBS = {
+        "Create", "Write", "Transform", "ReplacementTransform", "FadeIn",
+        "FadeOut", "GrowFromCenter", "GrowArrow", "DrawBorderThenFill",
+        "Indicate", "Flash", "Circumscribe", "MoveAlongPath", "Rotate",
+        "Rotating", "TransformMatchingTex", "TransformMatchingShapes",
+        "ApplyWave", "SpiralIn", "Wiggle", "FocusOn", "ShowPassingFlash",
+        "always_redraw", "add_updater",
+    }
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        import re as _re
+        self._re = _re
+        self._fmt = {}
+        for key, color in (("kw", _V2["violet"]), ("cls", _V2["cyan"]),
+                           ("verb", _V2["emerald"]), ("lit", _V2["amber"]),
+                           ("cmt", _V2["tx3"])):
+            f = QtGui.QTextCharFormat()
+            f.setForeground(QtGui.QColor(color))
+            self._fmt[key] = f
+        self._fmt["cls"].setFontWeight(QtGui.QFont.Weight.DemiBold)
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802
+        for m in self._re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text):
+            word = m.group()
+            if word in self._KEYWORDS:
+                self.setFormat(m.start(), len(word), self._fmt["kw"])
+            elif word in self._PLAY_VERBS:
+                self.setFormat(m.start(), len(word), self._fmt["verb"])
+            elif word[:1].isupper():
+                self.setFormat(m.start(), len(word), self._fmt["cls"])
+        for m in self._re.finditer(r"\b\d+\.?\d*\b", text):
+            self.setFormat(m.start(), len(m.group()), self._fmt["lit"])
+        for m in self._re.finditer(r"(['\"]).*?\1", text):
+            self.setFormat(m.start(), len(m.group()), self._fmt["lit"])
+        h = text.find("#")
+        if h >= 0:
+            self.setFormat(h, len(text) - h, self._fmt["cmt"])
+
+
+class _LineNumberArea(QtWidgets.QWidget):
+    def __init__(self, editor: "CodeArtifactView") -> None:
+        super().__init__(editor)
+        self._editor = editor
+
+    def sizeHint(self) -> QtCore.QSize:  # noqa: N802
+        return QtCore.QSize(self._editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        self._editor.line_number_area_paint(event)
+
+
+class CodeArtifactView(QtWidgets.QPlainTextEdit):
+    """Editor pane with line numbers + Manim syntax accents (design v2 §6)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setObjectName("CodeArtifact")
+        self.setStyleSheet(
+            f"QPlainTextEdit#CodeArtifact {{ background: {_V2['stage']}; "
+            f"border: 1px solid {_V2['line']}; border-radius: 8px; "
+            f"color: {_V2['tx']}; font-family: 'Cascadia Code', monospace; "
+            "font-size: 12px; padding: 4px; }"
+        )
+        self.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self._numbers = _LineNumberArea(self)
+        self._highlighter = _ManimHighlighter(self.document())
+        self.blockCountChanged.connect(lambda _: self._update_margins())
+        self.updateRequest.connect(self._update_numbers)
+        self._update_margins()
+
+    def line_number_area_width(self) -> int:
+        digits = len(str(max(1, self.blockCount())))
+        return 14 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def _update_margins(self) -> None:
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def _update_numbers(self, rect, dy) -> None:
+        if dy:
+            self._numbers.scroll(0, dy)
+        else:
+            self._numbers.update(0, rect.y(), self._numbers.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_margins()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self._numbers.setGeometry(
+            QtCore.QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height())
+        )
+
+    def line_number_area_paint(self, event) -> None:
+        painter = QtGui.QPainter(self._numbers)
+        painter.fillRect(event.rect(), QtGui.QColor(_V2["panel"]))
+        block = self.firstVisibleBlock()
+        num = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+        painter.setFont(self.font())
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                painter.setPen(QtGui.QColor(_V2["tx3"]))
+                painter.drawText(
+                    0, int(top), self._numbers.width() - 6, self.fontMetrics().height(),
+                    QtCore.Qt.AlignmentFlag.AlignRight, str(num + 1),
+                )
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            num += 1
+
+
+class _DiagnosticsDrawer(QtWidgets.QFrame):
+    """Collapsible mono diagnostics with severity dots (design v2 §4)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
+        self._toggle = QtWidgets.QPushButton("▸ Diagnostics")
+        self._toggle.setObjectName("GhostButton")
+        self._toggle.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._toggle.clicked.connect(self._toggle_body)
+        lay.addWidget(self._toggle, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+        self._body = QtWidgets.QPlainTextEdit()
+        self._body.setReadOnly(True)
+        self._body.setMaximumHeight(120)
+        self._body.setStyleSheet(
+            f"QPlainTextEdit {{ background: {_V2['panel']}; border: 1px solid {_V2['line']}; "
+            f"border-radius: 6px; color: {_V2['tx2']}; font-family: 'Cascadia Code', "
+            "monospace; font-size: 11px; }"
+        )
+        self._body.hide()
+        lay.addWidget(self._body)
+        self.hide()
+
+    def _severity(self, line: str) -> str:
+        low = line.lower()
+        if any(k in low for k in ("fail", "error", "timed out", "unsafe")):
+            return "●"  # rose
+        if any(k in low for k in ("repair", "revis", "retry", "revise", "warn")):
+            return "●"  # amber
+        return "●"
+
+    def set_diagnostics(self, diagnostics: list[str]) -> None:
+        if not diagnostics:
+            self.hide()
+            return
+        rows = []
+        for d in diagnostics:
+            low = d.lower()
+            if any(k in low for k in ("fail", "error", "timed out", "unsafe")):
+                dot = _V2["rose"]
+            elif any(k in low for k in ("repair", "revis", "retry", "warn")):
+                dot = _V2["amber"]
+            else:
+                dot = _V2["tx3"]
+            rows.append((dot, d))
+        # QPlainTextEdit can't color per-line easily; prefix with a unicode dot
+        # and rely on the drawer being mono. Keep it simple + legible.
+        self._body.setPlainText("\n".join(f"• {d}" for _c, d in rows))
+        self._toggle.setText(f"▸ Diagnostics ({len(diagnostics)})")
+        self.show()
+
+    def _toggle_body(self) -> None:
+        vis = not self._body.isVisible()
+        self._body.setVisible(vis)
+        self._toggle.setText(
+            self._toggle.text().replace("▸", "▾") if vis
+            else self._toggle.text().replace("▾", "▸")
+        )
+
+
+class _BookSpine(QtWidgets.QWidget):
+    """A little painted book spine for the library bookshelf (design v2 §4)."""
+
+    def __init__(self, color: str, parent=None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(8, 24)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor(self._color))
+        painter.drawRoundedRect(QtCore.QRectF(1, 1, 6, 22), 2, 2)
+        cap = QtGui.QColor(self._color)
+        cap.setAlphaF(0.5)
+        painter.setBrush(cap)
+        painter.drawRoundedRect(QtCore.QRectF(1, 1, 6, 4), 2, 2)
+
+
+class BlueprintBackdrop(QtWidgets.QWidget):
+    """A precision-instrument backdrop: fine cyan dot grid + faint 40px
+    blueprint cross-lines (design v2 guidelines). Hosts a single child that
+    fills it; the texture shows through the child's transparent gaps.
+    """
+
+    def __init__(self, child: QtWidgets.QWidget, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("BlueprintBackdrop")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(child)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        painter = QtGui.QPainter(self)
+        rect = self.rect()
+        painter.fillRect(rect, QtGui.QColor("#0A0A0F"))
+
+        # Blueprint cross-lines every 40px at ~4% cyan.
+        line = QtGui.QColor("#22D3EE")
+        line.setAlphaF(0.035)
+        painter.setPen(QtGui.QPen(line, 1))
+        for x in range(0, rect.width(), 40):
+            painter.drawLine(x, 0, x, rect.height())
+        for y in range(0, rect.height(), 40):
+            painter.drawLine(0, y, rect.width(), y)
+
+        # Dot grid at the 40px intersections, slightly brighter.
+        dot = QtGui.QColor("#22D3EE")
+        dot.setAlphaF(0.06)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(dot)
+        for x in range(0, rect.width(), 40):
+            for y in range(0, rect.height(), 40):
+                painter.drawEllipse(QtCore.QPointF(x, y), 1.1, 1.1)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Lesson view (topic explainer — outline · transcript · questions · references)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _QuestionCard(QtWidgets.QFrame):
+    """One check-yourself item: MCQ radios with immediate feedback, or an open
+    question that reveals a model answer."""
+
+    answer_recorded = QtCore.pyqtSignal(bool, str)
+
+    def __init__(self, index: int, question, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CardFrame")
+        self._q = question
+        self._answered = False
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        prompt = QtWidgets.QLabel(f"{index}. {question.q}")
+        prompt.setWordWrap(True)
+        prompt.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
+        layout.addWidget(prompt)
+
+        self._feedback = QtWidgets.QLabel("")
+        self._feedback.setWordWrap(True)
+        self._feedback.setStyleSheet("color: #94A3B8; font-size: 12px;")
+
+        if question.choices:  # MCQ
+            self._group = QtWidgets.QButtonGroup(self)
+            for choice in question.choices:
+                rb = QtWidgets.QRadioButton(choice)
+                rb.setStyleSheet("color: #E2E8F0; font-size: 12.5px; spacing: 8px;")
+                rb.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                rb.toggled.connect(lambda checked, c=choice: checked and self._answer_mcq(c))
+                self._group.addButton(rb)
+                layout.addWidget(rb)
+            layout.addWidget(self._feedback)
+        else:  # open question
+            reveal = QtWidgets.QPushButton("Reveal answer")
+            reveal.setObjectName("SecondaryButton")
+            reveal.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            reveal.clicked.connect(self._reveal_open)
+            layout.addWidget(reveal)
+            layout.addWidget(self._feedback)
+
+    def _answer_mcq(self, choice: str) -> None:
+        # BUG-27: only the first selection counts. toggled fires on every
+        # radio change, so without this guard a student who switches options
+        # (or clicks each until Correct appears) would record multiple
+        # attempts, inflating the persisted course score. Lock after answering.
+        if self._answered:
+            return
+        self._answered = True
+        correct = str(choice).strip() == str(self._q.answer).strip()
+        why = f" — {self._q.why}" if self._q.why else ""
+        self._feedback.setText(
+            ("✓ Correct" if correct else f"✗ Not quite. Answer: {self._q.answer}") + why
+        )
+        self._feedback.setStyleSheet(
+            f"color: {'#10B981' if correct else '#F43F5E'}; font-size: 12px;"
+        )
+        for button in self._group.buttons():
+            button.setEnabled(False)
+        self.answer_recorded.emit(correct, str(choice))
+
+    def _reveal_open(self) -> None:
+        self._feedback.setText(f"Model answer: {self._q.answer}")
+        self._feedback.setStyleSheet("color: #10B981; font-size: 12px;")
+
+
+class LessonView(QtWidgets.QWidget):
+    """The topic-explainer lesson surface: a chapter outline that seeks the
+    assembled video, plus transcript, interactive questions, and references."""
+
+    chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
+    export_requested = QtCore.pyqtSignal()
+    share_bundle_requested = QtCore.pyqtSignal()
+    quiz_answered = QtCore.pyqtSignal(int, bool, str)  # question index, correct, choice
+    regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._bundle = None
+        self._chapter_offsets: list[float] = []
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        header = QtWidgets.QHBoxLayout()
+        self._title = QtWidgets.QLabel("Lesson")
+        self._title.setObjectName("PanelTitle")
+        header.addWidget(self._title)
+        header.addStretch()
+        self._audience = QtWidgets.QLabel("")
+        self._audience.setStyleSheet("color: #64748B; font-size: 11px;")
+        header.addWidget(self._audience)
+        regen_btn = QtWidgets.QPushButton("Regenerate")
+        regen_btn.setObjectName("SecondaryButton")
+        regen_btn.setIcon(icons.icon("refresh-cw", 13, "#94A3B8"))
+        regen_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        regen_btn.setToolTip("Rebuild this lesson from scratch (ignore cached plan and clips)")
+        regen_btn.clicked.connect(self.regenerate_requested.emit)
+        header.addWidget(regen_btn)
+        export_btn = QtWidgets.QPushButton("Export study guide")
+        export_btn.setObjectName("SecondaryButton")
+        export_btn.setIcon(icons.icon("download", 13, "#94A3B8"))
+        export_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        export_btn.clicked.connect(self.export_requested.emit)
+        header.addWidget(export_btn)
+        bundle_btn = QtWidgets.QPushButton("Export bundle")
+        bundle_btn.setObjectName("SecondaryButton")
+        bundle_btn.setAccessibleName("Lesson bundle export")
+        bundle_btn.setIcon(icons.icon("folder-open", 13, "#94A3B8"))
+        bundle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        bundle_btn.setToolTip("Export a portable ZIP with video, subtitles, study guide, and HTML player")
+        bundle_btn.clicked.connect(self.share_bundle_requested.emit)
+        header.addWidget(bundle_btn)
+        layout.addLayout(header)
+
+        self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self._outline = QtWidgets.QListWidget()
+        self._outline.setObjectName("HistoryList")
+        self._outline.setMinimumWidth(160)
+        self._outline.setMaximumWidth(280)
+        self._outline.itemClicked.connect(self._on_outline_click)
+        self._split.addWidget(self._outline)
+
+        self._tabs = QtWidgets.QTabWidget()
+        self._tabs.addTab(self._build_video(), "Video")
+        self._transcript = QtWidgets.QTextEdit()
+        self._transcript.setReadOnly(True)
+        self._tabs.addTab(self._transcript, "Transcript")
+
+        self._questions_page = QtWidgets.QWidget()
+        questions_page_layout = QtWidgets.QVBoxLayout(self._questions_page)
+        questions_page_layout.setContentsMargins(0, 0, 0, 0)
+        questions_page_layout.setSpacing(8)
+        self._course_status = QtWidgets.QLabel(
+            "Course progress starts when you answer a quiz question."
+        )
+        self._course_status.setObjectName("CourseProgressStatus")
+        self._course_status.setWordWrap(True)
+        self._course_status.setStyleSheet(
+            "color: #94A3B8; font-size: 12px; padding: 8px 10px; "
+            "border: 1px solid #1E293B; border-radius: 8px; background: #0D0D14;"
+        )
+        questions_page_layout.addWidget(self._course_status)
+
+        self._questions_scroll = QtWidgets.QScrollArea()
+        self._questions_scroll.setWidgetResizable(True)
+        self._questions_host = QtWidgets.QWidget()
+        self._questions_layout = QtWidgets.QVBoxLayout(self._questions_host)
+        self._questions_layout.setSpacing(10)
+        self._questions_layout.addStretch()
+        self._questions_scroll.setWidget(self._questions_host)
+        questions_page_layout.addWidget(self._questions_scroll, 1)
+        self._tabs.addTab(self._questions_page, "Questions")
+
+        self._references = QtWidgets.QTextEdit()
+        self._references.setReadOnly(True)
+        self._tabs.addTab(self._references, "References")
+
+        # "Play with it" — an embedded live canvas seeded from the lesson's
+        # domain, completing the pedagogy loop (interactive chapter).
+        explore = QtWidgets.QWidget()
+        ex_layout = QtWidgets.QVBoxLayout(explore)
+        ex_layout.setContentsMargins(0, 0, 0, 0)
+        ex_layout.setSpacing(6)
+        self._explore_hint = QtWidgets.QLabel("")
+        self._explore_hint.setWordWrap(True)
+        self._explore_hint.setStyleSheet("color: #94A3B8; font-size: 12px; padding: 4px 2px;")
+        ex_layout.addWidget(self._explore_hint)
+        self._explore_canvas = LiveCanvas()
+        ex_layout.addWidget(self._explore_canvas, 1)
+        self._tabs.addTab(explore, "Play with it")
+
+        self._split.addWidget(self._tabs)
+        self._split.setSizes([260, 640])
+        self._split.setStretchFactor(0, 0)
+        self._split.setStretchFactor(1, 1)
+        layout.addWidget(self._split, 1)
+
+        self._empty = QtWidgets.QLabel("Enter a topic and press Learn to generate a lesson.")
+        self._empty.setObjectName("EmptyHint")
+        self._empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._empty)
+        self._set_populated(False)
+
+    def _build_video(self) -> QtWidgets.QWidget:
+        """Inline lesson player (true-black stage + play/pause/stop). Guarded so
+        the widget still builds if QtMultimedia is unavailable."""
+        container = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        self._player = None
+        try:
+            from PyQt6.QtMultimedia import QMediaPlayer
+            from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+            self._video_widget = QVideoWidget()
+            self._video_widget.setMinimumSize(280, 158)
+            self._video_widget.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
+            self._video_widget.setStyleSheet("background-color: #000; border-radius: 8px;")
+            v.addWidget(self._video_widget, 1)
+            self._player = QMediaPlayer()
+            self._player.setVideoOutput(self._video_widget)
+
+            controls = QtWidgets.QHBoxLayout()
+            for label, slot in (("play", lambda: self._player.play()),
+                                ("pause", lambda: self._player.pause()),
+                                ("square", lambda: self._player.stop())):
+                b = QtWidgets.QPushButton()
+                b.setIcon(icons.icon(label, 14, "#94A3B8"))
+                b.setFixedSize(28, 28)
+                b.setObjectName("VideoControlBtn")
+                b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                b.clicked.connect(slot)
+                controls.addWidget(b)
+            controls.addStretch()
+            v.addLayout(controls)
+        except Exception:  # noqa: BLE001 — multimedia optional
+            placeholder = QtWidgets.QLabel("Assembled lesson video will play here.")
+            placeholder.setObjectName("EmptyHint")
+            placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            v.addWidget(placeholder, 1)
+        return container
+
+    def set_video(self, path: str) -> None:
+        """Load the assembled lesson MP4 into the inline player."""
+        if not self._player or not path or not Path(path).exists():
+            return
+        from PyQt6.QtCore import QUrl
+
+        self._player.setSource(QUrl.fromLocalFile(str(path)))
+        self._tabs.setCurrentIndex(0)  # Video tab
+
+    def _set_populated(self, populated: bool) -> None:
+        self._split.setVisible(populated)
+        self._empty.setVisible(not populated)
+
+    def set_lesson(self, bundle) -> None:
+        """Populate the view from a LessonBundle (plan + rendered chapters)."""
+        self._bundle = bundle
+        plan = bundle.plan
+        self._title.setText(plan.title or "Lesson")
+        self._audience.setText(plan.audience.replace("_", " "))
+
+        self._outline.clear()
+        transcript_html: list[str] = []
+        self._chapter_offsets = []
+        # True per-chapter start times in the assembled video (account for the
+        # intro/chapter title cards + crossfades). These align with the RENDERED
+        # chapters, so walk plan.chapters with a separate rendered index; a
+        # non-rendered chapter (e.g. 'interactive') has no clip and stays at the
+        # running position. Empty offsets (old cache / plain concat) fall back to
+        # a running sum of clip durations.
+        offsets = list(getattr(bundle, "chapter_offsets", []) or [])
+        durations = _bundle_chapter_durations(bundle)
+        rendered_indexes = list(getattr(bundle, "rendered_chapter_indexes", []) or [])
+        mapped_rendered = (
+            {idx: r for r, idx in enumerate(rendered_indexes)}
+            if len(rendered_indexes) == len(getattr(bundle, "chapter_scenes", []) or [])
+            else {}
+        )
+        try:
+            from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+        except Exception:  # noqa: BLE001
+            _RENDERED_KINDS = {"scene", "equation_card", "recap"}
+        t = 0.0
+        r = 0  # index into the rendered-chapter-aligned offsets/durations
+        for i, ch in enumerate(plan.chapters):
+            is_rendered = ch.kind in _RENDERED_KINDS
+            missing_render = bool(mapped_rendered and is_rendered and i not in mapped_rendered)
+            if mapped_rendered:
+                mapped_r = mapped_rendered.get(i)
+                seek = float(offsets[mapped_r]) if mapped_r is not None and mapped_r < len(offsets) else t
+            else:
+                mapped_r = r if is_rendered else None
+                seek = float(offsets[r]) if is_rendered and r < len(offsets) else t
+            suffix = " (not rendered)" if missing_render else ""
+            item = QtWidgets.QListWidgetItem(f"{i + 1}. {ch.title}{suffix}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, seek)
+            if missing_render:
+                item.setToolTip("This chapter did not render; the lesson continues with available chapters.")
+                item.setForeground(QtGui.QColor("#64748B"))
+            self._outline.addItem(item)
+            self._chapter_offsets.append(seek)
+            fc = f" <span style='color:#64748B'>({ch.fact_check})</span>" if ch.fact_check else ""
+            transcript_html.append(
+                f"<p><b style='color:#22D3EE'>{i + 1}. {ch.title}</b>{fc}<br>"
+                f"<span style='color:#E2E8F0'>{ch.narration or ch.goal}</span></p>"
+            )
+            if mapped_r is not None:
+                dur = durations[mapped_r] if mapped_r < len(durations) else 0.0
+                t = seek + dur
+            if is_rendered and not mapped_rendered:
+                r += 1
+        self._transcript.setHtml("".join(transcript_html))
+
+        while self._questions_layout.count() > 1:
+            w = self._questions_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        for i, q in enumerate(plan.questions, 1):
+            card = _QuestionCard(i, q)
+            card.answer_recorded.connect(
+                lambda correct, choice, idx=i - 1: self._on_quiz_answer(idx, correct, choice)
+            )
+            self._questions_layout.insertWidget(self._questions_layout.count() - 1, card)
+
+        cites: list[str] = []
+        for ch in plan.chapters:
+            for c in ch.citations:
+                if c not in cites:
+                    cites.append(c)
+        self._references.setHtml(
+            "<br>".join(f"• {c}" for c in cites) if cites
+            else "<span style='color:#64748B'>No citations available.</span>"
+        )
+
+        self._seed_explore(plan)
+        self.set_course_summary("Course progress starts when you answer a quiz question.")
+        self._set_populated(True)
+
+    def set_course_summary(self, message: str) -> None:
+        self._course_status.setText(message)
+
+    def _on_quiz_answer(self, question_index: int, correct: bool, choice: str) -> None:
+        self.quiz_answered.emit(question_index, bool(correct), str(choice))
+
+    def _seed_explore(self, plan) -> None:
+        """Seed the 'Play with it' canvas from the lesson's domain + the
+        interactive chapter's guiding prompt (fail-soft)."""
+        try:
+            from aetherlab.services.llm import DEFAULT_VARIABLES, extract_keywords
+            from aetherlab.services.scene_templates import detect_domain
+
+            domain = detect_domain(extract_keywords(plan.topic) or [plan.topic], {})
+            params = {
+                "oscillator": {"damping": 0.15, "stiffness": 1.0, "mass": 1.0},
+                "pendulum": {"gravity": 9.81, "length": 1.0},
+                "orbit": {"eccentricity": 0.5, "semi_major": 1.0},
+                "wave": {"frequency": 2.0, "wave_speed": 1.0},
+            }.get(domain, dict(DEFAULT_VARIABLES))
+            interactive = next((c for c in plan.chapters if c.kind == "interactive"), None)
+            hint = (interactive.narration if interactive and interactive.narration
+                    else "Drag the parameters and watch the curves respond.")
+            self._explore_hint.setText("▶ " + hint)
+            state = build_canvas_state(plan.title[:50], params)
+            self._explore_canvas.set_state(state)
+        except Exception:  # noqa: BLE001 — exploration is a bonus, never fatal
+            self._explore_hint.setText("Interactive exploration unavailable for this lesson.")
+
+    def _on_outline_click(self, item: QtWidgets.QListWidgetItem) -> None:
+        seconds = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if seconds is None:
+            return
+        seconds = float(seconds)
+        self.chapter_seek_requested.emit(seconds)
+        # Seek the inline player to the chapter start and show the Video tab.
+        if self._player is not None:
+            self._player.setPosition(int(seconds * 1000))
+            self._tabs.setCurrentIndex(0)
+            self._player.play()
+
+
+def _bundle_chapter_durations(bundle) -> list[float]:
+    """Best-effort per-chapter clip durations (seconds) for outline seeking."""
+    durations: list[float] = []
+    try:
+        from pathlib import Path as _P
+
+        from aetherlab.services.voiceover import _duration_sync
+        for scene in bundle.chapter_scenes:
+            vp = getattr(scene, "video_path", "")
+            durations.append(_duration_sync(_P(vp)) if vp and _P(vp).exists() else 0.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return durations
