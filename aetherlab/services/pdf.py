@@ -263,6 +263,11 @@ def _latex_escape(text: str) -> str:
         "}": r"\}",
         "~": r"\textasciitilde{}",
         "^": r"\textasciicircum{}",
+        # Must stay AFTER the brace entries: in text mode LaTeX renders a bare
+        # "<"/">" as the inverted marks "¡"/"¿" (so "<=" printed as "¡=" and
+        # "->" as "-¿"), and the braces introduced here must not be re-escaped.
+        "<": r"\textless{}",
+        ">": r"\textgreater{}",
     }
     result = text
     for old, new in replacements.items():

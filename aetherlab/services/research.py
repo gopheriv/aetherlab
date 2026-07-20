@@ -108,11 +108,23 @@ def build_latex(
     narrative: str = "", verification: list[str] | None = None,
 ) -> str:
     esc = _latex_escape
-    title = esc((solver.summary[:80].strip() if getattr(solver, "summary", "") else "") or "AetherLab Derivation")
+    # The problem itself is the natural title of a research note. The solver's
+    # summary must NOT be used here: on the keyless path it is an internal
+    # diagnostic ("No API key configured; deterministic fallback used ...").
+    raw_title = request.normalized_prompt().strip() or "AetherLab Derivation"
+    title = esc(raw_title if len(raw_title) <= 90 else raw_title[:89].rstrip() + "...")
     prompt = esc(request.normalized_prompt())
-    abstract = esc(narrative.strip()) if narrative.strip() else esc(
-        getattr(solver, "summary", "") or "Analytical derivation and numerical solution."
-    )
+    summary = (getattr(solver, "summary", "") or "").strip()
+    if narrative.strip():
+        abstract = esc(narrative.strip())
+    elif getattr(solver, "model_name", "") == "deterministic-fallback":
+        abstract = esc(
+            "Generated offline with AetherLab's deterministic solver (no model configured). "
+            "The derivation scaffold and parameters below are analytic; the figure and the "
+            "verification checks are computed from the numerical ground truth."
+        )
+    else:
+        abstract = esc(summary or "Analytical derivation and numerical solution.")
     steps = "\n".join(
         rf"  \item {esc(step)}" for step in getattr(solver, "derivation_steps", [])
     ) or r"  \item No derivation steps available."
