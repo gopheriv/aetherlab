@@ -341,6 +341,82 @@ def _check_tex_source(tex: str) -> str | None:
     return None
 
 
+# Math-mode-only constructs. `Tex` renders in LaTeX *text* mode, where a bare
+# `_`/`^` or a math command is illegal — LaTeX aborts with "Missing $ inserted."
+# and the whole render dies (observed on real cloud renders: Tex("m_1"),
+# Tex("\\theta_1")). The fix is MathTex, not a different string.
+# Allow-list rather than a math-command blacklist: enumerating every math macro
+# is a losing game (the first pass missed \mathcal and the render still died).
+# Any other LaTeX letter-command in a text-mode Tex(...) is treated as math.
+# Escaped punctuation (\%, \&, \_, \$, \#) never matches — it isn't a letter run.
+_TEXT_SAFE_COMMANDS = frozenset({
+    "textbf", "textit", "texttt", "textrm", "textsf", "textsc", "emph", "text",
+    "rm", "bf", "it", "sf", "tt", "quad", "qquad", "ldots", "dots", "textbackslash",
+    "textasciitilde", "textasciicircum", "textless", "textgreater", "par", "newline",
+})
+
+
+def _needs_math_mode(tex: str) -> bool:
+    """True when a text-mode Tex(...) string contains math-only constructs.
+
+    ``Tex`` renders in LaTeX text mode, so a bare ``_``/``^`` or a math macro
+    (``\\theta``, ``\\frac``, ``\\mathcal`` ...) aborts the compile. Content
+    already wrapped in ``$...$`` is explicit math and compiles fine.
+    """
+    outside = re.sub(r"\$[^$]*\$", "", tex)
+    if re.search(r"(?<!\\)[_^]", outside):
+        return True
+    return any(
+        match.group(1) not in _TEXT_SAFE_COMMANDS
+        for match in re.finditer(r"\\([A-Za-z]+)", outside)
+    )
+
+
+def repair_text_mode_math(code: str) -> tuple[str, list[str]]:
+    """Promote ``Tex("<math>")`` to ``MathTex`` so text-mode math can't crash.
+
+    Returns the (possibly rewritten) code and a note per promotion. Rewrites are
+    applied bottom-up so earlier source offsets stay valid.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return code, []
+
+    targets: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Tex"
+        ):
+            continue
+        for arg in node.args:
+            if (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and _needs_math_mode(arg.value)
+            ):
+                targets.append((node.func.lineno, node.func.col_offset, arg.value))
+                break
+
+    if not targets:
+        return code, []
+
+    lines = code.splitlines(keepends=True)
+    notes: list[str] = []
+    for lineno, col, sample in sorted(targets, reverse=True):
+        index = lineno - 1
+        if index >= len(lines):
+            continue
+        line = lines[index]
+        if line[col : col + 3] == "Tex":
+            lines[index] = line[:col] + "MathTex" + line[col + 3 :]
+            notes.append(
+                f"line {lineno}: Tex({sample[:32]!r}) -> MathTex (text-mode math)"
+            )
+    return "".join(lines), notes
+
+
 def check_latex_strings(code: str) -> list[str]:
     """Structurally validate every literal string passed to MathTex/Tex."""
     tree = _parse(code)
@@ -357,6 +433,8 @@ def check_latex_strings(code: str) -> list[str]:
         for arg in node.args:
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 problem = _check_tex_source(arg.value)
+                if problem is None and node.func.id == "Tex" and _needs_math_mode(arg.value):
+                    problem = "math content in text-mode Tex (use MathTex)"
                 if problem:
                     snippet = arg.value[:60].replace("\n", " ")
                     issues.append(

@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 198 features/198 stories/198 results/198 tests aligned (F165)"
+    "note": "tracker integrity: 199 features/199 stories/199 results/199 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -790,5 +790,9 @@
   "F198": {
     "status": "PASS",
     "note": "fallback ODE only attached on-topic; off-topic verification stays honest"
+  },
+  "F199": {
+    "status": "PASS",
+    "note": "text-mode math promoted to MathTex (render-killer auto-repaired)"
   }
 }

@@ -705,7 +705,10 @@ class SceneGenerator:
                 f"(got {len(code)} chars after stripping)."
             )
 
-        from aetherlab.services.scene_validation import repair_unknown_color_constants
+        from aetherlab.services.scene_validation import (
+            repair_text_mode_math,
+            repair_unknown_color_constants,
+        )
 
         code, replacements = repair_unknown_color_constants(code)
         if replacements:
@@ -713,6 +716,12 @@ class SceneGenerator:
                 "Repaired invented Manim color constants: %s",
                 ", ".join(f"{old}->{new}" for old, new in sorted(replacements.items())),
             )
+        # Tex("m_1") is text-mode math: LaTeX aborts with "Missing $ inserted."
+        # and the render dies after minutes (a whole cloud job). Promote to
+        # MathTex here so the candidate is salvaged instead of wasted.
+        code, promoted = repair_text_mode_math(code)
+        if promoted:
+            log.info("Promoted text-mode math to MathTex: %s", "; ".join(promoted))
         return code
 
     def _fallback_scene(self, class_name: str, solver: SolverResult) -> str:

@@ -5893,6 +5893,39 @@ def t_f198():
     return "fallback ODE only attached on-topic; off-topic verification stays honest"
 
 
+def t_f199():
+    # Text-mode math in Tex() aborts LaTeX ("Missing $ inserted." / "\mathcal
+    # allowed only in math mode") and kills a whole render. Observed on real
+    # cloud renders: Tex("m_1"), Tex("\theta_1"), Tex("\mathcal{L}").
+    from aetherlab.services.scene_validation import (
+        _needs_math_mode,
+        check_latex_strings,
+        repair_text_mode_math,
+    )
+    for s in ("m_1", r"\theta_1", r"\mathcal{L}", r"\frac{a}{b}", r"\vec{r}_1"):
+        assert _needs_math_mode(s), f"{s!r} is math and must require math mode"
+    for s in ("Hello world", "Energy (J)", "$m_1$", r"50\% done", r"\textbf{Bold}"):
+        assert not _needs_math_mode(s), f"{s!r} is plain text and must stay Tex"
+
+    code = (
+        "from manim import *\n"
+        "class S(Scene):\n"
+        "    def construct(self):\n"
+        '        a = Tex("m_1")\n'
+        '        b = Tex("\\\\mathcal{L}")\n'
+        '        c = Tex("Double pendulum")\n'
+        '        d = MathTex("m_2")\n'
+    )
+    assert any("text-mode" in i for i in check_latex_strings(code)), "must be flagged"
+    fixed, notes = repair_text_mode_math(code)
+    assert len(notes) == 2, notes
+    assert 'MathTex("m_1")' in fixed and 'MathTex("\\\\mathcal{L}")' in fixed
+    assert 'Tex("Double pendulum")' in fixed and 'MathTex("m_2")' in fixed  # untouched
+    assert not [i for i in check_latex_strings(fixed) if "text-mode" in i]
+    compile(fixed, "<scene>", "exec")
+    return "text-mode math promoted to MathTex (render-killer auto-repaired)"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 
