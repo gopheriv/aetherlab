@@ -9,11 +9,19 @@ the 2-D canvas; a static definition skips the render entirely).
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 
 from aetherlab.core.models import OutputPlan, ProblemRequest
 from aetherlab.core.settings import AppSettings
+
+log = logging.getLogger(__name__)
+
+# Planning is cheap relative to a render; retry rather than silently under-plan.
+PLANNER_ATTEMPTS = 3
+PLANNER_BACKOFF_SECONDS = (1.0, 3.0)
 
 _SYSTEM_PROMPT = (
     "You are the AetherLab lesson planner. Given a physics or math request, "
@@ -64,13 +72,34 @@ class Planner:
         self._client = None
 
     async def plan(self, request: ProblemRequest) -> OutputPlan:
-        if self.settings.openai_api_key:
+        """Plan the outputs, never below the deterministic heuristic floor.
+
+        The model is asked for the minimal useful set, but a flaky or stingy
+        reply must not silently drop a modality the prompt clearly warrants —
+        that would mean the same question yields a video one run and not the
+        next. So the remote plan is UNIONed with the heuristic floor, and the
+        call is retried before conceding to the floor alone.
+        """
+        floor = self.heuristic_plan(request)
+        if not self.settings.openai_api_key:
+            return floor
+
+        attempts = max(1, int(getattr(self.settings, "planner_attempts", PLANNER_ATTEMPTS)))
+        for attempt in range(attempts):
             try:
-                return await self._plan_remote(request)
-            except Exception:
-                # Any provider/parse failure degrades to the offline heuristic.
-                return self.heuristic_plan(request)
-        return self.heuristic_plan(request)
+                remote = await self._plan_remote(request)
+                return _union(remote, floor)
+            except Exception as exc:  # noqa: BLE001 — retried, then floor
+                log.warning(
+                    "Planner attempt %d/%d failed (%s: %s)",
+                    attempt + 1, attempts, type(exc).__name__, exc,
+                )
+                if attempt < attempts - 1:
+                    await asyncio.sleep(PLANNER_BACKOFF_SECONDS[
+                        min(attempt, len(PLANNER_BACKOFF_SECONDS) - 1)
+                    ])
+        log.error("Planner fell back to the heuristic floor after %d attempts.", attempts)
+        return floor
 
     async def _plan_remote(self, request: ProblemRequest) -> OutputPlan:
         from openai import AsyncOpenAI
@@ -141,6 +170,39 @@ class Planner:
             rationale=rationale,
             model_name="heuristic-fallback",
         )
+
+
+def _union(remote: OutputPlan, floor: OutputPlan) -> OutputPlan:
+    """Remote plan OR the heuristic floor — never fewer outputs than warranted.
+
+    Keeps the model's reasoning, but records when the floor added something the
+    model omitted so the decision stays auditable.
+    """
+    added = [
+        name
+        for name, r, f in (
+            ("numeric", remote.needs_numeric, floor.needs_numeric),
+            ("2d", remote.needs_2d, floor.needs_2d),
+            ("3d", remote.needs_3d, floor.needs_3d),
+            ("animation", remote.needs_animation, floor.needs_animation),
+            ("pdf", remote.needs_pdf, floor.needs_pdf),
+        )
+        if f and not r
+    ]
+    rationale = remote.rationale
+    if added:
+        rationale = (rationale + " " if rationale else "") + (
+            f"Heuristic floor also required: {', '.join(added)}."
+        )
+    return OutputPlan(
+        needs_numeric=remote.needs_numeric or floor.needs_numeric,
+        needs_2d=remote.needs_2d or floor.needs_2d,
+        needs_3d=remote.needs_3d or floor.needs_3d,
+        needs_animation=remote.needs_animation or floor.needs_animation,
+        needs_pdf=remote.needs_pdf or floor.needs_pdf,
+        rationale=rationale,
+        model_name=remote.model_name,
+    )
 
 
 def _enabled(*flags: bool) -> list[str]:

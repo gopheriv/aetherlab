@@ -5808,6 +5808,91 @@ def t_f195():
     return f"verifier flags unphysical growth ({report.summary})"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Quality integrity — no silent degradation (found by driving the live app)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f196():
+    # A transient provider error must NOT silently downgrade to canned physics.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest, SolverResult
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    st = dataclasses.replace(_settings(), openai_api_key="fake-key-for-retry-test")
+    req = ProblemRequest(prompt="Derive the damped harmonic oscillator")
+
+    c = AsyncLLMCoordinator(st); calls = {"n": 0}
+    async def flaky(_r):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("503 transient")
+        return SolverResult(summary="real", derivation_steps=["s"], keywords=["k"],
+                            variables={}, model_name=st.llm_model)
+    c._solve_remote = flaky
+    r = asyncio.run(c.solve(req))
+    assert calls["n"] == 3, calls
+    assert r.model_name == st.llm_model, f"must recover, not fall back: {r.model_name}"
+
+    c2 = AsyncLLMCoordinator(st); calls2 = {"n": 0}
+    async def always_fail(_r):
+        calls2["n"] += 1
+        raise RuntimeError("provider down")
+    c2._solve_remote = always_fail
+    r2 = asyncio.run(c2.solve(req))
+    assert calls2["n"] == 3 and r2.model_name == "deterministic-fallback"
+    # The downgrade must be stated plainly, not buried.
+    assert "not solved physics" in r2.raw_response, r2.raw_response
+    return "solver retries transient failures; persistent failure is reported loudly"
+
+
+def t_f197():
+    # A stingy/flaky plan must never drop a modality the heuristic requires.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest, OutputPlan
+    from aetherlab.services.planner import Planner, _union
+    stingy = OutputPlan(needs_numeric=False, needs_2d=False, needs_3d=False,
+                        needs_animation=False, needs_pdf=True, rationale="pdf only",
+                        model_name="qwen")
+    floor = OutputPlan(needs_numeric=True, needs_2d=True, needs_3d=False,
+                       needs_animation=True, needs_pdf=True)
+    u = _union(stingy, floor)
+    assert u.enabled() == ["numeric", "2d", "animation", "pdf"], u.enabled()
+    assert "Heuristic floor also required" in u.rationale
+    assert u.model_name == "qwen"  # keeps provenance
+
+    # All remote attempts failing degrades to the floor, never below it.
+    st = dataclasses.replace(_settings(), openai_api_key="fake-key-for-retry-test")
+    p = Planner(st); calls = {"n": 0}
+    async def boom(_r):
+        calls["n"] += 1
+        raise RuntimeError("planner down")
+    p._plan_remote = boom
+    got = asyncio.run(p.plan(ProblemRequest(prompt="Simulate the damped harmonic oscillator")))
+    assert calls["n"] == 3, calls
+    assert got.needs_animation and got.needs_numeric, got.enabled()
+    return "planner unions with the heuristic floor and retries before conceding"
+
+
+def t_f198():
+    # The keyless fallback ODE models a damped oscillator: attach it only when
+    # the question is one, so verification never claims checks it didn't run.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    from aetherlab.services.verify import verify_solution
+    st = dataclasses.replace(_settings(), openai_api_key=None)
+
+    off_topic = ProblemRequest(prompt="Explain what entropy is conceptually")
+    sol = asyncio.run(AsyncLLMCoordinator(st).solve(off_topic))
+    assert sol.numeric_spec is None, "must not attach an oscillator ODE to an entropy question"
+    assert "No numeric model" in verify_solution(sol, off_topic).summary
+
+    on_topic = ProblemRequest(prompt="Derive the damped harmonic oscillator")
+    sol2 = asyncio.run(AsyncLLMCoordinator(st).solve(on_topic))
+    assert sol2.numeric_spec is not None
+    assert verify_solution(sol2, on_topic).ok
+    return "fallback ODE only attached on-topic; off-topic verification stays honest"
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
 

@@ -657,7 +657,7 @@
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 195 features/195 stories/195 results/195 tests aligned (F165)"
+    "note": "tracker integrity: 198 features/198 stories/198 results/198 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -778,5 +778,17 @@
   "F195": {
     "status": "PASS",
     "note": "verifier flags unphysical growth (1/3 physics checks passed.)"
+  },
+  "F196": {
+    "status": "PASS",
+    "note": "solver retries transient failures; persistent failure is reported loudly"
+  },
+  "F197": {
+    "status": "PASS",
+    "note": "planner unions with the heuristic floor and retries before conceding"
+  },
+  "F198": {
+    "status": "PASS",
+    "note": "fallback ODE only attached on-topic; off-topic verification stays honest"
   }
 }

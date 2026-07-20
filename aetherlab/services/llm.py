@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections import Counter
 
 from aetherlab.core.models import ProblemRequest, SolverResult
 from aetherlab.core.settings import AppSettings
+
+log = logging.getLogger(__name__)
+
+# A transient provider hiccup must never quietly downgrade the physics to the
+# canned scaffold: retry hard before conceding. Correctness beats latency here.
+SOLVER_ATTEMPTS = 3
+SOLVER_BACKOFF_SECONDS = (2.0, 5.0)
+
+# The keyless fallback's ODE models a damped harmonic oscillator; it may only be
+# attached when the question really is about one (see _fallback).
+OSCILLATOR_STEMS = (
+    "oscillat", "harmonic", "spring", "damp", "pendulum", "vibrat", "resonan",
+    "shm", "mass-spring", "restoring force",
+)
 
 
 COMMON_WORDS = {
@@ -77,15 +92,37 @@ class AsyncLLMCoordinator:
         self._client = None
 
     async def solve(self, request: ProblemRequest) -> SolverResult:
-        if self.settings.openai_api_key:
+        if not self.settings.openai_api_key:
+            return self._fallback(request, note="No API key configured; deterministic fallback used.")
+
+        attempts = max(1, int(getattr(self.settings, "solver_attempts", SOLVER_ATTEMPTS)))
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
             try:
                 return await self._solve_remote(request)
-            except Exception as exc:
-                return self._fallback(
-                    request,
-                    note=f"Remote model failed; deterministic fallback used: {exc}",
+            except Exception as exc:  # noqa: BLE001 — retried, then reported loudly
+                last_exc = exc
+                log.warning(
+                    "Solver attempt %d/%d failed (%s: %s)",
+                    attempt + 1, attempts, type(exc).__name__, exc,
                 )
-        return self._fallback(request, note="No API key configured; deterministic fallback used.")
+                if attempt < attempts - 1:
+                    delay = SOLVER_BACKOFF_SECONDS[min(attempt, len(SOLVER_BACKOFF_SECONDS) - 1)]
+                    await asyncio.sleep(delay)
+
+        # Every attempt failed: this is a real quality downgrade, so say so
+        # loudly rather than letting the canned scaffold pass as a real answer.
+        log.error(
+            "Solver fell back to the deterministic scaffold after %d failed attempts: %s",
+            attempts, last_exc,
+        )
+        return self._fallback(
+            request,
+            note=(
+                f"Remote model failed after {attempts} attempts; deterministic "
+                f"fallback used (results are a generic scaffold, not solved physics): {last_exc}"
+            ),
+        )
 
     async def _solve_remote(self, request: ProblemRequest) -> SolverResult:
         from openai import AsyncOpenAI
@@ -196,6 +233,12 @@ class AsyncLLMCoordinator:
         from aetherlab.services.scene_templates import detect_domain
 
         domain = detect_domain(keywords, variables)
+        # The fallback ODE *is* a damped harmonic oscillator, so attach it only
+        # when the topic actually is one. Otherwise the verifier would report
+        # "3/3 physics checks passed" about a system the user never asked about
+        # (e.g. an entropy question), which is worse than reporting nothing.
+        topic = f"{request.prompt} {' '.join(keywords)}".lower()
+        oscillator_like = any(stem in topic for stem in OSCILLATOR_STEMS)
         return SolverResult(
             summary=summary,
             derivation_steps=steps,
@@ -205,8 +248,9 @@ class AsyncLLMCoordinator:
             raw_response=note,
             # Exercises the full expression-compile pipeline even without a key.
             plot=fallback_plot_payload(),
-            # Ground-truth ODE so the offline canvas/PDF integrate a real system.
-            numeric_spec=fallback_numeric_spec(),
+            # Ground-truth ODE so the offline canvas/PDF integrate a real system
+            # — but only when it genuinely models the asked-about system.
+            numeric_spec=fallback_numeric_spec() if oscillator_like else None,
             key_equations=FALLBACK_EQUATIONS.get(domain, FALLBACK_EQUATIONS["oscillator"]),
         )
 

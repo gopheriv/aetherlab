@@ -855,6 +855,20 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user, a wrong derivation is flagged, not silently animated.",
      "An anti-damped oscillator (flipped dissipation sign) makes energy and amplitude grow; verify_solution flags both the energy and boundedness checks. The differentiator: the tool checks itself instead of emitting plausible-looking but wrong physics.",
      "services/verify.py", "headless", "Documented", ""),
+
+    # ── Quality integrity: no silent degradation (found by driving the app) ──
+    ("F196", "Quality", "Solver never silently downgrades",
+     "As a user, a transient provider hiccup must not quietly hand me canned physics.",
+     "AsyncLLMCoordinator.solve() retries the remote solve SOLVER_ATTEMPTS times with backoff and recovers to the real model; only after every attempt fails does it use the deterministic scaffold, logging an ERROR and stating in the result note that the output is 'a generic scaffold, not solved physics'.",
+     "services/llm.py", "headless", "Documented", ""),
+    ("F197", "Quality", "Planner floor — outputs never under-planned",
+     "As a user, the same question doesn't randomly lose its video between runs.",
+     "Planner.plan() retries the model and UNIONs its answer with the deterministic heuristic floor, so a flaky or stingy reply can never drop a modality the prompt clearly warrants; the added modalities are recorded in the rationale, and total failure degrades to the floor rather than below it.",
+     "services/planner.py", "headless", "Documented", ""),
+    ("F198", "Quality", "Honest offline verification scope",
+     "As a user, verification never claims to have checked physics it didn't.",
+     "The keyless fallback's ODE models a damped harmonic oscillator, so it is attached only when the question is oscillator-like (OSCILLATOR_STEMS). An off-topic prompt (e.g. entropy) gets no numeric_spec and verify_solution reports 'No numeric model to verify' instead of '3/3 physics checks passed' about a system the user never asked about.",
+     "services/llm.py / services/verify.py", "headless", "Documented", ""),
 ]
 # fmt: on
 
