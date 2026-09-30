@@ -2,7 +2,8 @@
 
 AetherLab can render Manim scenes locally, or send a single sanitized Manim
 scene file to a GitHub Actions render repo and download the MP4 artifact.
-Cloud rendering is optional and always fails soft to local rendering.
+Cloud rendering is optional. Auto mode can fall back to local rendering; explicit
+Cloud mode reports a remote failure without starting a local render.
 
 ## Recommended Setup
 
@@ -74,8 +75,10 @@ patterns. If it sees one, it refuses cloud rendering and renders locally.
 ## Modes
 
 - `Local`: current behavior. Render with the local Manim install.
-- `Cloud`: try GitHub Actions first; fall back to local if unavailable.
-- `Auto`: use cloud only for heavy scenes. The default threshold is `3.0`,
+- `Cloud`: render through GitHub Actions only; report cloud failures without
+  starting a local render.
+- `Auto`: use cloud for heavy scenes and fall back to local if cloud is unavailable.
+  The default threshold is `3.0`,
   matching AetherLab's existing heavy-scene render-cost heuristic.
 
 ## Cache Behavior
@@ -86,12 +89,26 @@ Cloud job ids are derived from:
 - scene class
 - quality
 - fps
-- `manim==0.20.1`
+- `manim==0.21.0`
 - workflow contract version
 
 Identical scenes reuse an existing GitHub artifact when available. Downloaded
 MP4s are stored under the same local isolated render-run directory shape used by
 local rendering, so missing local videos still trigger a re-render.
+
+Local Manim rendering keeps its per-render cache disabled by default. For
+measured repair-chain experiments, set `AETHERLAB_MANIM_REPAIR_CACHE=1`; Manim
+then reuses content-hashed play segments only inside one isolated repair UUID.
+`AETHERLAB_MANIM_PARTIAL_REVISIONS=1` can additionally render only the play
+range identified from critic frame timestamps, then assemble the complete MP4
+from that lineage cache. It skips the partial pass when the scene timing is
+dynamic or ambiguous. Both flags apply only to a selected local backend; they
+do not change the explicit Cloud workflow or its cache contract.
+
+For a local OpenGL experiment, set `AETHERLAB_MANIM_RENDERER=opengl`. Cairo
+remains the default, and cloud workers continue to use Cairo. Generated scenes
+may use Cairo-only behavior, so compare visuals and failures before adopting
+OpenGL for regular local rendering.
 
 ## Runner Parity
 
@@ -99,7 +116,7 @@ The workflow pins:
 
 - `ubuntu-24.04`
 - Python `3.14`
-- `manim==0.20.1`
+- `manim==0.21.0`
 - ffmpeg, cairo, pango
 
 LaTeX is installed only when the app marks a scene as needing `Tex`/`MathTex`.
@@ -110,9 +127,12 @@ hard LaTeX dependency.
 
 Cloud failures map back to the normal render contract:
 
-- poll timeout -> cancel the remote run best-effort and immediately fall back local
-- Manim crash -> `render-error`, classified as latex/ffmpeg/oom/hallucinated-api/unknown
-- no network/token/repo/workflow -> local fallback
+- poll timeout -> cancel the remote run best-effort; **Auto** mode falls back to local,
+  while explicit **Cloud** mode reports the failure and skips local rendering
+- Manim crash -> `render-error`, classified as latex/ffmpeg/oom/hallucinated-api/unknown;
+  repair may retry through the selected backend
+- no network/token/repo/workflow -> **Auto** mode falls back to local; explicit
+  **Cloud** mode reports the failure and does not start a local Manim process
 
 The configured cloud timeout is a ceiling. AetherLab derives a smaller
 quality/cost-aware budget (a light draft is capped at 420 seconds even when an
@@ -134,8 +154,9 @@ to see, per job:
   highlighted** — i.e. *why* this scene was chosen;
 - a **sanitized failure log tail** (tokens/keys are redacted at write time, so
   the ledger is safe to share) and the classified failure kind;
-- the **local-fallback reason** and the final output path when cloud was
-  unavailable.
+- the **local-fallback reason** and the final output path when Auto mode used a
+  local render after cloud was unavailable; explicit Cloud failures remain
+  cloud-only.
 
 The ledger is fail-soft and capped: it never breaks a render and keeps only the
 most recent jobs. Because every free-text field is scrubbed on the way in, no

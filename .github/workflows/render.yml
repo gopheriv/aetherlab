@@ -65,7 +65,7 @@ jobs:
       - name: Install pinned Manim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "manim==0.20.1"
+          python -m pip install "manim==0.21.0"
           python - <<'PY'
           import importlib.metadata as m
           print("manim", m.version("manim"))
@@ -77,7 +77,8 @@ jobs:
         run: |
           set +e
           mkdir -p out
-          python -m manim render \
+          /usr/bin/time -f 'AETHERLAB_RENDER_WALL_SECONDS=%e\nAETHERLAB_PEAK_RSS_KB=%M' \
+            -o "${{ inputs.job_id }}.telemetry" python -m manim render \
             -q${{ inputs.quality }} \
             --fps "${{ inputs.fps }}" \
             --disable_caching \
@@ -85,6 +86,7 @@ jobs:
             "${{ inputs.scene_path }}" \
             "${{ inputs.class_name }}" 2>&1 | tee "${{ inputs.job_id }}.log"
           code=${PIPESTATUS[0]}
+          cat "${{ inputs.job_id }}.telemetry" | tee -a "${{ inputs.job_id }}.log"
           if [ "$code" -ne 0 ]; then
             exit "$code"
           fi

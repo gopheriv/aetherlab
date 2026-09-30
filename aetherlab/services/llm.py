@@ -9,6 +9,7 @@ from collections import Counter
 
 from aetherlab.core.models import ProblemRequest, SolverResult
 from aetherlab.core.settings import AppSettings
+from aetherlab.services.model_policy import request_temperature
 
 log = logging.getLogger(__name__)
 
@@ -92,14 +93,20 @@ class AsyncLLMCoordinator:
         self._client = None
 
     async def solve(self, request: ProblemRequest) -> SolverResult:
+        from aetherlab.services.parameters import apply_request_parameters
+
         if not self.settings.openai_api_key:
-            return self._fallback(request, note="No API key configured; deterministic fallback used.")
+            solver = self._fallback(
+                request, note="No API key configured; deterministic fallback used."
+            )
+            return apply_request_parameters(request, solver)
 
         attempts = max(1, int(getattr(self.settings, "solver_attempts", SOLVER_ATTEMPTS)))
         last_exc: Exception | None = None
         for attempt in range(attempts):
             try:
-                return await self._solve_remote(request)
+                solver = await self._solve_remote(request)
+                return apply_request_parameters(request, solver)
             except Exception as exc:  # noqa: BLE001 — retried, then reported loudly
                 last_exc = exc
                 log.warning(
@@ -116,22 +123,22 @@ class AsyncLLMCoordinator:
             "Solver fell back to the deterministic scaffold after %d failed attempts: %s",
             attempts, last_exc,
         )
-        return self._fallback(
+        solver = self._fallback(
             request,
             note=(
                 f"Remote model failed after {attempts} attempts; deterministic "
                 f"fallback used (results are a generic scaffold, not solved physics): {last_exc}"
             ),
         )
+        return apply_request_parameters(request, solver)
 
     async def _solve_remote(self, request: ProblemRequest) -> SolverResult:
-        from openai import AsyncOpenAI
+        from aetherlab.services.llm_client import make_client
 
-        from aetherlab.services.model_policy import openai_client_kwargs
 
         # Lazy-create client on first use
         if self._client is None:
-            self._client = AsyncOpenAI(**openai_client_kwargs(self.settings))
+            self._client = make_client(self.settings)
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,
@@ -141,7 +148,14 @@ class AsyncLLMCoordinator:
                     "content": (
                         "You are the AetherLab analytical solver. "
                         "Return strict JSON with keys summary, derivation_steps, "
-                        "keywords, variables, and key_equations. "
+                        "keywords, variables, and key_equations. Optionally add "
+                        "variable_units (only when known), assumptions, and "
+                        "derivation_records. Each derivation_record should identify "
+                        "the 1-based step_index in derivation_steps and may contain "
+                        "claim, from_expression, to_expression, and source_ref; "
+                        "expressions must use plain arithmetic and named variables. "
+                        "Do not invent a checkable record when a step is prose or "
+                        "depends on an unstated identity. "
                         "Variables must map names to numbers. "
                         "key_equations: 1-4 LaTeX strings, the governing equation "
                         "FIRST (e.g. \"m\\\\ddot{x} + c\\\\dot{x} + kx = 0\"). Use "
@@ -182,25 +196,35 @@ class AsyncLLMCoordinator:
                 },
                 {"role": "user", "content": request.prompt},
             ],
-            temperature=0.2,
+            temperature=request_temperature(self.settings, 0.2),
         )
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)
         plot = payload.get("plot")
         numeric_spec = payload.get("ode") or payload.get("numeric_spec")
         equations = payload.get("key_equations")
+        units = payload.get("variable_units")
+        records = payload.get("derivation_records")
+        assumptions = payload.get("assumptions")
         return SolverResult(
             summary=str(payload.get("summary", "")).strip() or "Remote solver completed.",
             derivation_steps=[str(step) for step in payload.get("derivation_steps", [])],
             keywords=[str(keyword) for keyword in payload.get("keywords", [])],
             variables={str(k): float(v) for k, v in dict(payload.get("variables", {})).items()},
-            model_name=self.settings.llm_model,
+            # the model that actually answered (the backup, if the primary failed)
+            model_name=getattr(self._client, "last_served_by", None) or self.settings.llm_model,
             raw_response=content,
             # Kept as the raw dict; validation happens at canvas build so the
             # cached payload stays faithful to what the model returned.
             plot=plot if isinstance(plot, dict) else None,
             numeric_spec=numeric_spec if isinstance(numeric_spec, dict) else None,
             key_equations=[str(e) for e in equations][:4] if isinstance(equations, list) else [],
+            variable_units={str(k): str(v) for k, v in units.items() if str(v).strip()}
+            if isinstance(units, dict) else {},
+            derivation_records=[dict(record) for record in records[:12] if isinstance(record, dict)]
+            if isinstance(records, list) else [],
+            assumptions=[str(item) for item in assumptions[:12] if str(item).strip()]
+            if isinstance(assumptions, list) else [],
         )
 
     def _parse_json(self, content: str) -> dict[str, object]:

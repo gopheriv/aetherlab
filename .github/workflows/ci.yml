@@ -22,12 +22,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # dev extra supplies pytest + pytest-asyncio for the focused regressions.
-          pip install -e .[rag,dev]
+          pip install -e .[rag,dev,render,verification]
           # imageio-ffmpeg (the app's optional 'narration' extra) gives the
           # assembly tests (F143/F148) a portable ffmpeg binary; without it they
           # skip the render-driven checks fail-soft. openpyxl backs the feature
           # tracker .xlsx (build_feature_tracker + tracker_integrity_audit).
-          pip install manim matplotlib pillow imageio-ffmpeg openpyxl
+          pip install matplotlib pillow imageio-ffmpeg openpyxl
 
       - name: Run behavioural feature suite
         env:

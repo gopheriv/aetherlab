@@ -39,7 +39,7 @@ from aetherlab.core.models import (
     SolverResult,
 )
 from aetherlab.core.proc import ProcessCancelledError
-from aetherlab.services.lesson_planner import plan_lesson
+from aetherlab.services.lesson_planner import _has_learning_scaffolds, plan_lesson
 from aetherlab.services.manim_runtime import ManimRuntime
 
 if TYPE_CHECKING:
@@ -218,7 +218,7 @@ class LessonPipeline:
         request = ProblemRequest(prompt=_chapter_prompt(ch, plan))
         aspect = _chapter_aspect(ch, plan)
         brief = json.dumps({"chapter": ch.title, "goal": ch.goal, "beats": ch.beats,
-                            "narration": ch.narration})
+                            "key_symbols": ch.key_symbols, "narration": ch.narration})
         try:
             if self.manim.scene_tournament_enabled(self.settings):
                 scene = await self.manim.generate_render_tournament(
@@ -242,6 +242,22 @@ class LessonPipeline:
         except Exception as exc:  # noqa: BLE001 — one bad chapter must not kill the lesson
             log.warning("Chapter '%s' failed to render: %s", ch.title, exc)
             return None
+        try:
+            from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+            refresh_scene_bundle_spec(
+                scene,
+                request,
+                solver,
+                rag,
+                citations=list(ch.citations),
+                assessment=[
+                    item for item in (ch.prediction, ch.retrieval)
+                    if isinstance(item, dict)
+                ] + [question.to_json() for question in plan.questions],
+            )
+        except Exception as exc:  # noqa: BLE001 - spec construction is advisory
+            scene.diagnostics.append(f"Lesson scene specification unavailable: {type(exc).__name__}.")
         if scene.status == "rendered" and scene.video_path:
             cache.put(key, scene)
         return scene
@@ -321,7 +337,9 @@ def _audience_label(audience: str) -> str:
 
 def _chapter_prompt(ch: LessonChapter, plan: LessonPlan) -> str:
     beats = "; ".join(ch.beats) if ch.beats else ch.goal
-    return f"{plan.topic} — {ch.title}: {ch.goal}. {beats}"
+    symbols = "; ".join(ch.key_symbols)
+    symbol_context = f" Key symbols to introduce: {symbols}." if symbols else ""
+    return f"{plan.topic} — {ch.title}: {ch.goal}.{symbol_context} {beats}"
 
 
 # Words that mark a chapter as math/derivation- or recap-focused, so a keyless
@@ -378,8 +396,10 @@ def _chapter_solver(ch: LessonChapter, plan: LessonPlan) -> SolverResult:
 
 
 def _scene_cache_usable(scene: SceneBundle, settings: "AppSettings") -> bool:
-    from aetherlab.services.pipeline import _video_exists
+    from aetherlab.services.pipeline import _stale_fallback_scene, _video_exists
 
+    if _stale_fallback_scene(scene, settings):
+        return False
     if scene.status == "rendered" and not _video_exists(scene.video_path):
         return False
     min_score = float(getattr(settings, "min_quality_score", 0.0) or 0.0)
@@ -441,7 +461,9 @@ class _PlanCache:
         except (TypeError, ValueError):
             return None
         plan.cached = True  # from_json honours a stored cached=False; force it
-        return plan if plan.chapters else None
+        # Older cached plans predate prediction/retrieval gates and symbol
+        # pretraining. Miss those once so they are upgraded on the next run.
+        return plan if plan.chapters and _has_learning_scaffolds(plan) else None
 
     def put(self, topic: str, audience: str, plan: LessonPlan) -> None:
         path = self._path(topic, audience)

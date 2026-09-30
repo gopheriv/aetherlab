@@ -77,6 +77,25 @@ Scores are 0-10 and combine:
 The score is a triage signal, not a replacement for watching the contact sheet
 or the video.
 
+## Human review and calibration
+
+Use `tools/prompt_quality_review_template.json` to rate legibility, physics,
+pacing, and teaching value from 1 to 5. Watch the full clips at normal speed;
+still contact sheets do not show motion or narration sync. Fill ratings for at
+least eight cases, then join them to a provider run with:
+
+```powershell
+python tools\prompt_quality_lab.py `
+  --out .analysis\prompt-quality-lab\reviewed `
+  --allow-provider `
+  --human-review tools\prompt_quality_review_template.json
+```
+
+The report records per-case ratings and the Spearman rank correlation between
+the vision critic and human averages when at least eight reviewed cases also
+have a nonzero critic score. This measurement is diagnostic: it does not certify
+physics or student learning, and an unreviewed template is not calibration data.
+
 ## Compare
 
 ```powershell
@@ -110,3 +129,8 @@ python tools\prompt_quality_lab.py --out .analysis\prompt-quality-lab\gate --gat
 the ratchet logic is unit-tested without rendering (feature F169). To refresh
 the baseline after a genuine, reviewed improvement, run the lab once and copy
 its `summary.json` to `tools/prompt_quality_baseline.json`.
+
+The gate also requires the fresh report to contain the same prompt IDs as the
+committed baseline. Its numeric threshold is a project regression signal;
+human review is still required before using critic scores as a physics or
+teaching-quality certificate.

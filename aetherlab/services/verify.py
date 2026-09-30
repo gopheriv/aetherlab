@@ -81,6 +81,41 @@ def verify_solution(solver: Any, request: Any = None) -> VerificationReport:
     return report
 
 
+def physics_expectations(solver: Any, request: Any = None) -> list[str]:
+    """Facts from the solver/verifier that a visual critic may check if visible.
+
+    These describe the numerical model and its observed checks; they do not
+    certify the solver's written derivation or facts absent from sampled frames.
+    """
+    facts: list[str] = []
+    variables = getattr(solver, "variables", {}) or {}
+    if variables:
+        rendered_items = []
+        for name, value in sorted(variables.items())[:8]:
+            try:
+                rendered_items.append(f"{name}={float(value):.5g}")
+            except (TypeError, ValueError, OverflowError):
+                continue
+        rendered = ", ".join(rendered_items)
+    else:
+        rendered = ""
+    if rendered:
+        facts.append(f"Solver-provided parameters: {rendered}.")
+    equations = getattr(solver, "key_equations", []) or []
+    if equations:
+        facts.append("Governing equation(s): " + "; ".join(str(eq) for eq in equations[:3]))
+    if isinstance(getattr(solver, "numeric_spec", None), dict):
+        try:
+            report = verify_solution(solver, request)
+            facts.append(f"Numerical model cross-check: {report.summary}")
+            facts.extend(report.as_lines()[:6])
+        except Exception as exc:  # noqa: BLE001 - critic context is best-effort
+            facts.append(f"Numerical model cross-check unavailable: {type(exc).__name__}.")
+    else:
+        facts.append("No deterministic ODE ground truth is available for this result.")
+    return facts[:10]
+
+
 def _state_array(sol: NumericSolution, name: str) -> np.ndarray:
     return np.asarray(sol.states.get(name, []), dtype=float)
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import logging
+import math
 import os
 import re
 import shutil
@@ -81,7 +83,7 @@ def storyboard_difficulty(storyboard: dict | None) -> float:
     score = (
         min(len(acts) / 4.0, 1.0) * 0.4
         + min(beats / 12.0, 1.0) * 0.4
-        + min(duration / 25.0, 1.0) * 0.2
+        + min(duration / 30.0, 1.0) * 0.2
     )
     return max(0.0, min(1.0, score))
 
@@ -200,6 +202,7 @@ class ManimRuntime:
         max_retries: int = 1,
         plan: object | None = None,
         aspect: str = "full",
+        minimax_thinking: bool | None = None,
     ) -> SceneBundle:
         """Generate a dynamic Manim scene, preferring curated components.
 
@@ -213,27 +216,206 @@ class ManimRuntime:
         s = settings or self._settings
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
+        duration_target_s = float(request.duration_target_s)
+        duration_failure_reason = ""
+        try:
+            from aetherlab.services.verify import physics_expectations
 
-        composed = self._compose_curated(class_name, solver, plan, diagnostics)
+            expected_physics = physics_expectations(solver, request)
+        except Exception:  # noqa: BLE001 — critique context must never block generation
+            expected_physics = []
+
+        composed = self._compose_curated(
+            class_name, solver, plan, diagnostics, float(request.duration_target_s)
+        )
         if composed is not None:
+            composed.storyboard = {"physics_expectations": expected_physics}
             return composed
 
+        # Why this scene is NOT AI-authored ("" while the LLM path is winning).
+        fallback_reason = ""
         if s and s.openai_api_key:
             from aetherlab.services.code_safety import validate_code_safety
             from aetherlab.services.scene_validation import (
+                count_construct_play_calls,
                 estimate_duration,
                 scene_hygiene_warnings,
                 validate_scene,
             )
 
-            generator = SceneGenerator(s)
+            generator = SceneGenerator(s, minimax_thinking=minimax_thinking)
+
+            async def repair_rejected_scene(
+                rejected_code: str, rejection: str, attempt_no: int
+            ) -> str | None:
+                """Ask once for a constrained fix, then re-run every static gate."""
+                try:
+                    repaired = await generator.repair(
+                        rejected_code,
+                        "This generated scene was rejected before rendering. Fix only "
+                        "the reported syntax/safety/validation problems; do not use "
+                        "getattr/setattr/hasattr, eval/exec, dunder attributes, "
+                        "reflection, or unapproved imports.\n\n"
+                        + rejection,
+                        class_name,
+                        full_scene=True,
+                    )
+                    compile(repaired, "<aetherlab-generated-scene-repair>", "exec")
+                    repaired_safe, safety_issues = validate_code_safety(repaired)
+                    repaired_board = dict(generator._last_storyboard or {})
+                    repaired_lint_ok, lint_issues = validate_scene(
+                        repaired,
+                        require_motion=True,
+                        timeline=repaired_board.get("timeline"),
+                    )
+                    repaired_overlaps = [
+                        issue for issue in scene_hygiene_warnings(repaired)
+                        if issue.startswith("[HYGIENE:OVERLAP]")
+                    ]
+                    repaired_estimate = estimate_duration(repaired)
+                    target_miss = _estimate_misses_target(
+                        repaired_estimate, duration_target_s
+                    )
+                    if not repaired_safe or not repaired_lint_ok or repaired_overlaps or target_miss:
+                        problems = (
+                            safety_issues + lint_issues + repaired_overlaps
+                            + ([
+                                f"[TIMING:DURATION] estimated {repaired_estimate.total_seconds:.1f}s; "
+                                f"target {duration_target_s:.1f}s."
+                            ] if target_miss else [])
+                        )
+                        diagnostics.append(
+                            f"Attempt {attempt_no}: rejected-scene repair failed validation: "
+                            + "; ".join(problems[:4])
+                        )
+                        return None
+                    diagnostics.append(
+                        f"Attempt {attempt_no}: repaired the generated scene after "
+                        "pre-render validation."
+                    )
+                    return repaired
+                except Exception as exc:  # noqa: BLE001 - repair is bounded and fail-soft
+                    diagnostics.append(
+                        f"Attempt {attempt_no}: generated-scene repair failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return None
+
+            async def repair_duration_miss(
+                code_to_repair: str, estimate_seconds: float, attempt_no: int
+            ) -> str | None:
+                """Adjust readable holds when valid AI code misses its target."""
+                low = duration_target_s * 0.8
+                high = duration_target_s * 1.2
+                if estimate_seconds < low:
+                    instruction = (
+                        f"The safe, valid scene is estimated at {estimate_seconds:.1f}s; "
+                        f"the required window is {low:.1f}-{high:.1f}s for a "
+                        f"{duration_target_s:.1f}s target. Add about "
+                        f"{duration_target_s - estimate_seconds:.1f}s using readable "
+                        "wait/hold durations on existing beats. Do not add details, "
+                        "remove beats, or add self.play calls."
+                    )
+                else:
+                    instruction = (
+                        f"The safe, valid scene is estimated at {estimate_seconds:.1f}s; "
+                        f"the required window is {low:.1f}-{high:.1f}s for a "
+                        f"{duration_target_s:.1f}s target. Shorten only excess waits/holds "
+                        "on existing beats. Do not remove details or change physics."
+                    )
+                instruction += (
+                    " Preserve all exact BEAT markers, physics details, motion, and the "
+                    "living ending. Stay within 16 top-level self.play calls and two "
+                    "live updaters; never animate a mobject while an updater also changes it."
+                    "\nRepair only construct() beginning at line "
+                    f"{_construct_definition_line(code)}."
+                )
+                try:
+                    repaired = await generator.repair(
+                        code_to_repair, instruction, class_name, full_scene=False
+                    )
+                    compile(repaired, "<aetherlab-duration-repair>", "exec")
+                    repaired_safe, safety_issues = validate_code_safety(repaired)
+                    repaired_lint_ok, lint_issues = validate_scene(
+                        repaired,
+                        require_motion=True,
+                        timeline=generator._last_storyboard.get("timeline")
+                        if isinstance(generator._last_storyboard, dict) else None,
+                    )
+                    repaired_hygiene = scene_hygiene_warnings(repaired)
+                    repaired_overlaps = [
+                        issue for issue in repaired_hygiene
+                        if issue.startswith("[HYGIENE:OVERLAP]")
+                    ]
+                    repaired_estimate = estimate_duration(repaired)
+                    repaired_cost = _estimate_render_cost(repaired)
+                    repaired_play_calls = count_construct_play_calls(repaired)
+                    is_cloud = str(getattr(s, "render_mode", "local") or "local").lower() in {
+                        "cloud", "auto",
+                    }
+                    too_expensive = is_cloud and repaired_cost > 3.5
+                    too_many_plays = (
+                        is_cloud and duration_target_s >= 24.0
+                        and repaired_play_calls > 16
+                    )
+                    still_misses = _estimate_misses_target(
+                        repaired_estimate, duration_target_s
+                    )
+                    if (
+                        not repaired_safe or not repaired_lint_ok or repaired_overlaps
+                        or too_expensive or too_many_plays or still_misses
+                    ):
+                        problems = (
+                            safety_issues + lint_issues + repaired_overlaps
+                            + ([f"[PERF:CLOUD_COST] estimate {repaired_cost:.1f} exceeds 3.5."]
+                               if too_expensive else [])
+                            + ([f"[PERF:PLAY_BUDGET] {repaired_play_calls} calls exceed 16."]
+                               if too_many_plays else [])
+                            + ([
+                                f"[TIMING:DURATION] repaired estimate "
+                                f"{repaired_estimate.total_seconds:.1f}s remains outside "
+                                f"{low:.1f}-{high:.1f}s."
+                            ] if still_misses else [])
+                        )
+                        diagnostics.append(
+                            f"Attempt {attempt_no}: targeted duration repair failed validation: "
+                            + "; ".join(problems[:4])
+                        )
+                        return None
+                    diagnostics.append(
+                        f"Attempt {attempt_no}: applied a targeted duration repair "
+                        f"({repaired_estimate.total_seconds:.1f}s)."
+                    )
+                    return repaired
+                except Exception as exc:  # noqa: BLE001 - bounded repair is fail-soft
+                    diagnostics.append(
+                        f"Attempt {attempt_no}: targeted duration repair failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return None
+
             for attempt in range(max_retries + 1):
                 code = await generator.generate(request, solver, rag, class_name)
+                # A fallback scene compiles and renders perfectly, so without an
+                # explicit signal it is indistinguishable from a real AI answer.
+                # Surface it loudly — generate() already exhausted its own
+                # attempts internally, so retrying here would only repeat them.
+                fallback_reason = getattr(generator, "_last_fallback_reason", "")
+                if fallback_reason:
+                    diagnostics.append(f"FALLBACK: {fallback_reason}")
                 try:
                     compile(code, "<aetherlab-generated-scene>", "exec")
                 except SyntaxError as exc:
                     diagnostics.append(f"Attempt {attempt + 1}: scene failed to compile: {exc}")
-                    continue
+                    if not fallback_reason:
+                        repaired = await repair_rejected_scene(
+                            code, f"Python SyntaxError: {exc}", attempt + 1
+                        )
+                        if repaired is not None:
+                            code = repaired
+                        else:
+                            continue
+                storyboard = dict(generator._last_storyboard or {})
                 # Fail-closed safety gate: generated scenes run with full
                 # interpreter privileges in the render subprocess.
                 safe, issues = validate_code_safety(code)
@@ -242,41 +424,329 @@ class ManimRuntime:
                         f"Attempt {attempt + 1}: scene failed the safety gate: "
                         + "; ".join(issues[:4])
                     )
-                    continue
+                    if not fallback_reason:
+                        repaired = await repair_rejected_scene(
+                            code,
+                            "Safety gate findings:\n- " + "\n- ".join(issues[:12]),
+                            attempt + 1,
+                        )
+                        if repaired is not None:
+                            code = repaired
+                            safe, issues = validate_code_safety(code)
+                        if not safe:
+                            continue
                 # Static pre-render lint: hallucinated names, provably-bad
                 # kwargs, structurally broken LaTeX. Catching these here turns
                 # a render crash + repair round into a fresh generation.
-                lint_ok, lint_issues = validate_scene(code, require_motion=True)
-                if not lint_ok:
+                lint_ok, lint_issues = validate_scene(
+                    code,
+                    require_motion=True,
+                    timeline=storyboard.get("timeline"),
+                )
+                cloud_mode = str(getattr(s, "render_mode", "local") or "local").lower() in {
+                    "cloud", "auto",
+                }
+                render_cost = _estimate_render_cost(code)
+                expensive_scene = cloud_mode and render_cost > 3.5
+                play_calls = count_construct_play_calls(code)
+                play_budget_exceeded = (
+                    cloud_mode and duration_target_s >= 24.0 and play_calls > 16
+                )
+                hygiene = scene_hygiene_warnings(code)
+                overlap_issues = [
+                    issue for issue in hygiene
+                    if issue.startswith("[HYGIENE:OVERLAP]")
+                ]
+                missing_markers = not lint_ok and any(
+                    issue.startswith("[TIMING:BEAT_MARKERS]")
+                    for issue in lint_issues
+                )
+                timing_runtime_issues = [
+                    issue for issue in lint_issues
+                    if issue.startswith("[TIMING:BEAT_RUNTIME]")
+                ]
+                updater_animate_issues = [
+                    issue for issue in lint_issues
+                    if issue.startswith("[MANIM:UPDATER_ANIMATE]")
+                ]
+                if (
+                    missing_markers or timing_runtime_issues or overlap_issues or expensive_scene
+                    or play_budget_exceeded or updater_animate_issues
+                ):
+                    timeline = storyboard.get("timeline", [])
+                    marker_lines = [
+                        f"# BEAT {event['id']} | {float(event['start_s']):.2f}-"
+                        f"{float(event['end_s']):.2f} s"
+                        for event in timeline
+                        if isinstance(event, dict)
+                        and event.get("id")
+                        and event.get("start_s") is not None
+                        and event.get("end_s") is not None
+                    ]
+                    repair_instructions = []
+                    if missing_markers and marker_lines:
+                        repair_instructions.append(
+                            "The scene is otherwise usable, but its timing gate "
+                            "requires these exact source comments. Add every line "
+                            "verbatim and in order inside AetherLabScene.construct(), "
+                            "immediately before the corresponding visual beat. Keep "
+                            "the existing visuals, positions, and animation timings.\n"
+                            + "\n".join(marker_lines)
+                        )
+                    if timing_runtime_issues:
+                        repair_instructions.append(
+                            "The beat comments match the schedule, but the accumulated "
+                            "self.play/self.wait durations do not. Adjust only the affected "
+                            "beat's literal run_time or wait durations so each marker's "
+                            "absolute start and end match its scheduled window within "
+                            "0.35 seconds. Preserve all visual objects, physics, narration "
+                            "cues, and the living ending; do not move details into another "
+                            "beat or compress their readable holds.\n"
+                            + "\n".join(timing_runtime_issues)
+                        )
+                    if overlap_issues:
+                        repair_instructions.append(
+                            "Resolve these likely simultaneous layout collisions. "
+                            "Keep the physics and scheduled duration; move the label "
+                            "to a separate reserved zone or fade/transform the old "
+                            "mobject before reusing its position. Remove unused helper "
+                            "functions that create a duplicate label in the same slot:\n"
+                            + "\n".join(overlap_issues)
+                        )
+                    if expensive_scene:
+                        repair_instructions.append(
+                            f"The cloud render cost estimate is {render_cost:.1f}, "
+                            "above the 3.5 limit. Keep every requested visual and the "
+                            "full storyboard duration; reduce implementation overhead "
+                            "instead of shortening or deleting beats. Target at most 16 "
+                            "top-level self.play calls by combining simultaneous items "
+                            "with LaggedStart/AnimationGroup/Transform and using waits "
+                            "for readable holds. Remove redundant updaters and dead helper "
+                            "functions; keep at most two live updater/always_redraw "
+                            "objects. Never rebuild a plot inside an updater: build each "
+                            "curve once and Transform it between states. The resulting "
+                            "cost estimate must be below 3.5."
+                        )
+                    if play_budget_exceeded:
+                        repair_instructions.append(
+                            f"This {duration_target_s:.0f}-second Cloud scene has "
+                            f"{play_calls} top-level self.play calls; the maximum is 16. "
+                            "Combine related animations into LaggedStart or AnimationGroup, "
+                            "and use waits for readable holds. Preserve every scheduled "
+                            "beat, marker, physics detail, motion, and the full duration. "
+                            "Do not remove beats or make the ending static."
+                        )
+                    if updater_animate_issues:
+                        repair_instructions.append(
+                            "Fix these mobject/updater conflicts. Do not call .animate on "
+                            "a displayed mobject while its active updater also changes its "
+                            "value or geometry. Animate the associated ValueTracker and let "
+                            "the updater update the display, or clear the updater before the "
+                            "play. Preserve the visual beat and its scheduled duration:\n"
+                            + "\n".join(updater_animate_issues)
+                        )
+                    if repair_instructions:
+                        repair_error = "\n\n".join(repair_instructions)
+                        repair_error += (
+                            "\n\nRepair only the construct() method beginning at line "
+                            f"{_construct_definition_line(code)}; preserve module helpers."
+                        )
+                        repair_candidate = code
+                        for repair_round in range(2):
+                            try:
+                                repaired_code = await generator.repair(
+                                    repair_candidate, repair_error, class_name,
+                                    full_scene=False,
+                                )
+                                compile(
+                                    repaired_code,
+                                    "<aetherlab-scene-layout-repair>",
+                                    "exec",
+                                )
+                                repaired_safe, repaired_safety_issues = validate_code_safety(
+                                    repaired_code
+                                )
+                                repaired_lint_ok, repaired_lint_issues = validate_scene(
+                                    repaired_code,
+                                    require_motion=True,
+                                    timeline=timeline,
+                                )
+                                repaired_hygiene = scene_hygiene_warnings(repaired_code)
+                                repaired_overlaps = [
+                                    issue for issue in repaired_hygiene
+                                    if issue.startswith("[HYGIENE:OVERLAP]")
+                                ]
+                                repaired_cost = _estimate_render_cost(repaired_code)
+                                repaired_too_expensive = cloud_mode and repaired_cost > 3.5
+                                repaired_play_calls = count_construct_play_calls(repaired_code)
+                                repaired_play_budget_exceeded = (
+                                    cloud_mode and duration_target_s >= 24.0
+                                    and repaired_play_calls > 16
+                                )
+                                repaired_timing_runtime_issues = [
+                                    issue for issue in repaired_lint_issues
+                                    if issue.startswith("[TIMING:BEAT_RUNTIME]")
+                                ]
+                                if (
+                                    repaired_safe
+                                    and repaired_lint_ok
+                                    and not repaired_overlaps
+                                    and not repaired_too_expensive
+                                    and not repaired_play_budget_exceeded
+                                ):
+                                    code = repaired_code
+                                    lint_ok = True
+                                    lint_issues = []
+                                    hygiene = repaired_hygiene
+                                    overlap_issues = []
+                                    render_cost = repaired_cost
+                                    expensive_scene = False
+                                    play_calls = repaired_play_calls
+                                    play_budget_exceeded = False
+                                    diagnostics.append(
+                                        f"Attempt {attempt + 1}: applied a targeted timing "
+                                        "and layout repair."
+                                    )
+                                    break
+
+                                problems = (
+                                    repaired_safety_issues + repaired_lint_issues
+                                    + repaired_overlaps
+                                    + ([
+                                        f"[PERF:CLOUD_COST] repaired cost "
+                                        f"{repaired_cost:.1f} remains above 3.5."
+                                    ] if repaired_too_expensive else [])
+                                    + ([
+                                        f"[PERF:PLAY_BUDGET] repaired scene has "
+                                        f"{repaired_play_calls} top-level self.play calls; "
+                                        "maximum is 16."
+                                    ] if repaired_play_budget_exceeded else [])
+                                )
+                                diagnostics.append(
+                                    f"Attempt {attempt + 1}: layout repair round "
+                                    f"{repair_round + 1} failed validation: "
+                                    + "; ".join(problems[:4])
+                                )
+                                repairable_lint = all(
+                                    issue.startswith((
+                                        "[TIMING:BEAT_MARKERS]",
+                                        "[TIMING:BEAT_RUNTIME]",
+                                        "[MANIM:UPDATER_ANIMATE]",
+                                    ))
+                                    for issue in repaired_lint_issues
+                                )
+                                can_refine = (
+                                    repair_round == 0
+                                    and repaired_safe
+                                    and not repaired_overlaps
+                                    and repairable_lint
+                                    and (
+                                        repaired_too_expensive
+                                        or repaired_play_budget_exceeded
+                                        or repaired_timing_runtime_issues
+                                    )
+                                )
+                                if not can_refine:
+                                    break
+                                repair_candidate = repaired_code
+                                repair_error = (
+                                    "Your previous whole-scene repair is close but still "
+                                    "fails these exact checks. Make only the remaining safe "
+                                    "changes while preserving physics, all beats, and their "
+                                    "full duration:\n- " + "\n- ".join(problems[:8])
+                                )
+                                if marker_lines:
+                                    repair_error += (
+                                        "\nRestore every required timing marker verbatim and "
+                                        "in order:\n" + "\n".join(marker_lines)
+                                    )
+                                repair_error += (
+                                    "\nRepair only construct() beginning at line "
+                                    f"{_construct_definition_line(repair_candidate)}."
+                                )
+                            except Exception as exc:  # noqa: BLE001 - bounded repair is fail-soft
+                                diagnostics.append(
+                                    f"Attempt {attempt + 1}: targeted layout repair "
+                                    f"round {repair_round + 1} failed: "
+                                    f"{type(exc).__name__}: {exc}"
+                                )
+                                break
+                if (
+                    not lint_ok or overlap_issues or expensive_scene
+                    or play_budget_exceeded
+                ):
+                    if expensive_scene:
+                        overlap_issues.append(
+                            f"[PERF:CLOUD_COST] estimate {render_cost:.1f} remains "
+                            "above the 3.5 cloud limit."
+                        )
+                    if play_budget_exceeded:
+                        overlap_issues.append(
+                            f"[PERF:PLAY_BUDGET] {play_calls} top-level self.play "
+                            "calls exceed the 16-call Cloud limit."
+                        )
                     diagnostics.append(
                         f"Attempt {attempt + 1}: pre-render lint failed: "
-                        + "; ".join(lint_issues[:4])
+                        + "; ".join((lint_issues + overlap_issues)[:4])
                     )
                     continue
                 if attempt > 0:
                     diagnostics.append(f"Scene succeeded on retry {attempt}.")
                 est = estimate_duration(code)
+                if not fallback_reason and _estimate_misses_target(
+                    est, duration_target_s
+                ):
+                    lower = duration_target_s * 0.8
+                    upper = duration_target_s * 1.2
+                    duration_failure_reason = (
+                        f"AI scene estimate {est.total_seconds:.1f}s was outside the "
+                        f"{lower:.1f}-{upper:.1f}s target window after {attempt + 1} "
+                        "generation attempt(s)."
+                    )
+                    diagnostics.append(
+                        f"Attempt {attempt + 1}: {duration_failure_reason} "
+                        "Trying a bounded hold-time repair."
+                    )
+                    duration_repaired = await repair_duration_miss(
+                        code, est.total_seconds, attempt + 1
+                    )
+                    if duration_repaired is None:
+                        continue
+                    code = duration_repaired
+                    est = estimate_duration(code)
                 diagnostics.append(
                     f"Estimated duration ~{est.total_seconds:.0f}s "
-                    f"({est.play_calls} beats, {est.wait_calls} waits)."
+                    f"({est.play_calls} beats, {est.wait_calls} waits)"
+                    + ("." if est.exact else "; approximate: " + "; ".join(est.notes[:2]) + ".")
                 )
-                hygiene = scene_hygiene_warnings(code)
                 if hygiene:
                     diagnostics.append("Scene hygiene warnings: " + "; ".join(hygiene[:4]))
+                storyboard["physics_expectations"] = expected_physics
                 return SceneBundle(
                     class_name=class_name,
                     code=code,
                     engine=engine,
                     status="compiled",
+                    used_fallback=bool(fallback_reason),
+                    fallback_reason=fallback_reason,
                     diagnostics=diagnostics,
                     # Carried so the visual critic can judge the render
                     # against the director's locked treatment.
-                    storyboard=generator._last_storyboard,
+                    storyboard=storyboard,
+                    scene_spec=getattr(generator, "_last_scene_spec", None),
                 )
             # All retries exhausted — fall back to static template
-            diagnostics.append("All LLM attempts failed; using deterministic fallback.")
+            fallback_reason = fallback_reason or duration_failure_reason or (
+                "Every AI scene attempt failed validation; showing the built-in "
+                "domain template."
+            )
+            diagnostics.append(f"FALLBACK: {fallback_reason}")
             code = self._build_scene_code(class_name, request, solver, rag, aspect)
         else:
+            fallback_reason = (
+                "No API key is configured, so the built-in domain template was used "
+                "instead of an AI-generated scene."
+            )
             code = self._build_scene_code(class_name, request, solver, rag, aspect)
 
         try:
@@ -290,17 +760,21 @@ class ManimRuntime:
             code=code,
             engine=engine,
             status=status,
+            used_fallback=bool(fallback_reason),
+            fallback_reason=fallback_reason,
             diagnostics=diagnostics,
+            storyboard={"physics_expectations": expected_physics},
         )
 
     def _compose_curated(
-        self, class_name: str, solver: SolverResult, plan: object | None, diagnostics: list[str]
+        self, class_name: str, solver: SolverResult, plan: object | None, diagnostics: list[str],
+        duration_target_s: float = 30.0,
     ) -> SceneBundle | None:
         """Build a scene from the curated component library, if one fits."""
         try:
             from aetherlab.services.scene_components import compose_scene_code
 
-            code = compose_scene_code(class_name, solver, plan)
+            code = compose_scene_code(class_name, solver, plan, duration_target_s)
         except Exception as exc:  # noqa: BLE001 — composition must never crash
             diagnostics.append(f"Curated composition unavailable: {exc}")
             return None
@@ -437,6 +911,14 @@ class ManimRuntime:
                 critique_issues=list(winner.issues),
                 critique_breakdown=dict(winner.breakdown),
             )
+            try:
+                from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+                refresh_scene_bundle_spec(selected, request, solver, rag)
+            except Exception as exc:  # noqa: BLE001 - a scene spec cannot break a tournament
+                selected.diagnostics.append(
+                    f"Scene specification unavailable: {type(exc).__name__}."
+                )
             final = await render_final(selected, brief or request.prompt)
             # Winners teach — from the FINAL, HQ-critiqued result, not the 480p
             # draft score used only for tournament SELECTION. The critique loop in
@@ -602,11 +1084,19 @@ class ManimRuntime:
                 if not safe:
                     log.info("Candidate %d rejected by safety gate: %s", i + 1, safety_issues[:3])
                     continue
-                lint_ok, lint_issues = validate_scene(code, require_motion=True)
+                lint_ok, lint_issues = validate_scene(
+                    code, require_motion=True, timeline=board.get("timeline")
+                )
                 if not lint_ok:
                     log.info("Candidate %d rejected by scene lint: %s", i + 1, lint_issues[:3])
                     continue
                 est = estimate_duration(code)
+                if _estimate_misses_target(est, request.duration_target_s):
+                    log.info(
+                        "Tournament candidate %d rejected: estimate %.1fs misses %.1fs target.",
+                        i + 1, est.total_seconds, request.duration_target_s,
+                    )
+                    continue
                 diagnostics = list(base_diagnostics)
                 diagnostics.append(
                     f"Tournament candidate {i + 1}: estimated duration ~{est.total_seconds:.0f}s."
@@ -627,7 +1117,9 @@ class ManimRuntime:
                         index=i,
                         scene=scene,
                         storyboard=board,
-                        duration_delta=_duration_contract_delta(est.total_seconds),
+                        duration_delta=_duration_contract_delta(
+                            est.total_seconds, request.duration_target_s
+                        ),
                     )
                 )
             except Exception as exc:  # noqa: BLE001
@@ -673,7 +1165,17 @@ class ManimRuntime:
                 if draft.status != "rendered" or not draft.video_path:
                     return None
                 brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
-                crit = await critique_video(draft.video_path, brief, settings, frame_count=frame_count)
+                expected_physics = (
+                    draft.storyboard.get("physics_expectations", [])
+                    if isinstance(draft.storyboard, dict) else []
+                )
+                crit = await critique_video(
+                    draft.video_path,
+                    brief,
+                    settings,
+                    frame_count=frame_count,
+                    expected_physics=[str(item) for item in expected_physics],
+                )
                 if crit.verdict == "skipped":
                     # No vision judgement (keyless/offline). Instead of dropping
                     # the candidate — which would leave the tournament with no
@@ -686,6 +1188,7 @@ class ManimRuntime:
                 draft.quality_score = float(crit.score or 0.0)
                 draft.critique_verdict = str(crit.verdict or "")
                 draft.critique_issues = list(crit.issues)
+                draft.critique_model = str(crit.model_used or "")
                 draft.critique_breakdown = dict(crit.breakdown)
                 candidate.scene = draft
                 candidate.draft_video_path = draft.video_path
@@ -708,7 +1211,9 @@ class ManimRuntime:
         """Synchronous path — curated component first, else the static template."""
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
-        composed = self._compose_curated(class_name, solver, plan, diagnostics)
+        composed = self._compose_curated(
+            class_name, solver, plan, diagnostics, float(request.duration_target_s)
+        )
         if composed is not None:
             return composed
         code = self._build_scene_code(class_name, request, solver, rag)
@@ -733,6 +1238,8 @@ class ManimRuntime:
         quality: str = "l",
         *,
         cancel_check: Callable[[], bool] | None = None,
+        cache_lineage: str | None = None,
+        partial_animation_range: tuple[int, int] | None = None,
     ) -> SceneBundle:
         """Render the generated scene to an MP4 video using Manim Community.
 
@@ -759,12 +1266,22 @@ class ManimRuntime:
         s = settings or self._settings
         data_dir = getattr(s, "data_dir", None)
         scene_bundle.video_path = ""
+        scene_bundle.cache_hits = 0
 
         # ── Isolated per-render workspace (Bug 1) ──
         # A fresh uuid-suffixed dir per render means no two renders ever share
         # Manim's partial-movie cache — the frame-desync bug becomes impossible.
         scene_name = _scene_name(scene_bundle.class_name, scene_bundle.code)
-        run_dir = _RUNS_DIR / f"{scene_name}_{quality}_{uuid.uuid4().hex[:8]}"
+        safe_lineage = (
+            cache_lineage
+            if cache_lineage and re.fullmatch(r"[a-f0-9]{32}", cache_lineage)
+            else ""
+        )
+        run_dir = (
+            _RUNS_DIR / f"repair_{safe_lineage}"
+            if safe_lineage
+            else _RUNS_DIR / f"{scene_name}_{quality}_{uuid.uuid4().hex[:8]}"
+        )
         run_dir.mkdir(parents=True, exist_ok=True)
         media_dir = run_dir / "media"
         scene_file = run_dir / f"{scene_name}.py"
@@ -783,21 +1300,42 @@ class ManimRuntime:
             fps = 30
 
         log.info(
-            "Rendering %s -q%s --fps %d (tier %s, cost %.1f, timeout %ds)",
-            scene_name, quality, fps, tier["name"], cost, render_timeout,
+            "Rendering %s -q%s --fps %d --seed %d (tier %s, cost %.1f, timeout %ds)",
+            scene_name, quality, fps, _scene_seed(scene_bundle.code),
+            tier["name"], cost, render_timeout,
+        )
+
+        # Deterministic RNG per scene: a stable seed derived from the code means
+        # a given scene renders identically every time (clean bug-repro), while
+        # two tournament candidates — which have *different* code — still get
+        # different seeds. So candidates differ by their prompt, never by the
+        # dice, and the vision critic scores direction instead of RNG noise.
+        seed = _scene_seed(scene_bundle.code)
+        renderer_setting = os.getenv("AETHERLAB_MANIM_RENDERER", "cairo").strip().lower()
+        renderer = renderer_setting if renderer_setting in {"cairo", "opengl"} else "cairo"
+        if renderer_setting not in {"", "cairo", "opengl"}:
+            scene_bundle.diagnostics.append(
+                f"Unknown AETHERLAB_MANIM_RENDERER={renderer_setting!r}; using Cairo."
+            )
+        command = _manim_render_command(
+            manim_cmd,
+            quality=quality,
+            fps=fps,
+            seed=seed,
+            media_dir=media_dir,
+            scene_file=scene_file,
+            class_name=scene_bundle.class_name,
+            renderer=renderer,
+            cache_enabled=bool(safe_lineage),
+            partial_animation_range=(
+                partial_animation_range if safe_lineage else None
+            ),
         )
 
         started = time.time()
         try:
             result = run_process_tree(
-                [
-                    *manim_cmd, "render", f"-q{quality}",
-                    "--fps", str(fps),
-                    # Correctness over speed: never reuse a cached partial movie.
-                    "--disable_caching",
-                    "--media_dir", str(media_dir),
-                    str(scene_file), scene_bundle.class_name,
-                ],
+                command,
                 capture_output=True,
                 text=True,
                 # Decode Manim's output as UTF-8 regardless of the host locale.
@@ -825,6 +1363,13 @@ class ManimRuntime:
                 scene_bundle.status = "render-error"
                 scene_bundle.failure_kind = kind
                 return scene_bundle
+            if safe_lineage:
+                scene_bundle.cache_hits = len(
+                    re.findall(r"Using cached data \(hash :", result.stdout or "")
+                )
+                scene_bundle.diagnostics.append(
+                    f"Manim repair cache reused {scene_bundle.cache_hits} play segment(s)."
+                )
         except ProcessCancelledError:
             raise
         except subprocess.TimeoutExpired:
@@ -884,13 +1429,36 @@ class ManimRuntime:
         nothing.
         """
         s = settings or self._settings
+        timeline = (
+            scene_bundle.storyboard.get("timeline")
+            if isinstance(scene_bundle.storyboard, dict)
+            else None
+        )
         draft_quality = "l"  # validate/repair cheaply here; promote to `quality`
 
-        async def render_once(bundle: SceneBundle, render_quality: str) -> SceneBundle:
+        async def render_once(
+            bundle: SceneBundle,
+            render_quality: str,
+            *,
+            partial_animation_range: tuple[int, int] | None = None,
+        ) -> SceneBundle:
             kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
             return await self._render_once(
-                bundle, s, render_quality, progress, **kwargs
+                bundle, s, render_quality, progress,
+                cache_lineage=cache_lineage,
+                partial_animation_range=partial_animation_range,
+                **kwargs
             )
+
+        cache_lineage = None
+        cache_mode = os.getenv("AETHERLAB_MANIM_REPAIR_CACHE", "").strip().lower()
+        render_mode = str(getattr(s, "render_mode", "local") or "local").strip().lower()
+        use_local_backend = render_mode == "local"
+        if render_mode == "auto":
+            threshold = float(getattr(s, "cloud_render_threshold", 3.0) or 3.0)
+            use_local_backend = _estimate_render_cost(scene_bundle.code) < threshold
+        if cache_mode in {"1", "true", "yes", "on"} and use_local_backend:
+            cache_lineage = uuid.uuid4().hex
 
         # BUG-29: skip the draft render when the bundle already carries a valid
         # one (the tournament renders + critiques the winner as a draft before
@@ -944,7 +1512,10 @@ class ManimRuntime:
             log.info("Attempting render repair %d/%d", repairs, max_repairs)
             try:
                 fixed = await SceneGenerator(s).repair(
-                    scene_bundle.code, error, scene_bundle.class_name
+                    scene_bundle.code,
+                    error,
+                    scene_bundle.class_name,
+                    full_scene=repairs > 1,
                 )
                 compile(fixed, "<aetherlab-repaired-scene>", "exec")
             except Exception as exc:  # noqa: BLE001
@@ -958,7 +1529,9 @@ class ManimRuntime:
                 break
             from aetherlab.services.scene_validation import validate_scene
 
-            lint_ok, lint_issues = validate_scene(fixed, require_motion=True)
+            lint_ok, lint_issues = validate_scene(
+                fixed, require_motion=True, timeline=timeline
+            )
             if not lint_ok:
                 # The repair itself introduced a provable render failure —
                 # feed the lint report back as the next round's error instead
@@ -1018,13 +1591,27 @@ class ManimRuntime:
                 if scene_bundle.storyboard
                 else (brief or "A short cinematic physics explainer scene.")
             )
-            revision_limit = int(getattr(s, "visual_critic_max_passes", max_revisions) or max_revisions)
+            configured_revisions = getattr(s, "visual_critic_max_passes", None)
+            revision_limit = max(0, int(max_revisions))
+            if configured_revisions is not None:
+                revision_limit = min(revision_limit, max(0, int(configured_revisions)))
             frame_count = int(getattr(s, "visual_critic_keyframes", 6) or 6)
             for round_no in range(1, revision_limit + 1):
-                crit = await critique_video(scene_bundle.video_path, board_brief, s, frame_count=frame_count)
+                expected_physics = (
+                    scene_bundle.storyboard.get("physics_expectations", [])
+                    if isinstance(scene_bundle.storyboard, dict) else []
+                )
+                crit = await critique_video(
+                    scene_bundle.video_path,
+                    board_brief,
+                    s,
+                    frame_count=frame_count,
+                    expected_physics=[str(item) for item in expected_physics],
+                )
                 scene_bundle.quality_score = float(crit.score or 0.0)
                 scene_bundle.critique_verdict = str(crit.verdict or "")
                 scene_bundle.critique_issues = list(crit.issues)
+                scene_bundle.critique_model = str(crit.model_used or "")
                 scene_bundle.critique_breakdown = dict(crit.breakdown)
                 if crit.verdict == "skipped":
                     break
@@ -1054,7 +1641,9 @@ class ManimRuntime:
                     static_issues.append(f"compile: {exc}")
                 if not static_issues:
                     safe, safety_issues = validate_code_safety(revised)
-                    lint_ok, lint_issues = validate_scene(revised, require_motion=True)
+                    lint_ok, lint_issues = validate_scene(
+                        revised, require_motion=True, timeline=timeline
+                    )
                     if not safe:
                         static_issues.extend(safety_issues)
                     if not lint_ok:
@@ -1074,7 +1663,9 @@ class ManimRuntime:
                         )
                         compile(revised, "<aetherlab-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(revised)
-                        lint_ok, lint_issues = validate_scene(revised, require_motion=True)
+                        lint_ok, lint_issues = validate_scene(
+                            revised, require_motion=True, timeline=timeline
+                        )
                         if not safe or not lint_ok:
                             raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
                         scene_bundle.diagnostics.append(
@@ -1095,7 +1686,29 @@ class ManimRuntime:
                     diagnostics=list(scene_bundle.diagnostics),
                     storyboard=scene_bundle.storyboard,
                 )
-                trial = await render_once(trial, final_quality)
+                partial_range = None
+                partial_mode = os.getenv(
+                    "AETHERLAB_MANIM_PARTIAL_REVISIONS", ""
+                ).strip().lower()
+                if cache_lineage and partial_mode in {"1", "true", "yes", "on"}:
+                    partial_range = _animation_range_for_times(
+                        revised, crit.problem_times_s
+                    )
+                if partial_range is not None:
+                    partial_preview = await render_once(
+                        trial, final_quality, partial_animation_range=partial_range
+                    )
+                    preview_status = partial_preview.status
+                    partial_preview.status = "compiled"
+                    partial_preview.video_path = ""
+                    partial_preview.failure_kind = ""
+                    trial = await render_once(partial_preview, final_quality)
+                    trial.diagnostics.append(
+                        f"Partial revision pass {partial_range[0]}-{partial_range[1]} "
+                        f"({preview_status}); assembled final clip from the repair-lineage cache."
+                    )
+                else:
+                    trial = await render_once(trial, final_quality)
                 if trial.status == "rendered":
                     trial.diagnostics.append(f"Applied visual revision {round_no}.")
                     scene_bundle = trial
@@ -1111,7 +1724,9 @@ class ManimRuntime:
                         )
                         compile(repaired, "<aetherlab-render-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(repaired)
-                        lint_ok, lint_issues = validate_scene(repaired, require_motion=True)
+                        lint_ok, lint_issues = validate_scene(
+                            repaired, require_motion=True, timeline=timeline
+                        )
                         if not safe or not lint_ok:
                             raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
                         retry_trial = SceneBundle(
@@ -1152,6 +1767,27 @@ class ManimRuntime:
         ):
             scene_bundle = await self._add_narration(scene_bundle, s, brief)
 
+        if s is not None and scene_bundle.code:
+            try:
+                from aetherlab.services.render_backend import cloud_job_id, render_fps_for
+                from aetherlab.services.render_ledger import RenderJobLedger
+
+                job_id = cloud_job_id(
+                    scene_bundle,
+                    quality=quality,
+                    fps=render_fps_for(scene_bundle.code, quality),
+                )
+                RenderJobLedger(s.data_dir / "render_ledger.json").metrics(job_id, {
+                    "quality_score": scene_bundle.quality_score,
+                    "retry_count": sum(
+                        1 for message in scene_bundle.diagnostics
+                        if "Applied render repair" in message or "Visual revision" in message
+                    ),
+                    "failure_kind": scene_bundle.failure_kind,
+                })
+            except Exception as exc:  # noqa: BLE001 - reporting never blocks a render
+                log.debug("Could not attach final render metrics: %s", exc)
+
         return scene_bundle
 
     async def _render_once(
@@ -1162,6 +1798,8 @@ class ManimRuntime:
         progress: Callable[[str], None] | None = None,
         variant: str = "",
         cancel_check: Callable[[], bool] | None = None,
+        cache_lineage: str | None = None,
+        partial_animation_range: tuple[int, int] | None = None,
     ) -> SceneBundle:
         """One render attempt through the selected backend, with local fallback.
 
@@ -1173,7 +1811,9 @@ class ManimRuntime:
         s = settings or self._settings
         if s is None:
             return self.render_scene(
-                scene_bundle, settings, quality, cancel_check=cancel_check
+                scene_bundle, settings, quality, cancel_check=cancel_check,
+                cache_lineage=cache_lineage,
+                partial_animation_range=partial_animation_range,
             )
         from aetherlab.services.render_backend import (
             CLOUD_UNAVAILABLE,
@@ -1184,9 +1824,75 @@ class ManimRuntime:
 
         backend = select_backend(s, scene_bundle.code, quality)
         timeout = render_timeout_for(scene_bundle.code, quality, s)
+        total_started = time.monotonic()
+        local_started = total_started
         cancel_kwargs = (
             {"cancel_check": cancel_check} if cancel_check is not None else {}
         )
+        from aetherlab.services.render_backend import cloud_job_id, render_fps_for
+        from aetherlab.services.render_ledger import RenderJobLedger
+
+        if backend.name == "local":
+            jid = cloud_job_id(
+                scene_bundle, quality=quality,
+                fps=render_fps_for(scene_bundle.code, quality), variant=variant,
+            )
+            ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
+            ledger.start(
+                job_id=jid, scene_class=scene_bundle.class_name, quality=quality,
+                fps=render_fps_for(scene_bundle.code, quality), backend="local",
+            )
+        else:
+            jid = cloud_job_id(
+                scene_bundle, quality=quality,
+                fps=render_fps_for(scene_bundle.code, quality), variant=variant,
+            )
+            ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
+
+        def record_render_metrics(result: SceneBundle, backend_name: str, wall: float) -> None:
+            metrics = {
+                "backend": backend_name,
+                "manim_renderer": os.getenv("AETHERLAB_MANIM_RENDERER", "cairo").strip().lower()
+                if backend_name in {"local", "local_fallback"}
+                else "cairo",
+                "repair_cache": bool(cache_lineage)
+                if backend_name in {"local", "local_fallback"}
+                else False,
+                "cache_hits": int(result.cache_hits or 0),
+                "cache_hit": bool(result.cache_hits),
+                "render_wall_seconds": wall,
+                "total_seconds": time.monotonic() - total_started,
+                "retry_count": sum(
+                    1 for message in result.diagnostics
+                    if "Applied render repair" in message or "Visual revision" in message
+                ),
+                "quality_score": result.quality_score,
+                "critic_model": result.critique_model,
+                "failure_kind": result.failure_kind,
+            }
+            if result.narration_sync:
+                metrics.update({
+                    "narration_max_boundary_overrun_s": float(
+                        result.narration_sync.get("max_boundary_overrun_s", 0.0) or 0.0
+                    ),
+                    "narration_max_rate_adjustment_pct": int(
+                        result.narration_sync.get("max_rate_adjustment_pct", 0) or 0
+                    ),
+                    "narration_timeline_scale": float(
+                        result.narration_sync.get("timeline_scale", 1.0) or 1.0
+                    ),
+                })
+            if backend_name in {"local", "local_fallback"}:
+                try:
+                    from importlib.metadata import version
+
+                    metrics["local_manim_version"] = version("manim")
+                except Exception:  # noqa: BLE001 - telemetry is optional
+                    pass
+            ledger.metrics(jid, {
+                **metrics,
+            })
+
         rendered = await backend.render(
             scene_bundle,
             quality=quality,
@@ -1194,13 +1900,34 @@ class ManimRuntime:
             timeout=timeout,
             progress=progress,
             variant=variant,
+            cache_lineage=cache_lineage,
+            partial_animation_range=partial_animation_range,
             **cancel_kwargs,
         )
         if rendered.status != CLOUD_UNAVAILABLE:
+            if backend.name == "local":
+                record_render_metrics(rendered, "local", time.monotonic() - local_started)
+                if rendered.status == "rendered":
+                    ledger.finish(jid, "rendered", rendered.video_path)
+                elif rendered.status in {"render-error", "render-timeout"}:
+                    ledger.failure(jid, rendered.diagnostics[-1] if rendered.diagnostics else "local render failed", kind=rendered.failure_kind)
+            else:
+                record_render_metrics(rendered, "github_actions", time.monotonic() - local_started)
+            return rendered
+        if str(getattr(s, "render_mode", "local") or "local").lower() == "cloud":
+            # An explicit cloud choice commonly means the local machine cannot
+            # handle this scene. Preserve that choice when the remote backend
+            # is unavailable or times out; Auto mode retains its local fallback.
+            if progress:
+                try:
+                    progress("Cloud render unavailable; cloud-only mode selected")
+                except Exception:  # noqa: BLE001
+                    pass
+            record_render_metrics(rendered, "github_actions", time.monotonic() - local_started)
             return rendered
         # Cloud is optional. Restore the compiled status before handing the same
-        # bundle to local rendering; the diagnostic stays so UI/tests can report
-        # the fallback without poisoning the render guard.
+        # bundle to local rendering in Auto mode; the diagnostic stays so UI/tests
+        # can report the fallback without poisoning the render guard.
         rendered.status = "compiled"
         rendered.failure_kind = ""
         if progress:
@@ -1208,12 +1935,15 @@ class ManimRuntime:
                 progress("Cloud render unavailable; rendering locally")
             except Exception:  # noqa: BLE001
                 pass
+        local_started = time.monotonic()
         local = await LocalRenderBackend().render(
             rendered,
             quality=quality,
             settings=s,
             timeout=timeout,
             progress=progress,
+            cache_lineage=cache_lineage,
+            partial_animation_range=partial_animation_range,
             **cancel_kwargs,
         )
         if local.status == "rendered":
@@ -1221,12 +1951,6 @@ class ManimRuntime:
         # Ledger: record the local fallback against the same cloud job id so the
         # dashboard shows the whole story (cloud attempt -> local fallback).
         try:
-            from aetherlab.services.render_backend import cloud_job_id, render_fps_for
-            from aetherlab.services.render_ledger import RenderJobLedger
-
-            jid = cloud_job_id(
-                rendered, quality=quality, fps=render_fps_for(rendered.code, quality), variant=variant
-            )
             reason = next(
                 (d for d in reversed(rendered.diagnostics) if "unavailable" in d.lower()),
                 "Cloud render unavailable; rendered locally.",
@@ -1234,6 +1958,7 @@ class ManimRuntime:
             RenderJobLedger(s.data_dir / "render_ledger.json").fallback(
                 jid, reason, local.video_path if local.status == "rendered" else ""
             )
+            record_render_metrics(local, "local_fallback", time.monotonic() - local_started)
         except Exception as exc:  # noqa: BLE001 — observability must never break a render
             log.info("Could not record fallback ledger (%s).", exc)
         return local
@@ -1247,19 +1972,63 @@ class ManimRuntime:
         the bundle exactly as it was (silent)."""
         from aetherlab.services import voiceover
 
+        narration_storyboard = None
+        try:
+            from aetherlab.services.scene_specification import storyboard_from_scene_spec
+
+            narration_storyboard = storyboard_from_scene_spec(scene_bundle.scene_spec)
+        except Exception:  # noqa: BLE001 - legacy bundles keep using their storyboard
+            pass
+        if narration_storyboard is None:
+            narration_storyboard = scene_bundle.storyboard
+        scene_bundle.narration_text = voiceover.storyboard_narration_script(narration_storyboard)
         if not voiceover.narration_available():
             scene_bundle.diagnostics.append(
                 "Narration enabled but edge-tts/ffmpeg unavailable; kept silent video."
             )
             return scene_bundle
         try:
-            script = voiceover.storyboard_narration_script(scene_bundle.storyboard)
-            target = voiceover.storyboard_target_seconds(scene_bundle.storyboard)
+            timed_cues = voiceover.storyboard_timed_narration_segments(
+                narration_storyboard
+            )
+            if timed_cues:
+                beat_script = "\n".join(item["text"] for item in timed_cues)
+                aligned = await voiceover.add_timed_beat_voiceover(
+                    Path(scene_bundle.video_path),
+                    narration_storyboard,
+                    Path(s.data_dir) / "narration",
+                    voice=s.tts_voice,
+                    rate=s.tts_rate,
+                )
+                if aligned:
+                    scene_bundle.narration_text = beat_script
+                    scene_bundle.silent_video_path = scene_bundle.video_path
+                    scene_bundle.video_path = aligned["video_path"]
+                    scene_bundle.subtitle_path = aligned["subtitle_path"]
+                    scene_bundle.narration_sync = aligned["sync"]
+                    if isinstance(scene_bundle.scene_spec, dict):
+                        narration_spec = scene_bundle.scene_spec.setdefault("narration", {})
+                        if isinstance(narration_spec, dict):
+                            narration_spec["text"] = beat_script
+                            narration_spec["sync"] = aligned["sync"]
+                            narration_spec["subtitle_path"] = aligned["subtitle_path"]
+                    scene_bundle.diagnostics.append(
+                        "Added beat-timed narration and an aligned subtitle sidecar."
+                    )
+                    return scene_bundle
+                scene_bundle.diagnostics.append(
+                    "Beat narration did not fit its scheduled windows; using whole-clip fit."
+                )
+
+            script = voiceover.storyboard_narration_script(narration_storyboard)
+            beat_timing = voiceover.storyboard_narration_timing(narration_storyboard)
+            target = voiceover.storyboard_target_seconds(narration_storyboard)
             narration = script
             if s.openai_api_key:
                 try:
                     narration = await SceneGenerator(s).narrate(
-                        brief or "physics animation", scene_bundle.code, script, target
+                        brief or "physics animation", scene_bundle.code, script, target,
+                        beat_timing=beat_timing,
                     ) or script
                 except Exception as exc:  # noqa: BLE001
                     scene_bundle.diagnostics.append(
@@ -1268,6 +2037,7 @@ class ManimRuntime:
             if not narration or not narration.strip():
                 scene_bundle.diagnostics.append("No narration text available; kept silent video.")
                 return scene_bundle
+            scene_bundle.narration_text = narration
             narrated = await voiceover.add_voiceover(
                 Path(scene_bundle.video_path),
                 narration,
@@ -1365,6 +2135,158 @@ def _scene_name(class_name: str, code: str = "") -> str:
     return f"scene_{class_name}"
 
 
+def _construct_definition_line(code: str) -> int:
+    """Find construct() so bounded repairs can edit only the scene method."""
+    match = re.search(r"(?m)^\s*def\s+construct\s*\(", code)
+    return code.count("\n", 0, match.start()) + 1 if match else 1
+
+
+def _scene_seed(code: str) -> int:
+    """A stable, non-negative 31-bit RNG seed derived from the scene code.
+
+    Same code → same seed (deterministic renders); different code → different
+    seed (distinct tournament candidates). Bounded to Manim/Click's INTEGER
+    range so ``--seed`` never overflows.
+    """
+    digest = hashlib.sha256((code or "").encode("utf-8")).hexdigest()[:8]
+    return int(digest, 16) % (2**31 - 1)
+
+
+def _manim_render_command(
+    manim_cmd: list[str],
+    *,
+    quality: str,
+    fps: int,
+    seed: int,
+    media_dir: Path,
+    scene_file: Path,
+    class_name: str,
+    renderer: str = "cairo",
+    cache_enabled: bool = False,
+    partial_animation_range: tuple[int, int] | None = None,
+) -> list[str]:
+    """Build a Manim CLI call; partial rendering requires lineage-local cache."""
+    selected_renderer = renderer if renderer in {"cairo", "opengl"} else "cairo"
+    command = [
+        *manim_cmd,
+        "render",
+        f"-q{quality}",
+        "--fps",
+        str(fps),
+        "--seed",
+        str(seed),
+        "--renderer",
+        selected_renderer,
+    ]
+    if selected_renderer == "opengl":
+        # The OpenGL renderer only encodes a file when this explicit flag is set.
+        command.append("--write_to_movie")
+    if not cache_enabled:
+        # Isolated per-render directories plus disabled caching keep stale
+        # partial movies out of ordinary renders. Only a UUID repair lineage
+        # opts into Manim's content-hashed partial-movie reuse.
+        command.append("--disable_caching")
+    elif partial_animation_range is not None:
+        start, end = partial_animation_range
+        if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end:
+            command.extend(["-n", f"{start},{end}"])
+    command.extend([
+        "--media_dir", str(media_dir), str(scene_file), class_name,
+    ])
+    return command
+
+
+def _animation_range_for_times(
+    code: str, timestamps_s: list[float]
+) -> tuple[int, int] | None:
+    """Map critic timestamps to conservative top-level Scene.play indices.
+
+    Dynamic branches, loops, nested calls, and non-literal timing are treated as
+    ambiguous; in those cases the caller does a normal lineage-cached render.
+    """
+    if not timestamps_s:
+        return None
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    construct = next((
+        method
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        for method in node.body
+        if isinstance(method, ast.FunctionDef) and method.name == "construct"
+    ), None)
+    if construct is None:
+        return None
+
+    def is_timed_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"play", "wait"}
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        )
+
+    events: list[tuple[ast.Call, float]] = []
+    for statement in construct.body:
+        direct = (
+            statement.value
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+            else None
+        )
+        if direct is not None and is_timed_call(direct):
+            call = direct
+            duration: float | None = 1.0
+            if call.func.attr == "play":
+                run_time = next((kw.value for kw in call.keywords if kw.arg == "run_time"), None)
+                if run_time is not None:
+                    duration = (
+                        float(run_time.value)
+                        if isinstance(run_time, ast.Constant)
+                        and isinstance(run_time.value, (int, float))
+                        else None
+                    )
+            else:
+                wait_value = (
+                    call.args[0] if call.args else
+                    next((kw.value for kw in call.keywords if kw.arg == "duration"), None)
+                )
+                if wait_value is not None:
+                    duration = (
+                        float(wait_value.value)
+                        if isinstance(wait_value, ast.Constant)
+                        and isinstance(wait_value.value, (int, float))
+                        else None
+                    )
+            if duration is None or duration <= 0:
+                return None
+            events.append((call, duration))
+        elif any(is_timed_call(node) for node in ast.walk(statement)):
+            return None
+    if not events:
+        return None
+
+    located: list[int] = []
+    for timestamp in timestamps_s:
+        try:
+            time_s = max(0.0, float(timestamp))
+        except (TypeError, ValueError):
+            return None
+        elapsed = 0.0
+        index = len(events) - 1
+        for candidate, (_call, duration) in enumerate(events):
+            if time_s <= elapsed + duration or candidate == len(events) - 1:
+                index = candidate
+                break
+            elapsed += duration
+        located.append(index)
+    start = max(0, min(located) - 1)
+    end = min(len(events) - 1, max(located) + 1)
+    return start, end
+
+
 def _clean_old_renders(scene_name: str) -> None:
     """Legacy no-conflict cleanup (kept for API compatibility).
 
@@ -1450,15 +2372,37 @@ def _estimate_render_cost(code: str) -> float:
     return min(cost, 5.0)
 
 
-def _duration_contract_delta(seconds: float) -> float:
-    """0 inside the 15-22s target, else distance to the nearest boundary."""
+def _estimate_misses_target(estimate: object, target_seconds: float) -> bool:
+    """True when a static duration estimate *provably* misses the target window.
+
+    An estimate carrying notes (loops, non-literal timing, LaggedStart/
+    AnimationGroup without run_time) is an approximation; rejecting a scene on
+    it discarded correctly timed AI scenes, so those estimates stay advisory.
+    """
+    if not getattr(estimate, "exact", True):
+        return False
+    return _duration_contract_delta(
+        getattr(estimate, "total_seconds", 0.0), target_seconds
+    ) > 0
+
+
+def _duration_contract_delta(
+    seconds: float, target_seconds: float = 30.0, tolerance: float = 0.2
+) -> float:
+    """Distance outside the requested duration's tolerance window, in seconds."""
     try:
         value = float(seconds)
+        target = float(target_seconds)
+        tolerance = max(0.0, float(tolerance))
     except (TypeError, ValueError):
         return 9999.0
-    if 15.0 <= value <= 22.0:
+    if not math.isfinite(value) or not math.isfinite(target) or target <= 0:
+        return 9999.0
+    lower = target * (1.0 - tolerance)
+    upper = target * (1.0 + tolerance)
+    if lower <= value <= upper:
         return 0.0
-    return min(abs(value - 15.0), abs(value - 22.0))
+    return min(abs(value - lower), abs(value - upper))
 
 
 _FAILURE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (

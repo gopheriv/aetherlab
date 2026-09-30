@@ -27,9 +27,54 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the headless analytical/RAG/scene-generation pipeline.",
     )
     parser.add_argument(
+        "--pdf",
+        metavar="PROMPT",
+        help="Write a well-explained LaTeX PDF: a study guide for a topic, or theory "
+             "plus a step-by-step solution for a problem.",
+    )
+    parser.add_argument(
+        "--out", default="aetherlab_document.pdf",
+        help="Where to save the --pdf document (default: %(default)s).",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"AetherLab {__version__}"
     )
     return parser
+
+
+async def _run_pdf(prompt: str, out: str) -> int:
+    import shutil
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    from aetherlab.services.pipeline import _merge_web_references
+    from aetherlab.services.rag import LocalVectorRag
+    from aetherlab.services.study_document import write_study_document
+
+    settings = load_settings()
+    request = ProblemRequest(prompt=prompt)
+    print("Solving…", flush=True)
+    solver = await AsyncLLMCoordinator(settings).solve(request)
+    rag = await LocalVectorRag(settings).search(solver.keywords)
+    rag = await _merge_web_references(rag, solver.keywords, settings)
+    with TemporaryDirectory(prefix="aetherlab_pdf_") as tmp:
+        doc = await write_study_document(
+            request, solver, rag, settings, Path(tmp), progress=lambda m: print(m, flush=True))
+        target = Path(out)
+        content = Path(tmp) / "content.json"
+        if content.exists():  # the model's structured content, to rebuild the PDF without a new call
+            shutil.copyfile(content, target.with_suffix(".json"))
+        if doc.pdf_path and doc.pdf_path.exists():
+            shutil.copyfile(doc.pdf_path, target)
+            shutil.copyfile(doc.tex_path, target.with_suffix(".tex"))
+            print(f"{doc.mode} document ({doc.backend}, written by {doc.authored_by}): {target}")
+            if doc.note:
+                print(f"note: {doc.note}")
+            return 0
+        shutil.copyfile(doc.tex_path, target.with_suffix(".tex"))
+        print(f"No PDF produced ({doc.note}); LaTeX saved: {target.with_suffix('.tex')}")
+        return 1
 
 
 def _setup_logging() -> None:
@@ -98,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging()
     if args.smoke is not None:
         return asyncio.run(_run_smoke(args.smoke))
+    if args.pdf:
+        return asyncio.run(_run_pdf(args.pdf, args.out))
 
     try:
         from aetherlab.ui.app import run_app

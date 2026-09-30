@@ -1,8 +1,8 @@
 # AetherLab — Phase 2 Error Log
 
-Testing method: `test_features.py` exercises all 168 catalogued features
+Testing method: `test_features.py` exercises all 214 catalogued features
 (headless logic, offscreen-Qt widget construction, and source assertions).
-**Automated result: 168/168 pass at the behavioural/happy-path level.**
+**Automated result: 214/214 pass at the behavioural/happy-path level.**
 
 Green happy-path tests do not prove the absence of defects, so this log records
 the logistical/UX errors found by close code review of paths the happy-path
@@ -178,3 +178,223 @@ concurrency bound), not a BUG row.
   logistical/UX defect in scope for this loop. The *plot-expression* path is
   separately sandboxed (`services/plotting.py`, AST allow-list, no `eval` of
   model output); only the full-scene renderer runs unsandboxed.
+
+## F183–F199 audit (2026-07-24) — planner-first / numeric / verifier redesign
+
+The planner-first pipeline (numeric ground truth, cited PDF, curated Manim
+components, physics self-verifier, and the "no silent degradation" quality
+fixes) shipped in commits `3ad9bd1`/`ba05387`/`f7ec9d9`/`765a5ea` but had never
+been carried through the `/goal` 4-phase loop — 17 features (F183–F199) sat
+`PENDING` in the canonical tracker.
+
+**Phase 2 (test every story) + Phase 4 (retest):** hand-audited every story path
+against source — `planner.plan`/`heuristic_plan`/`_union`, `numeric.solve_numeric`
+(AST-allow-listed RHS, `solve_ivp`), `verify.verify_solution` (finite/bounded/
+energy/pendulum checks), `research.build_research_pdf` + matplotlib fallback,
+the curated `scene_components` (trajectory/surface3d), `llm.solve` retry +
+`OSCILLATOR_STEMS`-gated fallback ODE, and `scene_validation.repair_text_mode_math`.
+A deterministic **199/199** harness run (`QT_QPA_PLATFORM=offscreen python
+test_features.py`) then confirmed each: e.g. F187 numeric-vs-analytic
+`max_err=3.98e-07`, F195 verifier flags the anti-damped oscillator (1/3 checks
+pass), F199 promotes `Tex("m_1")`→`MathTex`.
+
+**No app-code defects surfaced this pass** — unlike prior passes (BUG-1..58), the
+implementation was already correct against its stories. The only fix was in the
+tracker tooling itself:
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-59 | Logistical / tracker fidelity | F183–F199 (all auto-generated stories) | `build_feature_tracker.py` `_story_fields` | `PHASE_RESULTS` was only applied to features in `STORY_OVERRIDES`; auto-generated stories hardcoded `("PENDING","None","PENDING")` for the Phase-2/Phase-4 columns. So a generated feature could **never leave PENDING no matter what the `/goal` loop verified** — the canonical spreadsheet would understate coverage forever. Fixed by having the generated branch honour `PHASE_RESULTS.get(fid, PENDING-default)`, mirroring the override branch, then stamping F183–F199 as `("PASS","None","PASS")`. Tracker rebuild → 0 PENDING; integrity audit passes (199 features / 199 results / 199 tests aligned).
+
+### Physics-coverage expansion (2026-07-24) — new curated scene components (F200–F214)
+
+A follow-on audit of the render / scene-creator confirmed it is deeply
+physics-driven (numeric ODE ground truth, a physics verifier, domain templates,
+and a cinematic LLM prompt with 7 domain playbooks), but surfaced a **coverage
+asymmetry**: the LLM prompt advertises 7 physics domains while the *reliable*
+path (curated numeric components + keyless exemplars) backed only
+oscillator/pendulum/orbit/wave, and the 3-D `surface3d` component is a generic
+Gaussian bump rather than the actual field/potential. Taking inspiration from
+[manim-physics](https://www.manim.community/plugin/manim-physics/) (Pendulum,
+Charge/ElectricField, LinearWave/StandingWave, Lens/Ray),
+[3Blue1Brown](https://www.3blue1brown.com/lessons/fourier-series/) (Fourier
+epicycles) and [PhET / physics-simulations.org](https://physics-simulations.org/)
+(double pendulum, phase space, diffraction), two new **render-verified** curated
+components were added (not defects — capability additions, logged here for
+continuity):
+
+- **F200 `scene_components/pendulum.py`** — integrates the *full nonlinear*
+  pendulum `θ'' = -(g/L)·sin(θ) - 2·damping·θ'` through the same AST-allow-listed
+  `services/numeric` path and stages a real rod + bob + `TracedPath` comet-tail
+  with a synchronized θ-vs-t readout. Chosen ahead of the generic trajectory when
+  `detect_domain == "pendulum"`. Renders to a 480p MP4 in seconds.
+- **F201 `scene_components/phase_portrait.py`** — composes the v-vs-x phase
+  spiral collapsing onto the attractor for a 2-state ODE, but only when the
+  prompt explicitly asks for a phase-space view (so a plain oscillator keeps its
+  time-series curve). Renders to a 480p MP4 in seconds.
+- **F202 `scene_components/field_lines.py`** — electrostatics is not a time-ODE,
+  so no trajectory component ever fired for it; this integrates the field-line
+  streamlines of a charge configuration (dipole by default) in Python and bakes
+  the polylines into a scene with +/- charges and a test charge riding the
+  longest line. Chosen when `detect_domain == "em_field"`. Renders in seconds.
+- **F203 `scene_components/fourier_epicycles.py`** — the series/transforms domain
+  had no non-LLM visual; this is the 3b1b rotating-vector build, a chain of odd-
+  harmonic phasors summing tip-to-tail to trace a square wave. Chosen on
+  Fourier/epicycle/square-wave phrasing (the bare word "harmonic" is excluded so
+  it can't steal the harmonic oscillator). Renders in seconds.
+
+- **F204 `scene_components/quantum.py`** — a harmonic potential well with
+  quantized energy levels and a Gaussian |ψ(x,t)|² coherent state sloshing back
+  and forth, shaded. Chosen on quantum/wavefunction/wavepacket/Schrödinger
+  phrasing (distinctive stems, so it never steals the *classical* oscillator).
+- **F205 `scene_components/double_slit.py`** — Young's two-source experiment:
+  expanding circular wavefronts from two slits and the cos²-intensity fringe
+  pattern building on a screen with bright-fringe markers. Chosen on
+  double-slit / interference / diffraction phrasing.
+- **F206 `scene_components/kinetic_theory.py`** — an ideal gas of N particles
+  (seeded, deterministic) bouncing elastically off a box via a per-frame updater,
+  with a Maxwell–Boltzmann speed-distribution reference. Chosen on
+  kinetic-theory / ideal-gas / thermodynamics phrasing.
+
+- **F207 `scene_components/double_pendulum.py`** — the chaotic double pendulum:
+  the full nonlinear 4-state system (θ₁,θ₂,ω₁,ω₂) integrated through
+  `services/numeric`, with a `TracedPath` painting the tangled trajectory on the
+  lower bob. Checked *before* the single pendulum (whose domain also matches
+  "pendulum"), gated on double/chaotic-pendulum phrasing.
+- **F208 `scene_components/lens.py`** — thin-lens image formation: the three
+  principal rays converging to the real inverted image, positioned by
+  1/f = 1/do + 1/di. Chosen on lens/refraction/focal-length phrasing.
+- **F209 `scene_components/standing_wave.py`** — a resonant normal mode
+  y(x,t)=A sin(nπx/L)cos(ωt) breathing between dashed envelopes with fixed nodes
+  and antinodes marked. Chosen on standing-wave/normal-mode/vibrating-string
+  phrasing (distinct from the traveling-wave template).
+
+- **F210 `scene_components/orbit.py`** — a real Kepler orbit: the two-body
+  problem r''=-μr/|r|³ integrated through `services/numeric` (so the planet is
+  fast at perihelion), staged with the star at the focus, a comet-tail planet, a
+  sweeping radius vector, and two equal-*time* sectors that come out equal in
+  *area* (Kepler's 2nd law) as the hero frame. Chosen for orbit/gravitation, and
+  guarded against the "orbital" substring so an atomic orbital is not treated as
+  a planetary orbit.
+- **F211 `scene_components/surface3d.py` (upgrade)** — the 3-D needs_3d fallback
+  no longer emits one generic Gaussian bump; it selects the surface from the
+  problem: a point-charge 1/r peak, a dipole's +/- pair, a saddle, a p-orbital's
+  two lobes, or the Gaussian default — each a labelled ThreeDScene. The F192
+  contract is preserved (still a ThreeDScene; still None when needs_3d is false).
+
+- **F212 — components track solver parameters.** Every curated component now
+  reads its physics from the solver's `variables` with clamped defaults (so an
+  empty solver still renders the canonical default — no regression): orbit reads
+  eccentricity; quantum reads stiffness/mass (well frequency) + amplitude;
+  double_slit reads slit separation + wavelength (fringe spacing);
+  fourier_epicycles reads the term count; kinetic_theory reads particle count +
+  temperature (speed scale); lens/standing_wave/pendulum/double_pendulum/
+  field_lines already read focal length, mode, gravity/length/mass, and charge
+  separation; trajectory/phase_portrait are inherently problem-specific (they run
+  on the solver's own integrated ODE). Verified in `t_f212` (a supplied variable
+  must change the composed scene; the empty solver keeps the default).
+
+- **F213 `scene_components/coupled_oscillators.py`** — two masses on springs
+  integrated from the real coupled ODE (started with one mass displaced), so the
+  energy visibly beats between them (the two normal modes); masses on drawn
+  springs above, x₁(t)/x₂(t) traces below. Chosen on coupled/two-mass phrasing,
+  before the single standing wave.
+- **F214 `scene_components/mirror.py`** — concave-mirror image formation: the
+  mirror arc, F and C, the three principal rays reflecting to the real inverted
+  image (mirror equation 1/f=1/do+1/di). Checked *before* the lens (both share
+  generic optics terms like "image formation"; the explicit "mirror" wins).
+
+Selection lives in `scene_components/__init__.py` `compose_scene_code` with
+priority **double-pendulum → pendulum → orbit → field-lines → quantum →
+double-slit → mirror → lens → coupled-oscillators → standing-wave →
+kinetic-theory → fourier → phase-portrait → trajectory → surface3d** (the first
+thirteen keyword/domain-gated); the oscillator default (F191/F193) is deliberately
+unchanged, guarded by regression assertions in `t_f200`–`t_f214`. A routing
+subtlety worth noting: "image formation" / "ray diagram" are shared optics terms,
+so the more-specific mirror is checked before the lens — the same class of
+false-friend as the orbit/"orbital" guard. Still open for a future pass: convex
+mirrors / multi-element optics / total internal reflection, and a normal-mode
+*decomposition* view (projecting an arbitrary start onto the symmetric &
+antisymmetric modes).
+
+## Verification-gate audit (2026-09-20) — "make green mean green" (F215)
+
+A re-check of the branch ran the documented CI order by hand and found the
+feature harness reporting **212/214 with two failures while still exiting 0**.
+Following that thread showed the project's entire quality claim rested on a
+chain that could not go red: three independent layers each swallowed a failing
+feature, and the two failures themselves turned out to be environment leakage
+rather than product regressions (see the Phase-2 hermeticity work).
+
+Reproduction of the hole, on a tree with F128 and F153 genuinely failing: the
+exact CI sequence `python test_features.py` → `python build_feature_tracker.py`
+→ `python tools/tracker_integrity_audit.py --check` →
+`python tools/feature_surface_audit.py --check` exited **0 at every step**. The
+rebuild absorbed the failures into the spreadsheet, after which the audit
+compared the regenerated artifacts against the generator, found them consistent
+with each other, and certified the run.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-60 | P0 quality gate / false green | F215 | `test_features.py` `main`, `tools/tracker_integrity_audit.py` `audit` | `main()` ended with an unconditional `return 0`, so the CI step that runs the behavioural suite could never fail on a feature regression — every "NNN/NNN green" claim in the docs was unenforced. The integrity audit did not look at result *statuses* either, only at cross-artifact consistency, so regenerating the tracker from a failing run produced self-consistent artifacts and a green audit. Fixed on both sides: the harness returns `failure_exit_code(results)` (non-zero whenever any feature is FAIL), and the audit appends an issue naming every feature recorded as FAIL, so a run containing failures is never certifiable however the statuses are stamped. |
+| BUG-61 | P0 tracker fidelity | F215 | `build_feature_tracker.py` `apply_results` | The `DEFECTS` loop ran *after* the live statuses were written and called `set_status(fid, "FIXED", ...)` unconditionally. A previously-fixed defect whose test started failing again therefore still read **Status = FIXED** in the canonical spreadsheet — confirmed live, with F153's test failing and its row printing FIXED. That made regressions structurally invisible across all 48 defect-linked features, precisely the ones most likely to regress. Fixed: a defect feature whose live result is FAIL is stamped `REGRESSED` and carries the failure note, and the audit names it explicitly rather than reporting a generic "not marked FIXED". |
+| BUG-62 | Logistical / tracker fidelity | F215 | `build_feature_tracker.py` `apply_results` / `set_phase4` | The Phase-2/Phase-4 columns come from the hand-stamped `PHASE_RESULTS` dict, evaluated at import time before any results are read. A feature whose test was failing *right now* still advertised "Phase-4 result: PASS" — confirmed on F128. The spreadsheet's audit columns could therefore contradict the run that produced the row beside them. Fixed with `set_phase4()`: a failing run overrides Phase-4 to FAIL. The hand stamp remains the default for everything that passes. |
+
+`t_f215` is the regression. It drives a synthetic failing run through all three
+layers without touching any tracked file: it asserts `failure_exit_code` follows
+the run in both directions; loads the generator in isolation and calls the now
+dependency-injectable `apply_results({...FAIL...})`, asserting a defect-linked
+feature becomes REGRESSED (not FIXED) and that both a defect-linked and a plain
+feature have Phase-4 overridden to FAIL; and points the audit at a doctored
+results file to prove it reports the failure and refuses to certify.
+
+Note on cascade: `t_f165` calls `audit()`, which reads the results file written
+by the *previous* harness run. A run with failures therefore also fails F165 on
+the following run until the suite is genuinely green — the intended behaviour,
+and the same convergence property the F165 bootstrap already had.
+
+## Upgrade-mission verification (2026-09-25)
+
+The upgrade-mission session ended before its last full harness run. The first full
+run afterward reported **201/215**. Thirteen failures were stale tests or tool
+hygiene: the intentional piecewise-linear trajectory rewrite, the scene-spec
+codegen prompt, missing UTF-8 policies in two new tools, and uncatalogued Settings
+and quiz surfaces. One was a real regression:
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-63 | P1 data integrity | F167 | `aetherlab/ui/widgets.py` `_QuestionCard._answer_mcq` | Adding the confidence selector moved `self.answer_recorded.emit(...)` into the `for button in self._group.buttons()` loop. One answer on a four-choice question was therefore recorded four times, which inflated course attempts and the spaced-review event log that later recall measurements depend on. This regressed BUG-27's one-answer guarantee through a different path. Fixed by moving the emit outside the loop. `t_f167`, which asserts exactly one `quiz_answered` emission, caught it. |
+| BUG-64 | P1 wrong physics shown | F205 | `aetherlab/services/scene_components/__init__.py` `compose_scene_code` | The component dispatcher checked quantum stems (step 5) before interference stems (step 6). The review pack's prompt "Show double-slit interference and the resulting fringe pattern" had keywords `double-slit interference` and `quantum`, so it rendered a quantum wavepacket in a parabolic well with no slits or fringes. The human rating was given on that video. Fixed: a named two-slit apparatus (double slit, two-slit, Young's) skips the quantum branch, while generic interference/diffraction phrasing still defers to quantum framing. `t_f205` asserts the quantum-framed double-slit case gets the fringe stage. |
+
+## Bug check of the uncommitted upgrade surface (2026-09-30)
+
+A full re-run was green (**221/221** features, 71/71 pytest) before this pass, so every
+defect below escaped the suite. All were found by reading the ~7k-line uncommitted diff
+and then reproduced with a concrete input before fixing. Regressions live in
+`tests/test_bugcheck_regressions.py` (one test per bug, named `test_bugNN_*`).
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-65 | P1 good AI scenes rejected | F106 | `aetherlab/services/scene_validation.py` `check_timeline_runtime` | The beat-timing gate (a *hard* `validate_scene` failure) counted any `self.play(LaggedStart(...))`, `AnimationGroup` or `Succession` without an outer `run_time` as 1 s. Six lagged 1 s FadeIns at `lag_ratio=0.3` really run 2.5 s, so a correctly scheduled scene failed `[TIMING:BEAT_RUNTIME]`, burned repair rounds, and could end in the template fallback, even though the codegen prompt tells the model to batch with LaggedStart. Group animations without their own `run_time` now make the beat unmeasurable, and the gate declines it, as it already did for loops and dynamic durations. |
+| BUG-66 | P1 good AI scenes rejected | F106 | `aetherlab/services/manim_runtime.py` duration gates, `scene_validation.estimate_duration` | `estimate_duration` is an approximation (loops count once; group animations, non-literal and nested `run_time`, and `wait(duration=…)` were counted as 1 s), yet four places used it as a hard ±20 % gate: the main generation loop, both bounded repairs, and tournament candidate selection. A 30 s scene built from lagged groups or an idle loop was "estimated" at far less and was rejected or padded. `DurationEstimate.exact` now reports whether the sum can be trusted; `_estimate_misses_target()` rejects only on an exact estimate, and approximate ones stay advisory (with the reason in diagnostics). The estimator now also reads nested `run_time` and `wait(duration=…)`. |
+| BUG-67 | P1 narration quality | — | `aetherlab/services/scene_generator.py` `schedule_storyboard_timeline` | When storyboard beats had no own `narration_cue` (string beats, or the model omitting cues), every beat inherited the act's whole narration line. The timed voiceover and `.srt` subtitles then spoke the same sentence two or three times in a row, and the narrator's seed script repeated it too. The act line is now placed on the act's first beat only, and only when no beat in that act has its own cue. |
+| BUG-68 | P1 silent degradation | — | `aetherlab/services/pipeline.py`, `ui/workers.py`, `services/lesson_pipeline.py` `_scene_cache_usable` | A generation that timed out or failed once cached the built-in domain template (`used_fallback=True`). All three cache readers reused it, so that prompt kept showing the template forever, even after the provider recovered, which is the exact silent-template symptom the fallback flag was added to expose. `_stale_fallback_scene()` makes a cached fallback a cache miss whenever an API key is configured; keyless runs still reuse it. |
+| BUG-69 | P1 false "REVIEW" on correct algebra | — | `aetherlab/services/derivation_verify.py` `_equivalent` | Two equation forms counted as equivalent only when their residuals differed by a *numeric* factor. Dividing both sides by a symbol, the most common derivation step, therefore failed: `F = m*a → a = F/m` and `m*g*h = m*v**2/2 → v**2 = 2*g*h` were reported "not algebraically equivalent" and shown with a REVIEW badge. A ratio that is a monomial in the symbols (a product of powers, such as `-m`) now counts as equivalent. Multiplying by a sum such as `(x - y)` still fails, because it can add solutions. |
+| BUG-70 | P0 wrong physics shown | F204, F213, F214 | `aetherlab/services/scene_components/__init__.py` routing stems | Curated components run before the LLM and short-circuit it, and several stems matched ordinary phrasing. "two masses" (Atwood machines, collisions) rendered coupled spring oscillators. "tunnel" (a wind-tunnel drag problem) rendered a quantum wavepacket in a well. A bare "mirror" ("the path is a mirror image") rendered a concave-mirror ray diagram. "coupled pendulum" rendered the *chaotic double* pendulum. Stems now require coupling/quantum/optics language; a bare "mirror" routes only with optics cues (focal, image, ray, …); spring-coupled pendulums get the coupled-oscillator staging. |
+| BUG-71 | P0 wrong physics shown | F218 | `aetherlab/services/scene_components/problems/orbit_period.py`, `projectile_landing.py` `matches` | Problem videos run first of all. `orbit_period` tested the substring `"iss"`, which also occurs in "emission", "transmission" and "mission", and it accepted `h` as an altitude. The photoelectric effect, sound transmission and the Bohr model (`h` = Planck's constant) therefore all rendered the ISS orbit-period video. `projectile_landing` accepted "how far" or "lands" plus any speed, so braking distances and landing planes rendered a kicked ball. Vertical throws and cliff launches were drawn as a 40° kick from level ground. `ISS` is now matched as a whole word; atomic context is excluded; "how far"/"lands" need a launch angle; and vertical, horizontal and elevated launches, or an explicit 0°/90° angle, do not match. |
+| BUG-72 | P2 citation accuracy | F220 | `aetherlab/services/research.py` `build_citations`, `study_document.relevant_citations`, `web_references` | The new Wikibooks provider's hits were cited as "…, Wikipedia: <wikibooks URL>" in PDFs. Only the Wikipedia label was filtered for relevance, so relabelling alone would have let off-topic Wikibooks hits bypass the filter. Web citations are now labelled by site, the relevance filter handles both, and the provider's fallback URL uses its own host. |
+| BUG-73 | P2 prompt quality | — | `aetherlab/services/scene_generator.py` `SceneGenerator.narrate` | The timed-cue instructions were spliced into the middle of the narrator's system prompt ("…Plain spoken When timed beat cues are supplied … beat IDs. prose only — …"), which garbled both rules. The sentence order is restored. |
+
+Not changed; recorded as risks:
+
+- `lesson_planner.plan_lesson` discards a complete LLM lesson plan for the generic
+  template when it lacks *any* of the prediction/key-symbol/retrieval scaffolds, which
+  the prompt itself allows to be `null`. That is a quality trade-off, not a crash.
+  Consider back-filling scaffolds from the plan's own questions instead.
+- `derivation_verify` still reports squaring or square-rooting both sides as not
+  equivalent. That is conservative, since it can add a root, but it shows REVIEW on a
+  correct `T = 2π√(L/g) → T² = 4π²L/g` step.
+- `_animation_range_for_times` maps critic timestamps to `-n start,end`, but Manim's
+  upper bound is exclusive. The partial preview therefore stops one animation early.
+  Only the discarded preview is affected (opt-in `AETHERLAB_MANIM_PARTIAL_REVISIONS`).
+- `services/agent_team.py` is not imported by the app (only by `.analysis/team_experiment.py`).

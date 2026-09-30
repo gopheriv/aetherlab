@@ -41,6 +41,17 @@ def _skipped_scene(engine: str) -> SceneBundle:
     )
 
 
+def _refresh_spec(scene: SceneBundle, request: ProblemRequest, solver, rag) -> None:
+    try:
+        from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+        refresh_scene_bundle_spec(scene, request, solver, rag)
+    except Exception as exc:  # noqa: BLE001 - the evidence panel is fail-soft
+        scene.diagnostics.append(
+            f"Scene specification unavailable: {type(exc).__name__}."
+        )
+
+
 class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
     plan_ready = QtCore.pyqtSignal(object)
     solver_ready = QtCore.pyqtSignal(object)
@@ -172,6 +183,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             # Planner: this problem doesn't warrant a rendered animation — skip
             # scene generation and the (expensive) render entirely.
             skipped = _skipped_scene(current_engine)
+            _refresh_spec(skipped, self.request, solver, rag)
             self.status.emit("Animation not required for this problem (planner).")
             self.scene_ready.emit(skipped)
             self.render_ready.emit(skipped)
@@ -189,6 +201,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             return
 
         scene = await _do_scene(rag)
+        _refresh_spec(scene, self.request, solver, rag)
         self._check_cancelled()
         self.scene_ready.emit(scene)
         self.progress.emit(70, "Scene compiled")
@@ -222,6 +235,8 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             self.status.emit("Reusing cached rendered video.")
             rendered_scene = scene
         self._check_cancelled()
+        _refresh_spec(rendered_scene, self.request, solver, rag)
+        cache.store_scene(key, rendered_scene)
         self.render_ready.emit(rendered_scene)
         self.progress.emit(95, "Render complete")
 
@@ -319,6 +334,10 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
 
 def _scene_cache_usable(scene: SceneBundle, settings: AppSettings) -> bool:
+    from aetherlab.services.pipeline import _stale_fallback_scene
+
+    if _stale_fallback_scene(scene, settings):
+        return False
     if scene.status == "rendered":
         from aetherlab.services.pipeline import _video_exists
 

@@ -18,12 +18,13 @@ import base64
 import json
 import logging
 import os
-import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from aetherlab.services.model_policy import request_temperature
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -60,6 +61,16 @@ not the idea. Score each axis from 0 (broken) to 2 (excellent):
 5. SUBSTANCE — the physics is actually visualized (motion, curves, fields),
    not just a title card; frames change meaningfully across the video.
 
+For layout reports, overlay a 6×6 grid on each frame: columns C1-C6 run left to
+right and rows R1-R6 run top to bottom. Name the cells when locating clipped,
+crowded, or overlapping objects. A deterministic check may also accompany the
+frames; use it as evidence, not as a substitute for looking at the images.
+
+Physics expectations may be supplied separately. Check only facts that the
+sampled frames make observable. If visible motion contradicts one, add an issue
+prefixed `physics:`. Never certify equations, values, or motion hidden between
+sampled frames from appearance alone.
+
 The total score is the sum of the five axes (0-10).
 
 Return STRICT JSON only:
@@ -67,6 +78,7 @@ Return STRICT JSON only:
  "score": <0-10>,
  "breakdown": {"legibility": 0-2, "composition": 0-2, "palette": 0-2,
                "structure": 0-2, "substance": 0-2},
+ "problem_frames": [<1-based frame numbers with actionable issues>],
  "issues": ["specific, actionable problems, worst first; name the weak axis"],
  "strengths": ["what works"]}
 
@@ -90,6 +102,8 @@ class Critique:
     #   ""              — no breakdown at all (skipped, empty)
     breakdown: dict[str, float] = field(default_factory=dict)
     breakdown_source: str = ""
+    problem_times_s: list[float] = field(default_factory=list)
+    model_used: str = ""
 
     @property
     def should_revise(self) -> bool:
@@ -235,6 +249,7 @@ async def critique_video(
     brief: str,
     settings: "AppSettings",
     frame_count: int = 6,
+    expected_physics: list[str] | None = None,
 ) -> Critique:
     """Sample frames and ask the vision model for a verdict.
 
@@ -247,6 +262,8 @@ async def critique_video(
     frames = extract_frames(video_path, frame_count)
     if not frames:
         return Critique(verdict="skipped")
+    duration = _probe_duration(Path(video_path))
+    sample_times = _sample_times(duration, len(frames))
 
     content: list[dict] = [
         {
@@ -254,7 +271,20 @@ async def critique_video(
             "text": (
                 "## Creative intent this render must fulfil\n"
                 f"{brief[:4000]}\n\n"
-                f"## {len(frames)} frames sampled uniformly, in order:"
+                "## Deterministic 6x6 layout coordinates\n"
+                "Columns C1-C6 go left to right; rows R1-R6 go top to bottom. "
+                "Use these cell labels in any layout issue.\n\n"
+                "## Physics expectations from the numerical verifier\n"
+                + ("\n".join(f"- {fact}" for fact in expected_physics[:8])
+                   if expected_physics else "No numerical expectations were available.")
+                + "\n\n"
+                f"## {len(frames)} frames sampled uniformly, in order:\n"
+                + "\n".join(
+                    f"Frame {index + 1}: approximately {time_s:.2f} seconds."
+                    for index, time_s in enumerate(sample_times)
+                )
+                + "\nFor each issue, identify the affected frame number. Put all affected "
+                "1-based frame numbers in `problem_frames`; use [] when none."
             ),
         }
     ]
@@ -268,20 +298,39 @@ async def critique_video(
         )
 
     try:
-        from openai import AsyncOpenAI
+        from aetherlab.services.llm_client import make_client
 
-        from aetherlab.services.model_policy import openai_client_kwargs
 
-        client = AsyncOpenAI(**openai_client_kwargs(settings))
-        response = await client.chat.completions.create(
-            model=settings.vision_model,
-            messages=[
-                {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
-                {"role": "user", "content": content},
-            ],
-            temperature=0.2,
-            max_tokens=2048,
-        )
+        client = make_client(settings)
+        models = [str(settings.vision_model)]
+        language_model = str(getattr(settings, "llm_model", "") or "")
+        if language_model and language_model not in models:
+            models.append(language_model)
+        response = None
+        model_used = ""
+        for index, model in enumerate(models):
+            try:
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
+                        {"role": "user", "content": content},
+                    ],
+                    temperature=request_temperature(settings, 0.2),
+                    max_tokens=2048,
+                )
+                model_used = model
+                break
+            except Exception as exc:  # noqa: BLE001 - optional alternate model
+                if index == 0 and len(models) > 1 and _is_unknown_model_error(exc):
+                    log.info(
+                        "Visual critic model %s is unavailable; retrying configured LLM %s.",
+                        model, language_model,
+                    )
+                    continue
+                raise
+        if response is None:
+            return Critique(verdict="skipped")
         from aetherlab.services.model_json import load_model_json
 
         raw = response.choices[0].message.content or ""
@@ -289,6 +338,12 @@ async def critique_video(
         verdict = str(payload.get("verdict", "ship")).lower()
         score = float(payload.get("score", 0.0) or 0.0)
         breakdown, source = _coerce_breakdown(payload.get("breakdown"), score)
+        raw_frames = payload.get("problem_frames", [])
+        problem_frames = sorted({
+            int(value) for value in raw_frames
+            if isinstance(value, int) and not isinstance(value, bool)
+            and 1 <= value <= len(sample_times)
+        }) if isinstance(raw_frames, list) else []
         return Critique(
             verdict="revise" if verdict == "revise" else "ship",
             score=score,
@@ -296,10 +351,18 @@ async def critique_video(
             strengths=[str(s) for s in payload.get("strengths", [])],
             breakdown=breakdown,
             breakdown_source=source,
+            problem_times_s=[sample_times[index - 1] for index in problem_frames],
+            model_used=model_used,
         )
     except Exception as exc:  # noqa: BLE001 — critique must never break renders
         log.info("Visual critique unavailable (%s); shipping render as-is.", exc)
         return Critique(verdict="skipped")
+
+
+def _is_unknown_model_error(exc: Exception) -> bool:
+    """Recognize only endpoint model-name failures for the in-memory fallback."""
+    detail = str(exc).casefold()
+    return "unknown model" in detail or "2013" in detail
 
 
 # ── Learned keyless quality proxy (Quality Flywheel "Prove It", F182) ────────

@@ -3,8 +3,8 @@
 The repair/critique/narration loop lives in ``manim_runtime.py``. This module
 only answers "where does one Manim render run happen?" Local rendering delegates
 to the existing implementation; cloud rendering uses a private-or-public GitHub
-repository as a Linux Actions render worker and always fails soft so the caller
-can fall back to local.
+repository as a Linux Actions render worker and respects explicit Cloud-only
+mode when a remote request fails.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
@@ -37,11 +38,51 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-MANIM_VERSION_PIN = "0.20.1"
-CLOUD_WORKFLOW_VERSION = "2"  # bumped: dropped `cache: pip` (no deps manifest → step error)
+MANIM_VERSION_PIN = "0.21.0"
+CLOUD_WORKFLOW_VERSION = "3"  # bumped for structured render telemetry
 CLOUD_UNAVAILABLE = "cloud-unavailable"
 DEFAULT_GITHUB_WORKFLOW = "render.yml"
 DEFAULT_GITHUB_BRANCH = "renders"
+
+
+def _workflow_elapsed_metrics(run: dict) -> dict[str, float]:
+    """Extract queue and worker time from GitHub's public run timestamps."""
+    def parse(key: str) -> datetime | None:
+        value = run.get(key)
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+
+    created, started, updated = parse("created_at"), parse("run_started_at"), parse("updated_at")
+    metrics: dict[str, float] = {}
+    if created and started:
+        metrics["queue_seconds"] = max(0.0, (started - created).total_seconds())
+    if started and updated:
+        metrics["worker_seconds"] = max(0.0, (updated - started).total_seconds())
+    return metrics
+
+
+def _parse_runner_metrics(log_text: str) -> dict[str, float | str]:
+    """Read numeric/version markers despite GitHub's per-line log prefixes."""
+    metrics: dict[str, float | str] = {}
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(log_text or ""))
+    for key, field in (
+        ("AETHERLAB_RENDER_WALL_SECONDS", "render_wall_seconds"),
+        ("AETHERLAB_PEAK_RSS_KB", "peak_rss_mb"),
+    ):
+        matches = re.findall(
+            rf"\b{re.escape(key)}=([0-9]+(?:\.[0-9]+)?)\b", text
+        )
+        if matches:
+            value = float(matches[-1])
+            metrics[field] = value / 1024.0 if field == "peak_rss_mb" else value
+    versions = re.findall(r"\bmanim\s+([0-9]+\.[0-9]+\.[0-9]+)\b", text)
+    if versions:
+        metrics["manim_version"] = versions[-1]
+    return metrics
 
 # The Actions workflow the cloud backend dispatches. It MUST exist in the user's
 # render repo — GitHub only lets the REST API dispatch a workflow that is present
@@ -117,7 +158,7 @@ jobs:
       - name: Install pinned Manim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "manim==0.20.1"
+          python -m pip install "manim==0.21.0"
           python - <<'PY'
           import importlib.metadata as m
           print("manim", m.version("manim"))
@@ -129,7 +170,8 @@ jobs:
         run: |
           set +e
           mkdir -p out
-          python -m manim render \
+          /usr/bin/time -f 'AETHERLAB_RENDER_WALL_SECONDS=%e\nAETHERLAB_PEAK_RSS_KB=%M' \
+            -o "${{ inputs.job_id }}.telemetry" python -m manim render \
             -q${{ inputs.quality }} \
             --fps "${{ inputs.fps }}" \
             --disable_caching \
@@ -137,6 +179,7 @@ jobs:
             "${{ inputs.scene_path }}" \
             "${{ inputs.class_name }}" 2>&1 | tee "${{ inputs.job_id }}.log"
           code=${PIPESTATUS[0]}
+          cat "${{ inputs.job_id }}.telemetry" | tee -a "${{ inputs.job_id }}.log"
           if [ "$code" -ne 0 ]; then
             exit "$code"
           fi
@@ -182,6 +225,8 @@ class RenderBackend(Protocol):
         progress: Callable[[str], None] | None = None,
         variant: str = "",
         cancel_check: Callable[[], bool] | None = None,
+        cache_lineage: str | None = None,
+        partial_animation_range: tuple[int, int] | None = None,
     ) -> SceneBundle:
         """Render one compiled SceneBundle to a video or failure SceneBundle.
 
@@ -239,6 +284,8 @@ class LocalRenderBackend:
         progress: Callable[[str], None] | None = None,
         variant: str = "",  # accepted for interface parity; local renders are already isolated per-process
         cancel_check: Callable[[], bool] | None = None,
+        cache_lineage: str | None = None,
+        partial_animation_range: tuple[int, int] | None = None,
     ) -> SceneBundle:
         if progress:
             progress("Rendering locally")
@@ -257,7 +304,10 @@ class LocalRenderBackend:
                     {"cancel_check": cancel_check} if cancel_check is not None else {}
                 )
                 return ManimRuntime(settings).render_scene(
-                    scene, settings, quality, **cancel_kwargs
+                    scene, settings, quality,
+                    cache_lineage=cache_lineage,
+                    partial_animation_range=partial_animation_range,
+                    **cancel_kwargs,
                 )
             finally:
                 _LOCAL_RENDER_SEM.release()
@@ -293,6 +343,8 @@ class CloudRenderBackend:
         progress: Callable[[str], None] | None = None,
         variant: str = "",
         cancel_check: Callable[[], bool] | None = None,
+        cache_lineage: str | None = None,
+        partial_animation_range: tuple[int, int] | None = None,
     ) -> SceneBundle:
         from aetherlab.core.proc import ProcessCancelledError
 
@@ -333,6 +385,12 @@ class CloudRenderBackend:
         ledger = RenderJobLedger(Path(settings.data_dir) / "render_ledger.json")
         ledger.start(job_id=job_id, scene_class=scene.class_name, quality=quality,
                      fps=fps, backend=self.name, provider="github_actions")
+        total_started = time.monotonic()
+        current_stage = "cache_check"
+
+        def record_metrics(**values) -> None:
+            values.setdefault("backend", "github_actions")
+            ledger.metrics(job_id, values)
 
         def say(message: str) -> None:
             if progress:
@@ -353,9 +411,12 @@ class CloudRenderBackend:
                 scene.diagnostics.append(f"Cloud render cache hit ({job_id}).")
                 ledger.status(job_id, "rendered", "cloud cache hit")
                 ledger.finish(job_id, "rendered", str(video))
+                record_metrics(cache_hit=True, total_seconds=time.monotonic() - total_started)
                 return scene
 
             say("Preparing render repo")
+            current_stage = "prepare"
+            prepare_started = time.monotonic()
             # Install the dispatchable workflow (on the default + render branch)
             # BEFORE the first dispatch — otherwise dispatch 404s and cloud looks
             # "unavailable" even on a correctly configured repo/token.
@@ -366,8 +427,11 @@ class CloudRenderBackend:
                 workflow=getattr(settings, "github_workflow", DEFAULT_GITHUB_WORKFLOW) or DEFAULT_GITHUB_WORKFLOW,
             )
             ensure_active()
+            prepare_seconds = time.monotonic() - prepare_started
 
             say("Uploading scene to GitHub")
+            current_stage = "upload"
+            upload_started = time.monotonic()
             scene_path = f"jobs/{job_id}.py"
             await asyncio.to_thread(
                 client.put_file,
@@ -377,8 +441,11 @@ class CloudRenderBackend:
                 message=f"Add AetherLab render job {job_id}",
             )
             ensure_active()
+            upload_seconds = time.monotonic() - upload_started
 
             say("Dispatching cloud render")
+            current_stage = "dispatch"
+            dispatch_started = time.monotonic()
             run_id = await asyncio.to_thread(
                 client.dispatch,
                 job_id=job_id,
@@ -389,6 +456,7 @@ class CloudRenderBackend:
                 needs_latex=_needs_latex(scene.code),
                 branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
             )
+            dispatch_seconds = time.monotonic() - dispatch_started
             ledger.status(job_id, "in_progress", "dispatched to GitHub Actions")
 
             effective_timeout = max(
@@ -398,14 +466,33 @@ class CloudRenderBackend:
             deadline = time.monotonic() + effective_timeout
             poll = max(2, int(getattr(settings, "cloud_poll_seconds", 8)))
             run = None
+            current_stage = "poll"
             while time.monotonic() < deadline:
                 ensure_active()
-                run = await asyncio.to_thread(
-                    client.get_run,
-                    run_id,
-                    job_id=job_id,
-                    branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
-                )
+                try:
+                    run = await asyncio.to_thread(
+                        client.get_run,
+                        run_id,
+                        job_id=job_id,
+                        branch=getattr(settings, "github_branch", DEFAULT_GITHUB_BRANCH),
+                    )
+                except urllib.error.HTTPError as exc:
+                    # Authentication, permission, and missing-run errors will not
+                    # heal by polling again. Retry only GitHub's transient statuses.
+                    if exc.code not in {408, 425, 429, 500, 502, 503, 504}:
+                        raise
+                    log.warning("Transient GitHub run-poll response %s; retrying", exc.code)
+                    say("Cloud status check was delayed; retrying")
+                    await asyncio.sleep(min(poll, max(0.0, deadline - time.monotonic())))
+                    continue
+                except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as exc:
+                    # A status-read timeout does not mean the remote render failed.
+                    # GitHub Actions continues independently, so retry within the
+                    # existing render deadline rather than returning cloud-unavailable.
+                    log.warning("Transient GitHub run-poll error; retrying: %s", _mask(str(exc)))
+                    say("Cloud status check was delayed; retrying")
+                    await asyncio.sleep(min(poll, max(0.0, deadline - time.monotonic())))
+                    continue
                 status = (run.get("status") or "").lower()
                 conclusion = (run.get("conclusion") or "").lower()
                 if status == "completed":
@@ -422,6 +509,13 @@ class CloudRenderBackend:
                     scene.status = "render-error"
                     scene.failure_kind = kind
                     ledger.failure(job_id, stderr, kind=kind)
+                    record_metrics(
+                        prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
+                        dispatch_seconds=dispatch_seconds, failure_kind=kind,
+                        total_seconds=time.monotonic() - total_started,
+                        **_workflow_elapsed_metrics(run),
+                        **_parse_runner_metrics(log_text),
+                    )
                     return scene
                 say(f"Cloud render {status or 'queued'}")
                 sleep_deadline = time.monotonic() + poll
@@ -440,29 +534,61 @@ class CloudRenderBackend:
                         log.info("Could not cancel timed-out cloud run %s: %s", cancel_id, exc)
                 reason = (
                     f"Cloud render timed out after {effective_timeout}s "
-                    f"(cost {_estimate_render_cost(scene.code):.1f}); "
-                    "cancelled the cloud attempt and falling back to local."
+                    f"(cost {_estimate_render_cost(scene.code):.1f}); cancelled the cloud attempt."
                 )
+                if str(getattr(settings, "render_mode", "local") or "local").lower() == "cloud":
+                    reason += " Cloud-only mode is selected, so local fallback was skipped."
+                    say("Cloud render timed out; cloud-only mode selected, local fallback skipped")
+                else:
+                    reason += " Falling back to local."
+                    say("Cloud render timed out; falling back to local")
                 _dump_render_failure(settings.data_dir, scene.code, reason, "timeout")
                 ledger.failure(job_id, reason, kind="timeout")
+                record_metrics(
+                    prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
+                    dispatch_seconds=dispatch_seconds, failure_kind="timeout",
+                    total_seconds=time.monotonic() - total_started,
+                    **_workflow_elapsed_metrics(run or {}),
+                )
                 log.warning(reason)
-                say("Cloud render timed out; falling back to local")
                 return _cloud_unavailable(scene, reason)
 
             say("Downloading cloud video")
+            current_stage = "download_logs"
             ensure_active()
+            runner_logs = await asyncio.to_thread(client.download_run_logs, int(run["id"]))
+            runner_metrics = _parse_runner_metrics(runner_logs)
+            current_stage = "find_artifact"
             artifact = await asyncio.to_thread(client.find_run_artifact, int(run["id"]), f"{job_id}.mp4")
             if not artifact:
                 scene.diagnostics.append("Cloud render succeeded but MP4 artifact was not found.")
                 scene.status = "render-error"
                 scene.failure_kind = "unknown"
+                record_metrics(
+                    prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
+                    dispatch_seconds=dispatch_seconds, failure_kind="artifact_missing",
+                    total_seconds=time.monotonic() - total_started,
+                    **_workflow_elapsed_metrics(run),
+                    **runner_metrics,
+                )
                 return scene
+            download_started = time.monotonic()
+            current_stage = "download_artifact"
             video = await asyncio.to_thread(self._download_artifact, client, artifact, run_dir, job_id)
             ensure_active()
             if not video:
                 scene.diagnostics.append("Cloud MP4 artifact failed validation.")
                 scene.status = "render-error"
                 scene.failure_kind = "ffmpeg"
+                record_metrics(
+                    prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
+                    dispatch_seconds=dispatch_seconds,
+                    download_seconds=time.monotonic() - download_started,
+                    failure_kind="artifact_invalid",
+                    total_seconds=time.monotonic() - total_started,
+                    **_workflow_elapsed_metrics(run),
+                    **runner_metrics,
+                )
                 return scene
             manifest.put(job_id, {"artifact_id": artifact["id"], "run_id": run["id"]})
             scene.video_path = str(video)
@@ -471,6 +597,14 @@ class CloudRenderBackend:
             scene.diagnostics.append(f"Rendered via GitHub Actions ({job_id}).")
             ledger.status(job_id, "artifact_downloaded", "MP4 downloaded")
             ledger.finish(job_id, "rendered", str(video))
+            record_metrics(
+                cache_hit=False, prepare_seconds=prepare_seconds,
+                upload_seconds=upload_seconds, dispatch_seconds=dispatch_seconds,
+                download_seconds=time.monotonic() - download_started,
+                total_seconds=time.monotonic() - total_started,
+                **_workflow_elapsed_metrics(run),
+                **runner_metrics,
+            )
             return scene
         except ProcessCancelledError:
             if run_id:
@@ -481,9 +615,23 @@ class CloudRenderBackend:
             ledger.status(job_id, "cancelled", "cancelled by user")
             raise
         except Exception as exc:  # noqa: BLE001
-            log.warning("Cloud render unavailable; falling back to local: %s", _mask(str(exc)))
-            ledger.status(job_id, "failed", _mask(str(exc)))
-            return _cloud_unavailable(scene, f"Cloud render unavailable: {_mask(str(exc))}")
+            cloud_only = (
+                str(getattr(settings, "render_mode", "local") or "local").lower()
+                == "cloud"
+            )
+            detail = _mask(str(exc))
+            if cloud_only:
+                log.warning("Cloud render unavailable; local fallback skipped: %s", detail)
+                detail += " Cloud-only mode is selected, so local fallback was skipped."
+            else:
+                log.warning("Cloud render unavailable; falling back to local: %s", detail)
+            ledger.status(job_id, "failed", detail)
+            record_metrics(
+                failure_kind=scene.failure_kind or "unavailable",
+                failure_stage=current_stage,
+                total_seconds=time.monotonic() - total_started,
+            )
+            return _cloud_unavailable(scene, f"Cloud render unavailable: {detail}")
 
     def _download_cached(
         self,

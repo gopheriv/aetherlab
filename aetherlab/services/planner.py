@@ -16,6 +16,7 @@ import re
 
 from aetherlab.core.models import OutputPlan, ProblemRequest
 from aetherlab.core.settings import AppSettings
+from aetherlab.services.model_policy import request_temperature
 
 log = logging.getLogger(__name__)
 
@@ -102,14 +103,10 @@ class Planner:
         return floor
 
     async def _plan_remote(self, request: ProblemRequest) -> OutputPlan:
-        from openai import AsyncOpenAI
+        from aetherlab.services.llm_client import make_client
 
         if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
-                timeout=max(self.settings.llm_timeout_seconds, 30),
-            )
+            self._client = make_client(self.settings)
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,
@@ -117,7 +114,7 @@ class Planner:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": request.prompt},
             ],
-            temperature=0.0,
+            temperature=request_temperature(self.settings, 0.0),
             max_tokens=400,
         )
         content = response.choices[0].message.content or ""

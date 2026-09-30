@@ -18,6 +18,7 @@ import re
 from typing import TYPE_CHECKING
 
 from aetherlab.core.models import LessonChapter, LessonPlan, LessonQuestion, RagResult
+from aetherlab.services.model_policy import request_temperature
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 VALID_AUDIENCES = ("high_school", "ap", "undergrad")
+_RENDERED_CHAPTER_KINDS = {"scene", "equation_card", "recap"}
 
 LESSON_PLANNER_SYSTEM_PROMPT = """You are AetherLab's lesson designer — a physicist
 and a gifted teacher in the
@@ -47,6 +49,9 @@ Return STRICT JSON only (no markdown, no prose) with exactly these keys:
       "beats": ["what happens, beat by beat"],
       "narration": "the spoken script for this chapter (2-5 sentences, warm, plain)",
       "key_equations": ["LaTeX, inline subset only, governing form first"],
+      "key_symbols": ["symbol: plain-language meaning"],
+      "prediction": {"q": "...", "choices": ["A", "B", "C", "D"], "answer": "the exact choice text or its letter", "why": "..."} | null,
+      "retrieval": {"q": "...", "choices": ["A", "B", "C", "D"], "answer": "the exact choice text or its letter", "why": "..."} | null,
       "citation_query": "a few words to retrieve the textbook passage for this chapter"
     }
   ],
@@ -58,11 +63,16 @@ Return STRICT JSON only (no markdown, no prose) with exactly these keys:
 
 Teaching rules (obey all):
 - HOOK FIRST: chapter 1 opens with a question or a surprise, never a definition.
+- Put a multiple-choice prediction on the first rendered chapter, before its video plays.
+- Add a short retrieval question to rendered chapters after the first so it can be asked before the next chapter.
+- Keep prediction/retrieval questions focused on one observable concept; use null when a chapter has no useful check.
 - CONCRETE BEFORE ABSTRACT: show the real object before the equation.
+- Put a brief key-symbol card before the first governing equation; define every symbol in plain language.
 - BUILD THE MATH term-by-term; name each symbol as it appears.
-- NAME THE MISCONCEPTION explicitly in an early chapter and correct it.
+- NAME THE MISCONCEPTION explicitly just after the hook and correct it before the math.
 - Use analogies and everyday referents.
 - Include one WORKED EXAMPLE chapter with real numbers, and a RECAP chapter.
+- Keep each chapter to about 1-2 minutes; spoken narration carries full sentences, on-screen text uses short labels and equation fragments, never full-sentence captions.
 - AUDIENCE sets depth: high_school avoids calculus; undergrad uses it freely.
 - 4-7 chapters. Give the interactive/"play with it" chapter kind "interactive".
 - 2-4 questions, mostly multiple-choice, at least one open.
@@ -86,11 +96,35 @@ async def plan_lesson(
     try:
         context = await _grounding_context(topic, settings, rag)
         plan = await _plan_remote(topic, settings, audience, context)
-        if plan is not None and plan.chapters:
+        if plan is not None and _has_learning_scaffolds(plan):
             return plan
     except Exception as exc:  # noqa: BLE001 — planning is best-effort
         log.info("Lesson planning failed (%s); using template lesson.", exc)
     return _template_lesson(topic, audience)
+
+
+def _has_learning_scaffolds(plan: LessonPlan) -> bool:
+    """Require the fields needed for prediction, symbol pretraining, and recall."""
+    rendered = [chapter for chapter in plan.chapters if chapter.kind in _RENDERED_CHAPTER_KINDS]
+    if not rendered:
+        return False
+    prediction = rendered[0].prediction
+    has_prediction = (
+        isinstance(prediction, dict)
+        and bool(str(prediction.get("q", "")).strip())
+        and isinstance(prediction.get("choices"), list)
+        and len(prediction["choices"]) >= 2
+        and bool(str(prediction.get("answer", "")).strip())
+    )
+    has_symbols = any(ch.key_symbols for ch in plan.chapters)
+    has_retrieval = any(
+        isinstance(ch.retrieval, dict)
+        and bool(str(ch.retrieval.get("q", "")).strip())
+        and isinstance(ch.retrieval.get("choices"), list)
+        and len(ch.retrieval["choices"]) >= 2
+        for ch in plan.chapters[1:]
+    )
+    return has_prediction and has_symbols and has_retrieval
 
 
 async def _grounding_context(topic: str, settings: "AppSettings", rag: "RagResult | None") -> str:
@@ -112,11 +146,10 @@ async def _grounding_context(topic: str, settings: "AppSettings", rag: "RagResul
 async def _plan_remote(
     topic: str, settings: "AppSettings", audience: str, context: str
 ) -> "LessonPlan | None":
-    from openai import AsyncOpenAI
+    from aetherlab.services.llm_client import make_client
+    from aetherlab.services.model_policy import system_prompt_message
 
-    from aetherlab.services.model_policy import openai_client_kwargs
-
-    client = AsyncOpenAI(**openai_client_kwargs(settings))
+    client = make_client(settings)
     if audience not in VALID_AUDIENCES:
         audience = "undergrad"
     user = (
@@ -128,10 +161,10 @@ async def _plan_remote(
     response = await client.chat.completions.create(
         model=settings.llm_model,
         messages=[
-            {"role": "system", "content": LESSON_PLANNER_SYSTEM_PROMPT},
+            system_prompt_message(settings, LESSON_PLANNER_SYSTEM_PROMPT),
             {"role": "user", "content": user},
         ],
-        temperature=0.8,
+        temperature=request_temperature(settings, 0.8),
         max_tokens=8192,
     )
     choice = response.choices[0]
@@ -181,11 +214,20 @@ def _template_lesson(topic: str, audience: str = "undergrad") -> LessonPlan:
             title="The idea",
             goal="build intuition",
             kind="scene",
-            beats=[spec["intuition"]],
-            narration=spec["intuition"],
+            beats=[spec["intuition"], f"Common misconception: {spec['misconception']}"],
+            narration=f"{spec['intuition']} {spec['misconception']}",
         ),
         LessonChapter(
             id="ch3",
+            title="Key symbols",
+            goal="learn each symbol before meeting the full equation",
+            kind="equation_card",
+            beats=list(spec["symbols"]),
+            narration="First, learn the symbols we will use: " + "; ".join(spec["symbols"]) + ".",
+            key_symbols=list(spec["symbols"]),
+        ),
+        LessonChapter(
+            id="ch4",
             title="The math",
             goal="derive the governing law",
             kind="equation_card",
@@ -194,7 +236,7 @@ def _template_lesson(topic: str, audience: str = "undergrad") -> LessonPlan:
             key_equations=list(equations),
         ),
         LessonChapter(
-            id="ch4",
+            id="ch5",
             title="Play with it",
             goal="explore the parameters",
             kind="interactive",
@@ -202,7 +244,7 @@ def _template_lesson(topic: str, audience: str = "undergrad") -> LessonPlan:
             narration=spec["interactive"],
         ),
         LessonChapter(
-            id="ch5",
+            id="ch6",
             title="Recap",
             goal="consolidate",
             kind="recap",
@@ -210,6 +252,8 @@ def _template_lesson(topic: str, audience: str = "undergrad") -> LessonPlan:
             narration=spec["recap"],
         ),
     ]
+    chapters[0].prediction = spec["prediction"]
+    chapters[3].retrieval = spec["retrieval"]
     return LessonPlan(
         title=f"{topic.strip().capitalize()} — a visual explainer",
         topic=topic,
@@ -252,6 +296,19 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
             "Damping does not change the mass's natural push-back — it removes energy, "
             "not the restoring force."
         ),
+        "symbols": ["m: mass", "c: damping coefficient", "k: spring stiffness", "x: displacement from equilibrium"],
+        "prediction": {
+            "q": "If damping increases while the spring stays the same, what changes most directly?",
+            "choices": ["The oscillations fade faster", "The equilibrium moves", "The mass becomes lighter", "The spring stops restoring"],
+            "answer": "The oscillations fade faster",
+            "why": "Damping removes energy from the motion.",
+        },
+        "retrieval": {
+            "q": "In a mass-spring oscillator, which effect pulls the mass toward equilibrium?",
+            "choices": ["The spring's restoring force", "The damping force", "The mass itself", "The initial push"],
+            "answer": "The spring's restoring force",
+            "why": "The spring force points back toward equilibrium; damping removes energy.",
+        },
         "questions": [
             {
                 "q": "Increasing damping mainly changes...",
@@ -297,6 +354,19 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
             "A heavier bob does NOT swing faster — mass cancels out of the equation "
             "of motion."
         ),
+        "symbols": ["theta: angular displacement", "L: pendulum length", "g: gravitational acceleration", "T: period"],
+        "prediction": {
+            "q": "For small swings, what happens to the period if the pendulum length is made four times longer?",
+            "choices": ["It doubles", "It quadruples", "It halves", "It stays the same"],
+            "answer": "It doubles",
+            "why": "The period scales with the square root of length.",
+        },
+        "retrieval": {
+            "q": "Which quantities set the small-angle restoring acceleration along the arc?",
+            "choices": ["Gravity and angular displacement", "Bob mass alone", "String color", "Air pressure only"],
+            "answer": "Gravity and angular displacement",
+            "why": "For small angles, the tangential restoring acceleration is approximately proportional to g times theta.",
+        },
         "questions": [
             {
                 "q": "The period of a simple pendulum depends on...",
@@ -339,6 +409,19 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
             "Orbiting objects are not weightless because gravity is absent — they are "
             "in continuous free fall."
         ),
+        "symbols": ["G: gravitational constant", "M: central mass", "r: distance from the center", "e: orbital eccentricity"],
+        "prediction": {
+            "q": "As a planet moves closer to its star along an elliptical orbit, how does its speed change?",
+            "choices": ["It speeds up", "It slows down", "It becomes zero", "It stays exactly constant"],
+            "answer": "It speeds up",
+            "why": "The planet moves fastest near the star while conserving angular momentum and energy.",
+        },
+        "retrieval": {
+            "q": "What does Kepler's equal-area rule say?",
+            "choices": ["Equal areas are swept in equal times", "Equal distances are traveled in equal times", "Every orbit is circular", "Gravity is absent in orbit"],
+            "answer": "Equal areas are swept in equal times",
+            "why": "The rule expresses conservation of angular momentum.",
+        },
         "questions": [
             {
                 "q": "Kepler's second law says a planet sweeps out...",
@@ -389,6 +472,19 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
             "Field lines are not physical wires; they are a map of the force a positive "
             "test charge would feel."
         ),
+        "symbols": ["E: electric field", "q: source charge", "r: distance from the charge", "k: Coulomb constant"],
+        "prediction": {
+            "q": "Which way does the electric field point around an isolated positive charge?",
+            "choices": ["Outward", "Inward", "In circles", "It has no direction"],
+            "answer": "Outward",
+            "why": "The field points in the direction a positive test charge would be pushed.",
+        },
+        "retrieval": {
+            "q": "What does a denser set of electric field lines indicate?",
+            "choices": ["A stronger electric field", "A larger test charge", "A slower clock", "A weaker field"],
+            "answer": "A stronger electric field",
+            "why": "Field-line density represents relative field strength.",
+        },
         "questions": [
             {
                 "q": "Electric field lines point...",
@@ -436,6 +532,19 @@ _TEMPLATE_DOMAINS: dict[str, dict] = {
             "A wave transports energy and a pattern, not the medium itself — the string "
             "does not travel to your ear."
         ),
+        "symbols": ["A: amplitude", "k: wavenumber", "omega: angular frequency", "c: wave speed"],
+        "prediction": {
+            "q": "At fixed wave speed, what happens to wavelength if frequency doubles?",
+            "choices": ["It halves", "It doubles", "It stays the same", "It becomes zero"],
+            "answer": "It halves",
+            "why": "Wave speed is c = f times wavelength, so wavelength falls when frequency rises at fixed speed.",
+        },
+        "retrieval": {
+            "q": "In a traveling wave, what moves through the medium?",
+            "choices": ["The disturbance and its energy", "Each bit of matter permanently", "The medium's atoms to the source", "Nothing moves"],
+            "answer": "The disturbance and its energy",
+            "why": "The medium oscillates locally while the wave pattern carries energy.",
+        },
         "questions": [
             {
                 "q": "For a wave, speed equals...",

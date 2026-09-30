@@ -30,6 +30,8 @@ DEFAULT_BASELINE = ROOT / "tools" / "prompt_quality_baseline.json"
 # How far the mean score may fall before the gate fails (render non-determinism
 # tolerance). Pass-rate is not allowed to drop at all.
 DEFAULT_SCORE_TOLERANCE = 0.5
+HUMAN_REVIEW_AXES = ("legibility", "physics", "pacing", "teaching_value")
+MIN_CALIBRATION_CASES = 8
 
 CANONICAL_PROMPTS: list[dict[str, Any]] = [
     {
@@ -137,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--compare", type=Path, default=None)
     parser.add_argument(
+        "--human-review",
+        type=Path,
+        default=None,
+        help="Join a completed human-review JSON file and report critic calibration.",
+    )
+    parser.add_argument(
         "--gate",
         action="store_true",
         help="Ratchet: fail (exit 2) if this run regresses the mean score beyond "
@@ -185,6 +193,12 @@ def main(argv: list[str] | None = None) -> int:
     report["started_at"] = started.isoformat(timespec="seconds")
     report["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     report["compare"] = compare_lab_reports(args.compare, report) if args.compare else None
+    if args.human_review:
+        try:
+            report["human_review"] = calibrate_human_review(report, args.human_review)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Human review file is invalid: {exc}")
+            return 3
     write_outputs(args.out, report)
     print(f"Prompt quality lab wrote {args.out}")
     print(
@@ -680,6 +694,21 @@ def evaluate_gate(
     pass_delta = round(r_pass - b_pass, 4)
 
     reasons: list[str] = []
+    baseline_ids = {
+        str(case.get("id")) for case in baseline.get("cases", [])
+        if isinstance(case, dict) and case.get("id")
+    }
+    report_ids = {
+        str(case.get("id")) for case in report.get("cases", [])
+        if isinstance(case, dict) and case.get("id")
+    }
+    if baseline_ids and report_ids and baseline_ids != report_ids:
+        missing = sorted(baseline_ids - report_ids)
+        extra = sorted(report_ids - baseline_ids)
+        reasons.append(
+            "golden-set prompt IDs changed "
+            f"(missing: {', '.join(missing) or 'none'}; extra: {', '.join(extra) or 'none'})"
+        )
     tol = abs(float(score_tolerance))
     if mean_delta < -tol:
         reasons.append(
@@ -696,6 +725,82 @@ def evaluate_gate(
         "baseline_mean": round(b_mean, 3),
         "report_mean": round(r_mean, 3),
     }
+
+
+def calibrate_human_review(report: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Attach complete human ratings and compare critic ranks conservatively."""
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict) or payload.get("schema") != "aetherlab.human_review.v1":
+        raise ValueError("expected schema aetherlab.human_review.v1")
+    review_rows = payload.get("cases")
+    if not isinstance(review_rows, list):
+        raise ValueError("cases must be a list")
+    reviews = {
+        str(row.get("id")): row for row in review_rows
+        if isinstance(row, dict) and str(row.get("id", "")).strip()
+    }
+    reviewed = []
+    critic_reviewed = []
+    for case in report.get("cases", []):
+        row = reviews.get(str(case.get("id", "")))
+        ratings = row.get("ratings") if isinstance(row, dict) else None
+        values = {}
+        if isinstance(ratings, dict):
+            for axis in HUMAN_REVIEW_AXES:
+                value = ratings.get(axis)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and 1 <= value <= 5:
+                    values[axis] = float(value)
+        if len(values) == len(HUMAN_REVIEW_AXES):
+            mean = round(sum(values.values()) / len(HUMAN_REVIEW_AXES), 3)
+            case["human_review"] = {"ratings": values, "mean": mean}
+            critic = float((case.get("critic") or {}).get("score", 0.0) or 0.0)
+            reviewed.append((str(case.get("id")), mean, critic))
+            if critic > 0:
+                critic_reviewed.append((mean, critic))
+        else:
+            case["human_review"] = None
+
+    correlation = None
+    if len(critic_reviewed) >= MIN_CALIBRATION_CASES:
+        correlation = round(
+            _spearman([r[0] for r in critic_reviewed], [r[1] for r in critic_reviewed]), 3
+        )
+    return {
+        "reviewed_count": len(reviewed),
+        "critic_comparable_count": len(critic_reviewed),
+        "required_for_calibration": MIN_CALIBRATION_CASES,
+        "critic_human_spearman": correlation,
+        "calibration_status": (
+            "ready_for_review" if correlation is not None else "insufficient_vision_scored_reviews"
+        ),
+        "axes": list(HUMAN_REVIEW_AXES),
+    }
+
+
+def _spearman(left: list[float], right: list[float]) -> float:
+    def ranks(values: list[float]) -> list[float]:
+        order = sorted(range(len(values)), key=values.__getitem__)
+        out = [0.0] * len(values)
+        start = 0
+        while start < len(order):
+            end = start + 1
+            while end < len(order) and values[order[end]] == values[order[start]]:
+                end += 1
+            rank = (start + 1 + end) / 2.0
+            for position in order[start:end]:
+                out[position] = rank
+            start = end
+        return out
+
+    if len(left) != len(right) or len(left) < 2:
+        return 0.0
+    a, b = ranks(left), ranks(right)
+    am, bm = sum(a) / len(a), sum(b) / len(b)
+    numerator = sum((x - am) * (y - bm) for x, y in zip(a, b, strict=True))
+    denominator = (
+        sum((x - am) ** 2 for x in a) * sum((y - bm) ** 2 for y in b)
+    ) ** 0.5
+    return numerator / denominator if denominator else 0.0
 
 
 def write_outputs(out_dir: Path, report: dict[str, Any]) -> None:
@@ -765,6 +870,15 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- {delta['id']}: score {delta['score_delta']:+.3f}, "
                 f"duration {delta['duration_delta']:+.3f}s"
             )
+    human = report.get("human_review")
+    if human:
+        lines.extend([
+            "", "## Human Review Calibration", "",
+            f"- Fully reviewed cases: {human.get('reviewed_count', 0)}",
+            f"- Vision-scored cases: {human.get('critic_comparable_count', 0)}",
+            f"- Status: {human.get('calibration_status', 'unknown')}",
+            f"- Critic / human Spearman correlation: {human.get('critic_human_spearman')}",
+        ])
     return "\n".join(lines) + "\n"
 
 

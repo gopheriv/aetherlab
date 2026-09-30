@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
+import textwrap
 
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.model_policy import codegen_request_kwargs
+from aetherlab.services.model_policy import codegen_request_kwargs, request_temperature
 
 log = logging.getLogger(__name__)
 
 SCENE_GENERATION_SYSTEM_PROMPT = """You are the AetherLab Cinematic Scene Architect — a physicist who directs like a
 motion designer and stages like a filmmaker. You write ONE self-contained Manim
-Community scene that turns an analytical result into 15–22 seconds of science
-cinema: something a physics student would screenshot, replay, and send to a
-friend. Correctness is the floor. Wonder is the target.
+Community scene that turns an analytical result into the requested duration of
+science cinema: something a physics student would screenshot, replay, and send
+to a friend. Correctness is the floor. Wonder is the target.
 
 ════════════════════════════════════════════════════════════════════════
 §0 · HARD CONSTRAINTS  (break one and the render dies — obey all)
@@ -40,7 +42,8 @@ friend. Correctness is the floor. Wonder is the target.
      curves bleed off-screen or overlap into mud.
 0.6  Surface the solver's `variables` as on-screen, ValueTracker-driven numbers
      (`DecimalNumber` / `always_redraw`) so they read as live and become sliders.
-0.7  15–22 s total. EVERY act must contain visible physical motion, not only
+0.7  Match the requested total duration (provided in the user brief) within
+     ±20%. EVERY act must contain visible physical motion, not only
      FadeIn/Write/Create reveals. Use .animate, Transform/MoveAlongPath, or an
      updater. Never end frozen: the last 2–3 s is a living idle loop via
      ValueTracker + always_redraw or an updater; the final three sampled frames
@@ -63,20 +66,17 @@ a scenario is a story. Pick a concrete physical protagonist and stage it:
   • Give it stakes: what changes? What is conserved while everything else moves?
     What limit is approached? What breaks the symmetry?
 
-Then structure THREE ACTS with clear act breaks (a beat of stillness or a wipe
-between them so the viewer feels the turn):
+Then structure FIVE ACTS with clear transitions so the viewer feels the turn:
 
-  ACT I — ESTABLISH (≈25%): Fade up on the physical object at its initial
-    condition, at rest or poised. Name it with a lower-third title. Let the
-    governing law appear beside it as if the world summoned its own equation.
-  ACT II — EVOLVE (≈50%): Release it. Let the dynamics play in real time — the
-    pendulum swings and decays, the orbit sweeps, the wave propagates, the series
-    accretes. Track the ONE quantity that matters (energy, amplitude, phase,
-    partial sum) with a synchronized live readout or a second small panel.
-  ACT III — REVEAL (≈25%): Deliver the insight. Snap to the invariant, overlay
-    the envelope, coincide the curves, close the loop of the orbit, land the
-    limit. This is the HERO FRAME (see §5). Hold it, then drift into the idle
-    loop as the title fades to a quiet credit.
+  ACT I — HOOK: Open on a striking physical detail or question.
+  ACT II — ESTABLISH: Name the system, show its initial state, and introduce
+    the governing law.
+  ACT III — EVOLVE: Let the dynamics play in real time. Track one important
+    quantity with a synchronized live readout or a small supporting panel.
+  ACT IV — REVEAL: Deliver the insight in one annotated hero frame.
+  ACT V — RECAP: Restate the key relationship and let the living idle loop carry
+    the final seconds. Clear unrelated objects between acts; keep at most three
+    focal elements visible at once.
 
 ════════════════════════════════════════════════════════════════════════
 §2 · DIRECTOR'S TOOLKIT  (reach for these — not just Axes.plot)
@@ -91,6 +91,8 @@ Reveal / emphasis:  Create, Write, DrawBorderThenFill, GrowFromCenter,
   GrowFromEdge, GrowArrow, SpiralIn, FadeIn(shift=...), Transform,
   ReplacementTransform, TransformMatchingShapes, TransformMatchingTex,
   Indicate, Flash, Circumscribe, FocusOn, Wiggle, ApplyWave, ShowPassingFlash.
+  Never use ManimGL-only ShowCreation, TextMobject, TexMobject, GraphScene,
+  ThreeDVMobject, or class-level CONFIG.
 Living motion:  always_redraw, add_updater, ValueTracker.animate.set_value,
   Rotating, Rotate, MoveAlongPath, Homotopy, UpdateFromAlphaFunc.
 Depth & light:  set_opacity, set_stroke(width=..., opacity=...) for a fat dim
@@ -117,6 +119,9 @@ Camera (only if it earns it):  MovingCameraScene → self.camera.frame.animate
   • CONTINUITY: transform related objects into each other
     (ReplacementTransform / TransformMatchingTex) rather than fade-out/fade-in,
     so ideas *become* each other.
+  • LABELS: keep on-screen copy to short labels, symbols, and equation fragments.
+    Spoken narration carries full sentences; do not burn sentence captions into
+    the scene.
 
 ════════════════════════════════════════════════════════════════════════
 §4 · LIGHT, COLOR & TYPE  (the difference between a plot and a poster)
@@ -187,9 +192,9 @@ acts, land one unforgettable hero frame, and breathe at the end. Output ONLY the
 Python code for `{class_name}`.
 """
 
-STORYBOARD_SYSTEM_PROMPT = """You are the AetherLab creative director. Design — do NOT code — a short
+STORYBOARD_SYSTEM_PROMPT = """You are the AetherLab creative director. Design — do NOT code — a detailed
 science-cinema treatment for the physics problem you are given. Think like a
-filmmaker: concrete staging, three acts, one unforgettable hero frame.
+filmmaker: concrete staging, five acts, one unforgettable hero frame.
 
 Return STRICT JSON only (no markdown, no commentary) with exactly these keys:
 {
@@ -198,20 +203,45 @@ Return STRICT JSON only (no markdown, no commentary) with exactly these keys:
   "palette": {"primary": "<manim color name>", "secondary": "<manim color name>",
                "accent": "<manim color name>"},
   "acts": [
+    {"name": "HOOK", "duration_s": <number>, "beats": [
+      {"detail": "one visible change", "duration_s": <number>,
+       "narration_cue": "short matching phrase", "anchor_cell": "C3",
+       "target_object": "the focal Manim object", "target_equation": "LaTeX or empty"}
+    ]},
     {"name": "ESTABLISH", "duration_s": <number>,
-     "beats": ["what happens, beat by beat"]},
+     "beats": [{"detail": "...", "duration_s": <number>,
+                "narration_cue": "...", "anchor_cell": "D3",
+                "target_object": "...", "target_equation": "..."}]},
     {"name": "EVOLVE", "duration_s": <number>, "beats": [...]},
-    {"name": "REVEAL", "duration_s": <number>, "beats": [...]}
+    {"name": "REVEAL", "duration_s": <number>, "beats": [...]},
+    {"name": "RECAP", "duration_s": <number>, "beats": [...]}
   ],
   "hero_frame": "the single climactic composition the whole scene builds toward",
   "idle_loop": "the subtle living animation for the final ~2 seconds",
   "narration": ["one short spoken line per act, matching its beats"]
 }
 
-Rules: total duration 15-22 seconds across acts. Prefer a real-world referent
-over a bare graph. Every act's beats must be implementable with stock Manim
-Community mobjects. The variables you are given become on-screen live numbers —
-work at least one into the staging."""
+Rules: the user brief gives the total duration target; allocate act durations
+that sum to it within 5%. Give every act 1-2 implementable beats; each beat is
+one visual detail, not a list of simultaneous objects. For a 30-second scene,
+use 6-8 beats total (never more than 8) so each timed detail has room to read
+and the Cloud render stays within budget. For every beat provide
+its duration_s, one short narration_cue, one anchor_cell from a 6-by-6 grid,
+the focal target_object, and target_equation when that beat shows an equation
+(A1-F6, columns left-to-right, rows top-to-bottom). Beat durations must sum to
+their act duration. Give text-heavy details more time than a simple motion beat.
+Keep each narration cue short enough to speak naturally inside its beat at about
+2 words per second; if a cue is too long, shorten it instead of rushing the voice.
+Combine only related animations within a beat so the implementation can batch
+them with LaggedStart or AnimationGroup. Prefer a real-world referent over a bare graph. When using a
+graph, label axes and units. Include a live numerical readout for a changing
+quantity, a concise annotation on the hero frame, and a one-beat recap of the
+key equation or physical meaning. Keep at most three focal elements visible at
+once and specify a transition that clears unrelated content between acts. Give
+each detail a clear entrance, enough time to read, and an exit or transform
+before the next unrelated detail. Keep plots to at most two data series. Use
+stock Manim Community mobjects. The variables you are given become on-screen
+live numbers — work at least one into the staging."""
 
 
 SCENE_CODEGEN_SYSTEM_PROMPT = """You are the AetherLab Manim implementation engineer. You are given a locked
@@ -225,7 +255,13 @@ HARD CONSTRAINTS (violating any ruins the render):
    and real global color constants — invent nothing. Use WHITE, BLACK, BLUE,
    GREEN, RED, YELLOW, TEAL, PURPLE, MAROON, GOLD, ORANGE, PINK, GRAY/GREY
    (including _A.._E variants), DARK_BLUE/DARK_BROWN/LIGHT_BROWN, and
-   PURE_CYAN/PURE_MAGENTA. Never use BROWN or GREEN_SCREEN.
+   PURE_CYAN/PURE_MAGENTA/PURE_YELLOW. Never use BROWN or GREEN_SCREEN.
+   Import only the documented ManimCE and NumPy modules; do not import `colorsys`
+   or use `getattr`, `setattr`, `hasattr`, `eval`, `exec`, dunder attributes,
+   `__class__`, reflection, or dynamic attribute lookup.
+   Never use ManimGL-only `ShowCreation`, `TextMobject`, `TexMobject`,
+   `GraphScene`, `ThreeDVMobject`, or class-level `CONFIG`; use ManimCE names
+   such as `Create`, `Text`, `MathTex`, and `ThreeDScene`.
 3. Exactly one scene class named `{class_name}` inheriting `Scene` (or
    `MovingCameraScene` if the storyboard demands camera moves), with
    `def construct(self)`.
@@ -248,7 +284,80 @@ HARD CONSTRAINTS (violating any ruins the render):
     multiple labels/equations; avoid `.copy()` unless the original is transformed
     or removed nearby; prefer `set_color_by_tex()`/`get_part_by_tex()` over deep
     MathTex indexing like `eq[0][3]`; keep NumberPlane/Axes as subtle background
-    scaffolding with low stroke opacity."""
+    scaffolding with low stroke opacity.
+12. Render performance (cheaper code renders faster and fails less): plot curves
+    with `axes.plot(func)` rather than a hand-rolled ParametricFunction/FunctionGraph
+    when an Axes/NumberPlane exists; batch related animations with
+    `LaggedStart(...)`/`AnimationGroup(...)` instead of many sequential `self.play`
+    beats; and in `always_redraw`/updaters, update the existing mobject in place
+    (`.become(...)`, shift points) rather than rebuilding a VGroup from a
+    comprehension every frame.
+13. Do not burn full-sentence narration captions into the animation. Use short
+    labels, symbols, and equation fragments; the spoken narration carries the
+    sentences.
+14. Check the installed ManimCE signature before using a constructor or method.
+    Do not guess keyword arguments; prefer documented defaults when unsure.
+15. Follow `storyboard.timeline` as a timed edit list. Each event has exact
+    start_s/end_s and duration_s. Implement events in chronological order; do
+    not show its detail before start_s, and remove or transform it by end_s.
+    Add a `# BEAT A1.B1 | 0.00-2.50 s` comment at every event boundary, using
+    that event's exact start_s/end_s so timing is auditable.
+    If no timeline is supplied, write an equivalent compact beat schedule first.
+16. One beat shows one focal detail, at most one supporting object, and one
+    short attached label. Never show more than two graph traces at once. Fade
+    or morph a finished label before introducing an unrelated one; crossfades
+    between unrelated beats may overlap for at most 0.3 seconds.
+17. Use the supplied 6-by-6 anchor_cell for the focal composition. Keep all
+    mobjects at least 0.45 scene units inside the frame edges, attach labels to
+    their referents, and reserve separate space for axes and titles. Use labels
+    of 3-6 words, Text(font_size=30) or larger, and do not shrink an individual
+    label below 0.22 scene units high. Prefer one clear plot over dense grids,
+    tiny ticks, or overlapping live readouts.
+18. Inside each event, budget an entrance, a readable hold, and a clean exit.
+   Keep physical motion synchronized with its narration_cue. Do not leave a
+   completed detail on screen as the next unrelated detail starts.
+19. For a 30-second cloud scene, use no more than 16 top-level self.play calls
+   in the entire scene and no more than two live updaters. Target one play call
+   per beat and never exceed two; combine simultaneous details with
+   LaggedStart/AnimationGroup and use waits for readable holds. Preserve the
+   full requested duration and every storyboard beat.
+20. Never animate a mobject directly while its active updater also changes that
+   mobject. Animate the controlling ValueTracker and let its updater update the
+   display, or remove the updater before animating. Do not animate the same
+   mobject twice in one self.play call."""
+
+
+TEMPORAL_LAYOUT_CONTRACT = """TIMED DETAIL + CLEAN FRAME CONTRACT
+Treat storyboard.timeline as the edit schedule. Every event has start_s,
+end_s, duration_s, narration_cue, subtitle_cue, target_object,
+target_equation, and anchor_cell. Add one
+`# BEAT A1.B1 | 0.00-2.50 s` marker per event using the exact window. Begin its
+single focal detail inside its assigned window;
+finish its entrance, readable hold, and exit/transform before the next
+unrelated window starts. Crossfade overlap is limited to 0.3 seconds.
+
+Composition: one focal detail, one supporting object, and one short attached
+label per beat; at most two data traces and three focal elements visible.
+Clear finished equations and callouts. Keep titles, axes, legends, and live
+readouts in distinct reserved zones. Use anchor cells A1-F6 (columns
+left-to-right, rows top-to-bottom), a 0.45-unit safe margin, and readable type
+(Text font_size >=30; no individual label below 0.22 scene units). Replace a
+previous state instead of accumulating curves or labels. The hero frame is
+the only planned multi-element composition; arrange it as one balanced group,
+then clear it for the recap.
+
+Render budget: for a 30-second Cloud scene, use 6-8 timed beats total, at most
+16 top-level self.play calls for the entire scene, and at most two live
+updaters. Target one play call per beat; combine simultaneous details with
+LaggedStart/AnimationGroup and use waits for holds. NEVER put axes.plot(...), ParametricFunction, or another full
+curve construction inside always_redraw; that rebuilds hundreds of points on
+every frame and can stall cloud rendering. Create static spectra once and use
+Transform between temperature states. Keep no more than three live updater or
+always_redraw objects total; animate a small marker directly instead of
+replotting its curve. Never animate a mobject directly in self.play while its
+active updater mutates that mobject; animate the controlling ValueTracker or
+clear the updater first. Keep each marker immediately before its corresponding
+visual action, and use the scheduled duration for entrances, holds, and exits."""
 
 
 SCENE_REVISE_SYSTEM_PROMPT = """You are the AetherLab scene reviser. A rendered Manim scene was reviewed by
@@ -268,17 +377,20 @@ Rules:
    grids.
 6. Preserve visible physical motion in every act and a living ending whose last
    sampled frames differ; do not "fix" a critique by freezing or deleting a
-   requested object."""
+   requested object.
+7. Preserve each scheduled beat's start_s/end_s and leave a readable hold.
+   Remove overlapping labels, stale curves, and completed details; keep at most
+   three focal elements visible and retain the storyboard's anchor cells."""
 
 
 SCENE_REPAIR_SYSTEM_PROMPT = """You are the AetherLab Manim repair engineer. A Manim Community scene you
-wrote failed at render time. Fix the exact error and return the COMPLETE
-corrected scene.
+wrote failed at render time. Fix the exact error with the smallest safe edit.
 
 Rules:
 1. Output ONLY valid Python — no markdown fences, no commentary.
-2. Keep the class named exactly `{class_name}` (inherits Scene, defines
-   `def construct(self)`).
+2. If given a function repair scope, return only that complete function with
+   its original signature. Return the complete scene only when the scope says
+   `whole scene` or a function-only repair cannot address the error.
 3. Change as little as possible: fix the failing API usage (wrong kwarg,
    nonexistent method, bad constant) while preserving the visual design.
 4. Use only real Manim Community APIs. If unsure a kwarg exists, drop it or
@@ -288,15 +400,32 @@ Rules:
    same anchor.
 6. Keep every requested object and visible-motion beat; never repair a crash by
    reducing the scene to static text/axes.
+7. Preserve the storyboard beat markers and their time windows. For an OOM,
+   simplify each beat's mobject count and sampling density while keeping its
+   duration and core physics; do not compress several details into one crowded
+   frame.
+8. If a ValueError reports unequal zip lengths inside Animation.interpolate_mobject,
+   check whether a displayed mobject has an updater that changes its family while
+   that same mobject is animated. Animate its controlling ValueTracker instead,
+   or clear its updater before the play; do not drop the visual beat or duration.
 """
 
 SCENE_REPAIR_USER_TEMPLATE = """## Render error
 {error}
 
-## The scene code that failed
+## Repair scope: {scope_label}
+Change only the scoped function when a function is named. Keep its signature.
+
+## Installed Manim Community API references
+{api_docs}
+
+## Code in the failing scope
+{scope_code}
+
+## Complete original scene (context and exact identifiers)
 {code}
 
-Return the complete corrected Python file now."""
+Return the scoped Python repair now."""
 
 
 SCENE_GENERATION_USER_TEMPLATE = """## Problem
@@ -317,15 +446,206 @@ SCENE_GENERATION_USER_TEMPLATE = """## Problem
 Generate the Manim scene class now. Output ONLY the Python code."""
 
 
+def _merge_repaired_function(original: str, response: str, function_name: str) -> str | None:
+    """Merge a function-only repair into the original source by AST line span."""
+    content = re.sub(r"<think>.*?</think>", "", response or "", flags=re.DOTALL).strip()
+    fenced = re.search(r"```(?:python)?\s*\n(.*?)```", content, re.DOTALL)
+    if fenced:
+        content = fenced.group(1).strip()
+    if re.search(r"^\s*class\s+\w+", content, flags=re.MULTILINE):
+        return None  # Full-scene response: let the normal extractor handle it.
+    try:
+        replacement_tree = ast.parse(content)
+        original_tree = ast.parse(original)
+    except SyntaxError:
+        return None
+    replacements = [
+        node for node in ast.walk(replacement_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    targets = [
+        node for node in ast.walk(original_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if not replacements or not targets:
+        return None
+    replacement = min(replacements, key=lambda node: node.lineno)
+    target = min(targets, key=lambda node: node.lineno)
+    new_source = ast.get_source_segment(content, replacement)
+    if not new_source:
+        return None
+    indent = " " * int(getattr(target, "col_offset", 0) or 0)
+    new_lines = textwrap.dedent(new_source).splitlines(keepends=True)
+    if not new_lines:
+        return None
+    if not new_lines[-1].endswith(("\n", "\r")):
+        new_lines[-1] += "\n"
+    replacement_lines = [
+        (indent + line if line.strip() else line)
+        for line in new_lines
+    ]
+    original_lines = original.splitlines(keepends=True)
+    original_lines[target.lineno - 1 : (target.end_lineno or target.lineno)] = replacement_lines
+    merged = "".join(original_lines)
+    try:
+        ast.parse(merged)
+    except SyntaxError:
+        return None
+    return merged
+
+
+_TIMELINE_ANCHORS = (
+    "C3", "D3", "C4", "D4", "B3", "E3", "B4", "E4", "C2", "D2", "C5", "D5",
+)
+
+
+def schedule_storyboard_timeline(storyboard: dict, duration_target_s: float) -> dict:
+    """Attach deterministic absolute timing to each visual beat.
+
+    LLM-provided beat durations act as weights within their act. Older
+    storyboards with string beats remain supported and divide each act evenly.
+    Act and beat intervals are scaled to the requested total, so the codegen
+    pass receives a complete, non-overlapping edit schedule.
+    """
+    timed = dict(storyboard)
+    raw_acts = storyboard.get("acts")
+    if not isinstance(raw_acts, list) or not raw_acts:
+        return timed
+    try:
+        target = max(0.1, float(duration_target_s))
+    except (TypeError, ValueError):
+        target = 30.0
+
+    valid = [(index, act) for index, act in enumerate(raw_acts) if isinstance(act, dict)]
+    if not valid:
+        return timed
+
+    def positive_weight(value: object) -> float:
+        try:
+            weight = float(value)
+        except (TypeError, ValueError):
+            return 1.0
+        return weight if 0.05 <= weight <= target * 10 else 1.0
+
+    act_weights = [positive_weight(act.get("duration_s")) for _, act in valid]
+    act_weight_total = sum(act_weights)
+    narration = storyboard.get("narration")
+    revised_acts = list(raw_acts)
+    timeline: list[dict] = []
+    elapsed = 0.0
+
+    for valid_index, ((act_index, raw_act), act_weight) in enumerate(zip(valid, act_weights)):
+        act = dict(raw_act)
+        act_duration = target * act_weight / act_weight_total
+        act_end = target if valid_index == len(valid) - 1 else elapsed + act_duration
+        act["duration_s"] = round(act_end - elapsed, 3)
+        act["start_s"] = round(elapsed, 3)
+        act["end_s"] = round(act_end, 3)
+        revised_acts[act_index] = act
+
+        raw_beats = act.get("beats")
+        if isinstance(raw_beats, (str, dict)):
+            raw_beats = [raw_beats]
+        if not isinstance(raw_beats, list) or not raw_beats:
+            raw_beats = [{"detail": f"{act.get('name', 'Act')} transition"}]
+
+        act_narration = (
+            str(narration[act_index])
+            if isinstance(narration, list) and act_index < len(narration)
+            else ""
+        )
+        own_cues = [
+            str(beat.get("narration_cue") or beat.get("cue") or "").strip()
+            if isinstance(beat, dict) else ""
+            for beat in raw_beats
+        ]
+        # The act's narration line is spoken ONCE, on the act's first beat, and
+        # only when no beat carries its own cue. Copying it onto every beat made
+        # the timed voiceover and subtitles repeat the same sentence per beat.
+        if not any(own_cues) and act_narration.strip():
+            own_cues[0] = act_narration.strip()
+        beat_cues = own_cues
+        beat_weights = []
+        for beat, cue in zip(raw_beats, beat_cues, strict=True):
+            base = positive_weight(beat.get("duration_s")) if isinstance(beat, dict) else 1.0
+            # Longer cues receive proportionally more room. Explicit storyboard
+            # weights still control text-heavy beats when they ask for even more.
+            speaking_room = len(cue.split()) / 2.0
+            beat_weights.append(max(base, speaking_room, 0.05))
+        beat_weight_total = sum(beat_weights)
+        beat_elapsed = elapsed
+
+        for beat_index, (beat, cue, beat_weight) in enumerate(zip(raw_beats, beat_cues, beat_weights, strict=True)):
+            if isinstance(beat, dict):
+                detail = str(
+                    beat.get("detail") or beat.get("visual") or beat.get("text") or "One visual detail"
+                ).strip()
+                anchor = str(beat.get("anchor_cell") or "").strip().upper()
+            else:
+                detail = str(beat).strip() or "One visual detail"
+                anchor = ""
+            if len(anchor) != 2 or anchor[0] not in "ABCDEF" or anchor[1] not in "123456":
+                anchor = _TIMELINE_ANCHORS[(act_index * 3 + beat_index) % len(_TIMELINE_ANCHORS)]
+
+            beat_duration = (act_end - elapsed) * beat_weight / beat_weight_total
+            beat_end = act_end if beat_index == len(raw_beats) - 1 else beat_elapsed + beat_duration
+            duration = max(0.0, beat_end - beat_elapsed)
+            enter_s = min(0.35, duration * 0.2)
+            exit_s = min(0.30, duration * 0.2)
+            narration_target_s = len(cue.split()) / 2.0
+            narration_overflow_s = max(0.0, narration_target_s - duration)
+            timeline.append({
+                "id": f"A{act_index + 1}.B{beat_index + 1}",
+                "act": str(act.get("name") or f"ACT {act_index + 1}"),
+                "detail": detail,
+                "start_s": round(beat_elapsed, 3),
+                "end_s": round(beat_end, 3),
+                "duration_s": round(duration, 3),
+                "enter_s": round(enter_s, 3),
+                "hold_s": round(max(0.0, duration - enter_s - exit_s), 3),
+                "exit_s": round(exit_s, 3),
+                "narration_cue": cue,
+                "subtitle_cue": cue,
+                "narration_words": len(cue.split()),
+                "narration_target_s": round(narration_target_s, 3),
+                "narration_fits": narration_overflow_s <= 0.25,
+                "narration_overflow_s": round(narration_overflow_s, 3),
+                "anchor_cell": anchor,
+                "target_object": str(
+                    beat.get("target_object") or beat.get("object") or detail
+                ).strip() if isinstance(beat, dict) else detail,
+                "target_equation": str(
+                    beat.get("target_equation") or beat.get("equation") or ""
+                ).strip() if isinstance(beat, dict) else "",
+            })
+            beat_elapsed = beat_end
+        elapsed = act_end
+
+    timed["acts"] = revised_acts
+    timed["timeline"] = timeline
+    timed["timeline_duration_s"] = round(target, 3)
+    return timed
+
+
 class SceneGenerator:
     """Generate dynamic Manim scene code via LLM."""
 
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self, settings: AppSettings, *, minimax_thinking: bool | None = None
+    ) -> None:
         self.settings = settings
+        self._minimax_thinking = minimax_thinking
         # Lazy-create client on first use — import is inside _ensure_client
         self._client = None
         # Most recent storyboard (dict) — the critic evaluates renders against it.
         self._last_storyboard: dict | None = None
+        self._last_scene_spec: dict | None = None
+        # Why the last generate() returned the built-in template instead of an
+        # AI scene ("" when the LLM succeeded). The caller surfaces this so a
+        # fallback is never mistaken for a real answer.
+        self._last_fallback_reason: str = ""
 
     async def generate(
         self,
@@ -334,32 +654,85 @@ class SceneGenerator:
         rag: RagResult,
         class_name: str = "AetherLabScene",
     ) -> str:
-        """Generate Manim scene code using the LLM."""
+        """Generate Manim scene code using the LLM.
+
+        On any failure this returns the built-in domain template and records why
+        in ``_last_fallback_reason`` — the caller must surface that, otherwise a
+        template silently masquerades as an AI-authored answer.
+        """
+        from openai import APITimeoutError
+
+        from aetherlab.services.model_policy import (
+            effective_llm_timeout,
+            settings_pathway,
+            timeout_shortfall,
+        )
+        from aetherlab.services.parameters import apply_request_parameters
+
+        solver = apply_request_parameters(request, solver)
+        self._last_fallback_reason = ""
+        self._last_storyboard = None
+        self._last_scene_spec = None
         if not self.settings.openai_api_key:
+            self._last_fallback_reason = (
+                "No API key is configured, so the built-in domain template was used "
+                "instead of an AI-generated scene."
+            )
             return self._fallback_scene(class_name, solver)
 
-        # One retry before falling back: reasoning models occasionally blow
-        # their output budget or hiccup transiently, and a cinematic scene is
-        # worth a second attempt.
+        pathway = settings_pathway(self.settings)
+        budget = effective_llm_timeout(self.settings)
+
+        # One retry before falling back: models occasionally blow their output
+        # budget or hiccup transiently, and a cinematic scene is worth a second
+        # attempt. A *timeout* is the exception — the next attempt would spend
+        # the same full budget to fail the same way, so that path stops early.
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
-                return await self._generate_remote(request, solver, rag, class_name)
+                code = await self._generate_remote(request, solver, rag, class_name)
+                self._last_fallback_reason = ""
+                return code
+            except APITimeoutError as exc:
+                last_exc = exc
+                log.warning(
+                    "LLM scene generation timed out after %.0fs on attempt %d "
+                    "(model=%s, pathway=%s).",
+                    budget, attempt + 1, self.settings.llm_model, pathway.name,
+                )
+                if not pathway.retry_on_timeout:
+                    break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 log.warning(
                     "LLM scene generation attempt %d failed: %s", attempt + 1, exc
                 )
-        log.warning("LLM scene generation failed twice, using fallback: %s", last_exc)
+
+        if isinstance(last_exc, APITimeoutError):
+            advice = timeout_shortfall(self.settings) or (
+                "Raise 'llm_timeout_seconds' in Settings or pick a faster model."
+            )
+            self._last_fallback_reason = (
+                f"AI scene generation timed out after {budget:.0f}s on "
+                f"{self.settings.llm_model}; showing the built-in domain template. "
+                + advice
+            )
+        else:
+            self._last_fallback_reason = (
+                f"AI scene generation failed ({type(last_exc).__name__}: {last_exc}); "
+                "showing the built-in domain template."
+            )
+        log.warning("Using fallback scene: %s", self._last_fallback_reason)
+        self._last_storyboard = None
+        self._last_scene_spec = None
         return self._fallback_scene(class_name, solver)
 
     def _ensure_client(self):
-        from openai import AsyncOpenAI
+        from aetherlab.services.llm_client import make_client
 
-        from aetherlab.services.model_policy import openai_client_kwargs
 
         if self._client is None:
-            self._client = AsyncOpenAI(**openai_client_kwargs(self.settings))
+            self._client = make_client(self.settings, purpose="scene")
         return self._client
 
     async def storyboard(
@@ -382,10 +755,14 @@ class SceneGenerator:
         vars_text = "\n".join(
             f"  {name} = {value}" for name, value in sorted(solver.variables.items())
         ) or "  (no variables)"
+        duration_target_s = float(request.duration_target_s)
         user = (
             f"## Problem\n{request.prompt}\n\n"
             f"## Analytical summary\n{solver.summary}\n\n"
             f"## Variables (become live on-screen numbers)\n{vars_text}\n\n"
+            f"## Total scene duration target\n{duration_target_s:g} seconds; "
+            "make all act durations sum to this target and give every visual beat "
+            "its own duration, narration cue, and 6x6 anchor cell.\n\n"
             "Design the storyboard JSON now."
         )
         if variation_seed:
@@ -397,15 +774,17 @@ class SceneGenerator:
             )
         try:
             client = self._ensure_client()
+            from aetherlab.services.model_policy import system_prompt_message
+
             response = await client.chat.completions.create(
                 model=self.settings.llm_model,
                 messages=[
-                    {"role": "system", "content": STORYBOARD_SYSTEM_PROMPT},
+                    system_prompt_message(self.settings, STORYBOARD_SYSTEM_PROMPT),
                     {"role": "user", "content": user},
                 ],
                 # Ideation runs hot; the codegen pass runs cold. This split is
                 # the whole point of storyboarding separately.
-                temperature=temperature,
+                temperature=request_temperature(self.settings, temperature),
                 max_tokens=4096,
                 **codegen_request_kwargs(self.settings),
             )
@@ -413,6 +792,7 @@ class SceneGenerator:
             board = load_model_json(content)
             if not isinstance(board, dict) or "acts" not in board:
                 return None
+            board = schedule_storyboard_timeline(board, duration_target_s)
             self._last_storyboard = board
             return board
         except Exception as exc:  # noqa: BLE001 — storyboard is best-effort
@@ -436,6 +816,7 @@ class SceneGenerator:
         vars_text = "\n".join(
             f"  {name} = {value}" for name, value in sorted(solver.variables.items())
         ) or "  (no variables)"
+        duration_target_s = float(request.duration_target_s)
 
         rag_lines = []
         for hit in rag.hits[:3]:
@@ -465,29 +846,107 @@ class SceneGenerator:
 
         board = locked_storyboard if locked_storyboard is not None else await self.storyboard(request, solver, rag)
         if board is not None:
+            board = schedule_storyboard_timeline(board, duration_target_s)
             self._last_storyboard = board
-            system = (
-                SCENE_CODEGEN_SYSTEM_PROMPT.replace("{class_name}", class_name)
-                + "\n\n"
-                + preventive_pitfalls_block(_aesthetic)
+            self._last_scene_spec = None
+            try:
+                from aetherlab.services.scene_specification import (
+                    build_scene_spec,
+                    validate_scene_spec,
+                )
+
+                candidate_spec = build_scene_spec(request, solver, rag, board)
+                if validate_scene_spec(candidate_spec)["status"] == "passed":
+                    self._last_scene_spec = candidate_spec
+            except Exception as exc:  # noqa: BLE001 - generation can use the locked board
+                log.info("Canonical scene spec unavailable for codegen (%s).", exc)
+            system = SCENE_CODEGEN_SYSTEM_PROMPT.replace("{class_name}", class_name)
+            system += (
+                "\n\nWhen a canonical aetherlab.scene_spec.v1 is supplied, it is the "
+                "single source of truth for equations, values, units, assumptions, "
+                "citations, timed beats, narration, and visual bindings. Implement its "
+                "timeline without changing those facts or their order."
             )
-            user = (
-                f"## Locked storyboard (implement exactly)\n"
-                f"{_json.dumps(board, indent=2)}\n\n"
-                f"## Problem\n{request.prompt}\n\n"
-                f"## Analytical summary\n{solver.summary}\n\n"
-                f"## Derivation steps\n{steps_text}\n\n"
-                f"## Variables (name = value)\n{vars_text}\n\n"
-                f"## Reference context\n{rag_context}\n\n"
-                "Output ONLY the Python code implementing the storyboard."
-            )
+            system_additions = preventive_pitfalls_block(_aesthetic)
+            spec_timeline = board.get("timeline", [])
+            spec_context = ""
+            if isinstance(self._last_scene_spec, dict):
+                prompt_spec = dict(self._last_scene_spec)
+                prompt_spec["evidence"] = [
+                    {**ref, "source": ""}
+                    for ref in prompt_spec.get("evidence", [])
+                    if isinstance(ref, dict)
+                ]
+                try:
+                    spec_context = _json.dumps(prompt_spec, indent=2, ensure_ascii=False)
+                    spec_timeline = self._last_scene_spec.get("timeline", {}).get("beats", [])
+                except (TypeError, ValueError):
+                    self._last_scene_spec = None
+            marker_lines = [
+                f"# BEAT {event['id']} | {float(event['start_s']):.2f}-"
+                f"{float(event['end_s']):.2f} s"
+                for event in spec_timeline
+                if isinstance(event, dict)
+                and event.get("id")
+                and event.get("start_s") is not None
+                and event.get("end_s") is not None
+            ]
+            marker_contract = ""
+            if marker_lines:
+                marker_contract = (
+                    "## Mandatory beat-boundary comments\n"
+                    "Copy every line below verbatim into construct(), in this exact "
+                    "order, immediately before that beat's visual action. These "
+                    "comments are checked by the timing gate; do not omit or edit them.\n"
+                    + "\n".join(marker_lines)
+                    + "\n\n"
+                )
+            if spec_context:
+                user = (
+                    "## Canonical scene specification (aetherlab.scene_spec.v1)\n"
+                    f"{spec_context}\n\n"
+                    "Implement the physics, assumptions, timed visual beats, narration, "
+                    "and visual bindings exactly as specified. The timetable is absolute; "
+                    "use readable holds to make each action land inside its window.\n\n"
+                    f"{marker_contract}"
+                    f"## Reference excerpts\n{rag_context}\n\n"
+                    f"## Total scene duration target\n{duration_target_s:g} seconds.\n\n"
+                    "Output ONLY the Python code implementing the specification."
+                )
+            else:
+                user = (
+                    f"## Locked storyboard (implement exactly)\n"
+                    f"{_json.dumps(board, indent=2)}\n\n"
+                    f"## Problem\n{request.prompt}\n\n"
+                    f"## Total scene duration target\n{duration_target_s:g} seconds. "
+                    "The complete animation should stay within 20% of this duration.\n\n"
+                    f"{marker_contract}"
+                    f"## Analytical summary\n{solver.summary}\n\n"
+                    f"## Derivation steps\n{steps_text}\n\n"
+                    f"## Variables (name = value)\n{vars_text}\n\n"
+                    f"## Reference context\n{rag_context}\n\n"
+                    "Output ONLY the Python code implementing the storyboard."
+                )
             temperature = 0.15  # implementation runs cold — precision over flair
         else:
-            system = (
-                SCENE_GENERATION_SYSTEM_PROMPT.replace("{class_name}", class_name)
-                + "\n\n"
-                + preventive_pitfalls_block(_aesthetic)
-            )
+            system = SCENE_GENERATION_SYSTEM_PROMPT.replace("{class_name}", class_name)
+            system_additions = preventive_pitfalls_block(_aesthetic)
+            try:
+                from aetherlab.services.scene_specification import (
+                    build_scene_spec,
+                    validate_scene_spec,
+                )
+
+                candidate_spec = build_scene_spec(request, solver, rag)
+                if validate_scene_spec(candidate_spec)["status"] == "passed":
+                    self._last_scene_spec = candidate_spec
+                    system += (
+                        "\n\nThe canonical aetherlab.scene_spec.v1 supplied by the user "
+                        "is the source of truth for equations, values, units, assumptions, "
+                        "and reference provenance. Do not change those facts."
+                    )
+            except Exception as exc:  # noqa: BLE001 - retain the legacy generation path
+                log.info("Canonical physics spec unavailable for codegen (%s).", exc)
             user = SCENE_GENERATION_USER_TEMPLATE.format(
                 prompt=request.prompt,
                 summary=solver.summary,
@@ -495,6 +954,25 @@ class SceneGenerator:
                 variables=vars_text,
                 rag_count=len(rag.hits),
                 rag_context=rag_context,
+            )
+            if isinstance(self._last_scene_spec, dict):
+                prompt_spec = dict(self._last_scene_spec)
+                prompt_spec["evidence"] = [
+                    {**ref, "source": ""}
+                    for ref in prompt_spec.get("evidence", [])
+                    if isinstance(ref, dict)
+                ]
+                try:
+                    user += (
+                        "\n\n## Canonical physics specification "
+                        "(aetherlab.scene_spec.v1)\n"
+                        + _json.dumps(prompt_spec, indent=2, ensure_ascii=False)
+                    )
+                except (TypeError, ValueError):
+                    self._last_scene_spec = None
+            user += (
+                f"\n\n## Total scene duration target\n{duration_target_s:g} seconds. "
+                "The complete animation should stay within 20% of this duration."
             )
             temperature = 0.4
 
@@ -506,7 +984,9 @@ class SceneGenerator:
 
         exemplar = exemplar_block(solver.keywords, solver.variables, data_dir=self.settings.data_dir)
         if exemplar:
-            system += "\n\n" + exemplar
+            system_additions += "\n\n" + exemplar
+
+        system += "\n\n" + TEMPORAL_LAYOUT_CONTRACT
 
         # Machines without a LaTeX toolchain can't render MathTex — force the
         # scene to unicode Text so it still renders everywhere. (Lazy import:
@@ -514,7 +994,7 @@ class SceneGenerator:
         from aetherlab.services.manim_runtime import detect_latex
 
         if not detect_latex():
-            system += (
+            system_additions += (
                 "\n\nIMPORTANT — NO LaTeX ON THIS MACHINE: never use MathTex, "
                 "Tex, or SingleStringMathTex. Write every formula with "
                 "Text(...) using unicode math (×, ·, ², ³, √, θ, ω, π, ½, ∂)."
@@ -524,29 +1004,54 @@ class SceneGenerator:
         # oversized RAG excerpt can't overflow it (~3 chars/token, reserving the
         # output budget). At the default 250k window this never trips.
         char_budget = max(2000, (self.settings.llm_context_window - 32768) * 3)
-        if len(system) + len(user) > char_budget:
-            user = user[: max(500, char_budget - len(system))]
+        system_size = len(system) + len(system_additions)
+        if system_size + len(user) > char_budget:
+            user = user[: max(500, char_budget - system_size)]
+
+        from aetherlab.services.model_policy import system_prompt_message
+
+        messages = [system_prompt_message(self.settings, system)]
+        if system_additions.strip():
+            messages.append({"role": "system", "content": system_additions})
+        messages.append({"role": "user", "content": user})
 
         response = await self._client.chat.completions.create(
             model=self.settings.llm_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=temperature,
+            messages=messages,
+            temperature=request_temperature(self.settings, temperature),
             # Reasoning models (MiniMax-M3, QwQ) spend thousands of tokens on
             # <think> blocks, and the cinematic prompt yields 100+ line scenes —
             # leave generous room or the code gets cut off mid-statement.
             max_tokens=32768,
-            **codegen_request_kwargs(self.settings),
+            **codegen_request_kwargs(
+                self.settings, minimax_thinking=self._minimax_thinking
+            ),
         )
         choice = response.choices[0]
-        if choice.finish_reason == "length":
-            # Truncated replies produce code that dies at compile with a
-            # confusing SyntaxError — fail loudly so retry/fallback handles it.
-            raise ValueError("LLM reply was truncated at the max_tokens limit.")
         content = choice.message.content or ""
-        return self._extract_code(content, class_name)
+        truncated = choice.finish_reason == "length"
+
+        # A reasoning model can spend its whole completion budget inside
+        # <think> and still emit a complete scene afterwards, so hitting the
+        # token cap is not by itself a failure. Try to extract first and only
+        # give up when nothing usable came back; the caller's compile gate
+        # still rejects code that really was cut mid-statement.
+        try:
+            code = self._extract_code(content, class_name)
+        except ValueError as exc:
+            if truncated:
+                raise ValueError(
+                    "LLM reply was truncated at the max_tokens limit before a "
+                    "usable scene class was produced."
+                ) from exc
+            raise
+        if truncated:
+            log.warning(
+                "Reply hit the max_tokens limit but a complete scene class was "
+                "recovered (model=%s spent its budget reasoning).",
+                self.settings.llm_model,
+            )
+        return code
 
     async def generate_from_storyboard(
         self,
@@ -561,9 +1066,32 @@ class SceneGenerator:
             request, solver, rag, class_name, locked_storyboard=storyboard
         )
 
-    async def repair(self, code: str, error: str, class_name: str) -> str:
-        """Ask the LLM to fix a scene that failed at render time."""
+    async def repair(
+        self, code: str, error: str, class_name: str, *, full_scene: bool = False
+    ) -> str:
+        """Repair only the failing function when the traceback identifies it.
+
+        Installed signatures and the failing function are sent as targeted
+        context. If the model returns a complete scene anyway, it is accepted
+        through the normal code extractor.
+        """
         client = self._ensure_client()
+        from aetherlab.services.scene_validation import (
+            manim_api_reference_context,
+            repair_scope_for_error,
+        )
+
+        scope_label, scope_code, function_name = repair_scope_for_error(code, error)
+        if full_scene:
+            scope_label, scope_code, function_name = "whole scene", code, None
+        api_docs = manim_api_reference_context(code, error)
+        user = SCENE_REPAIR_USER_TEMPLATE.format(
+            error=error[-12000:],
+            scope_label=scope_label,
+            api_docs=api_docs or "No conclusive installed signature was found.",
+            scope_code=scope_code,
+            code=code,
+        )
 
         response = await client.chat.completions.create(
             model=self.settings.llm_model,
@@ -574,21 +1102,22 @@ class SceneGenerator:
                 },
                 {
                     "role": "user",
-                    "content": SCENE_REPAIR_USER_TEMPLATE.format(
-                        # Generous window: the root cause of a Manim failure is
-                        # often buried under chained tracebacks/LaTeX logs.
-                        error=error[-12000:], code=code
-                    ),
+                    "content": user,
                 },
             ],
-            temperature=0.2,
+            temperature=request_temperature(self.settings, 0.2),
             max_tokens=32768,
             **codegen_request_kwargs(self.settings),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
             raise ValueError("Repair reply was truncated at the max_tokens limit.")
-        return self._extract_code(choice.message.content or "", class_name)
+        content = choice.message.content or ""
+        if function_name:
+            merged = _merge_repaired_function(code, content, function_name)
+            if merged:
+                return self._extract_code(merged, class_name)
+        return self._extract_code(content, class_name)
 
     async def revise(self, code: str, critique: str, class_name: str) -> str:
         """Aesthetic revision: rework a *rendering* scene per visual critique.
@@ -613,7 +1142,7 @@ class SceneGenerator:
                     ),
                 },
             ],
-            temperature=0.3,
+            temperature=request_temperature(self.settings, 0.3),
             max_tokens=32768,
             **codegen_request_kwargs(self.settings),
         )
@@ -628,6 +1157,7 @@ class SceneGenerator:
         code: str,
         storyboard_script: str = "",
         target_seconds: float | None = None,
+        beat_timing: str = "",
     ) -> str:
         """Derive a flowing voiceover script FROM the final scene code.
 
@@ -648,19 +1178,27 @@ class SceneGenerator:
                 f" The video is about {int(secs)}s, so write roughly {lo}-{hi} words "
                 "(~1.5-2 words/sec) — narrate every beat with no long silences."
             )
-        seed = f"\n\nPlanned per-beat narration (keep its order and meaning):\n{storyboard_script}" if storyboard_script else ""
+        seed = (
+            f"\n\nTimed visual beats in order:\n{beat_timing}\n\n"
+            f"Beat cue lines (one short spoken sentence per line, same order):\n{storyboard_script}"
+            if storyboard_script else ""
+        )
         system = (
             "You are a physics narrator. Given the Manim scene code that produces "
             "an animation, write a single natural, flowing voiceover that narrates "
             "the visual events IN THE ORDER they appear on screen. Plain spoken "
-            "prose only — no stage directions, no markdown, no lists, no LaTeX." + length_rule
+            "prose only — no stage directions, no markdown, no lists, no LaTeX. "
+            "When timed beat cues are supplied, keep one short sentence per beat "
+            "in the same order, leave readable pauses between ideas, and keep each "
+            "line brief enough for its window. Do not speak timestamps or beat IDs."
+            + length_rule
         )
         user = f"## Problem\n{prompt}\n\n## Scene code\n```python\n{code_ctx}\n```{seed}\n\nWrite the voiceover now."
         client = self._ensure_client()
         response = await client.chat.completions.create(
             model=self.settings.llm_model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.5,
+            temperature=request_temperature(self.settings, 0.5),
             max_tokens=1200,
             **codegen_request_kwargs(self.settings),
         )

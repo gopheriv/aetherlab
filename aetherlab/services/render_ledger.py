@@ -103,6 +103,7 @@ class JobRecord:
     final_path: str = ""
     created_at: str = ""
     updated_at: str = ""
+    metrics: dict[str, float | int | str | bool] = field(default_factory=dict)
 
 
 def _now() -> str:
@@ -120,6 +121,7 @@ def _normalise_record(row: dict) -> dict:
     record["candidates"] = [
         candidate for candidate in record.get("candidates", []) if isinstance(candidate, dict)
     ] if isinstance(record.get("candidates"), list) else []
+    record["metrics"] = dict(record.get("metrics", {})) if isinstance(record.get("metrics"), dict) else {}
     winner = record.get("winner_index")
     try:
         record["winner_index"] = int(winner) if winner is not None else None
@@ -215,6 +217,39 @@ class RenderJobLedger:
         def _apply(r: dict) -> None:
             r["difficulty"] = round(float(difficulty or 0.0), 3)
             r["budget"] = int(budget or 0)
+        self._mutate(job_id, _apply)
+
+    def metrics(self, job_id: str, values: dict) -> None:
+        """Merge safe, structured render timing and quality measurements."""
+        allowed = {
+            "backend", "cache_hit", "prepare_seconds", "upload_seconds",
+            "dispatch_seconds", "queue_seconds", "worker_seconds",
+            "download_seconds", "total_seconds", "retry_count",
+            "render_wall_seconds", "peak_rss_mb", "quality_score",
+            "failure_kind", "manim_version", "local_manim_version",
+            "manim_renderer", "repair_cache", "cache_hits",
+            "failure_stage",
+            "critic_model", "narration_max_boundary_overrun_s",
+            "narration_max_rate_adjustment_pct", "narration_timeline_scale",
+        }
+
+        def _apply(r: dict) -> None:
+            metrics = r.setdefault("metrics", {})
+            if not isinstance(metrics, dict):
+                metrics = {}
+                r["metrics"] = metrics
+            for key, value in (values or {}).items():
+                if key not in allowed:
+                    continue
+                if isinstance(value, bool):
+                    metrics[key] = value
+                elif isinstance(value, (int, float)):
+                    number = float(value)
+                    if number == number and abs(number) != float("inf"):
+                        metrics[key] = round(number, 3)
+                elif isinstance(value, str):
+                    metrics[key] = scrub(value)[:160]
+
         self._mutate(job_id, _apply)
 
     def hq_result(self, job_id: str, *, score: float, verdict: str = "") -> None:

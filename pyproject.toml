@@ -38,6 +38,13 @@ rag = [
 numeric = [
     "scipy>=1.10.0",
 ]
+render = [
+    "manim==0.21.0",
+]
+verification = [
+    "sympy>=1.12",
+    "pint>=0.24",
+]
 narration = [
     # Voiceover: edge-tts synthesizes speech; imageio-ffmpeg ships a portable
     # ffmpeg binary so no system install is needed (and it bundles cleanly).
