@@ -1351,6 +1351,15 @@ class ManimRuntime:
         media_dir = run_dir / "media"
         scene_file = run_dir / f"{scene_name}.py"
         scene_file.write_text(scene_bundle.code, encoding="utf-8")
+        try:
+            # Reuse the TeX the preflight compiled for this exact code (Manim
+            # reads a manim.cfg next to the scene file).
+            from aetherlab.services.scene_preflight import tex_cache_dir
+
+            tex_dir = str(tex_cache_dir(scene_bundle.code)).replace("%", "%%")
+            (run_dir / "manim.cfg").write_text(f"[CLI]\ntex_dir = {tex_dir}\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - a cache is an optimisation only
+            log.debug("Shared TeX cache unavailable: %s", exc)
         _prune_old_runs()
 
         # ── Weight-aware timeout + resource guard (Bug 4) ──
@@ -1537,6 +1546,9 @@ class ManimRuntime:
             and Path(scene_bundle.video_path).exists()
         )
         if not already_drafted:
+            # Preflight: run the scene's code in seconds (dry run, 2 fps) and fix
+            # runtime crashes / off-screen geometry before paying for a render.
+            scene_bundle = await self._preflight_and_repair(scene_bundle, s, timeline)
             scene_bundle = await render_once(scene_bundle, draft_quality)
 
         learner = None
@@ -1885,6 +1897,111 @@ class ManimRuntime:
                 log.debug("Could not attach final render metrics: %s", exc)
 
         return scene_bundle
+
+    async def _preflight_and_repair(
+        self, bundle: SceneBundle, s: "AppSettings | None", timeline: object
+    ) -> SceneBundle:
+        """Dry-run an AI scene before its first render; repair what it finds.
+
+        Fail-soft: the original scene is rendered whenever the preflight cannot
+        run or a repair does not verifiably help. Curated and fallback scenes
+        are deterministic and tested, so they skip it.
+        """
+        from aetherlab.services.scene_preflight import preflight_enabled, preflight_scene
+
+        curated = any("curated component library" in d.lower() for d in bundle.diagnostics)
+        if (
+            s is None or bundle.status != "compiled" or not bundle.code
+            or f"class {bundle.class_name}" not in bundle.code
+            or bundle.used_fallback or curated or not preflight_enabled()
+        ):
+            return bundle
+        report = await asyncio.to_thread(preflight_scene, bundle.code, bundle.class_name)
+        if not report.ran:
+            bundle.diagnostics.append(f"Preflight skipped ({report.note[:200]}).")
+            return bundle
+        bundle.diagnostics.append(
+            f"Preflight ({report.seconds:.0f}s): "
+            + ("ran cleanly" if report.ok else "the scene crashed before rendering")
+            + (f", measured duration {report.duration_s:.1f}s" if report.ok else "")
+            + (f", {len(report.off_frame)} object(s) outside the frame" if report.off_frame else "")
+            + "."
+        )
+        for line in report.off_frame_lines(3):
+            bundle.diagnostics.append(line)
+        if not getattr(s, "openai_api_key", None):
+            return bundle
+
+        from aetherlab.services.code_safety import validate_code_safety
+        from aetherlab.services.scene_generator import SceneGenerator
+
+        generator = SceneGenerator(s)
+
+        async def try_repair(instruction: str, full_scene: bool):
+            try:
+                fixed = await generator.repair(bundle.code, instruction, bundle.class_name,
+                                               full_scene=full_scene)
+                compile(fixed, "<aetherlab-preflight-repair>", "exec")
+            except Exception as exc:  # noqa: BLE001 - repair is bounded and fail-soft
+                return None, f"repair failed: {type(exc).__name__}: {str(exc)[:160]}"
+            safe, issues = validate_code_safety(fixed)
+            lint_ok, lint_issues = _blocking_scene_issues(fixed, timeline)
+            if not safe or not lint_ok:
+                return None, "repair failed the static gates: " + "; ".join((issues + lint_issues)[:3])
+            checked = await asyncio.to_thread(preflight_scene, fixed, bundle.class_name)
+            return (fixed, checked), ""
+
+        if report.crashed:
+            error = report.error
+            for round_no in range(1, 3):
+                result, why = await try_repair(
+                    "This scene crashed in a dry run before rendering (same Manim, no frames "
+                    "drawn). Fix the cause and keep the visual design, physics and timing:\n"
+                    + error[-5000:],
+                    full_scene=round_no > 1,
+                )
+                if result is None:
+                    bundle.diagnostics.append(f"Preflight repair {round_no}: {why}")
+                    break
+                fixed, checked = result
+                if checked.ran and checked.ok:
+                    bundle.code = fixed
+                    bundle.diagnostics.append(
+                        f"Preflight repair {round_no} fixed the crash before rendering "
+                        f"(measured duration {checked.duration_s:.1f}s)."
+                    )
+                    return bundle
+                error = checked.error or error
+                bundle.diagnostics.append(f"Preflight repair {round_no} still crashes.")
+            bundle.diagnostics.append(
+                "Preflight crash not repaired; rendering the original (render repair follows)."
+            )
+            return bundle
+
+        if report.off_frame:
+            result, why = await try_repair(
+                "A dry run of this scene found objects outside the camera frame (x about "
+                "-7.1..7.1, y about -4.0..4.0). Keep everything visible: fit each axes' "
+                "x_range/y_range to the values actually plotted (or normalise the data), "
+                "move labels and readouts inside the frame, and keep the visual design, "
+                "physics and timing:\n" + "\n".join(report.off_frame_lines(8)),
+                full_scene=False,
+            )
+            if result is None:
+                bundle.diagnostics.append(f"Preflight layout repair: {why}")
+                return bundle
+            fixed, checked = result
+            if checked.ran and checked.ok and len(checked.off_frame) < len(report.off_frame):
+                bundle.code = fixed
+                bundle.diagnostics.append(
+                    f"Preflight layout repair kept: objects outside the frame "
+                    f"{len(report.off_frame)} -> {len(checked.off_frame)}."
+                )
+            else:
+                bundle.diagnostics.append(
+                    "Preflight layout repair did not reduce off-frame objects; kept the original."
+                )
+        return bundle
 
     async def _render_once(
         self,
