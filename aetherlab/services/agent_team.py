@@ -203,7 +203,7 @@ class AgentTeamGenerator(SceneGenerator):
         r = await self._call([{"role": "system", "content": system}, {"role": "system", "content": knowledge},
                               {"role": "user", "content": user}],
                              temperature=0.4, max_tokens=32768, thinking=self._minimax_thinking)
-        code = self._extract_code(r.choices[0].message.content or "", class_name)
+        code = _ensure_eq_helper(self._extract_code(r.choices[0].message.content or "", class_name))
         self.code = code
         self.versions.append(code)
         gates = self._gates(code)
@@ -457,3 +457,52 @@ def _frame_grid(video: Path) -> tuple[bytes, float] | None:
         return buffer.getvalue(), duration
     except Exception:  # noqa: BLE001 - no frames is reported, never raised
         return None
+
+
+EQ_HELPER = """def eq(tex, plain, size=34, color=WHITE, width=13.0):
+    try:
+        m = MathTex(tex, font_size=size, color=color)
+    except Exception:
+        m = Text(plain, font_size=int(size * 0.72), color=color)
+    if m.width > width:
+        m.scale_to_fit_width(width)
+    return m
+"""
+
+
+def _ensure_eq_helper(code: str) -> str:
+    """Insert the eq() helper when the Coder calls it without defining it.
+
+    The prompt offers eq() to paste; the live team run (2026-10-01) called it
+    without pasting it and spent a whole Coder revision on the NameError.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    defined = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "eq"
+        for node in ast.walk(tree)
+    ) or any(
+        isinstance(node, ast.Name) and node.id == "eq" and isinstance(node.ctx, ast.Store)
+        for node in ast.walk(tree)
+    )
+    used = any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "eq"
+        for node in ast.walk(tree)
+    )
+    if defined or not used:
+        return code
+    lines = code.splitlines(keepends=True)
+    imports_end = 0
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)) or (
+            isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            imports_end = node.end_lineno or node.lineno
+        else:
+            break
+    return "".join(lines[:imports_end]) + "\n\n" + EQ_HELPER + "\n\n" + "".join(lines[imports_end:])

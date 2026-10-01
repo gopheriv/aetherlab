@@ -613,3 +613,36 @@ def test_team_lead_and_reviewer_run_with_thinking_off():
     source = inspect.getsource(agent_team.AgentTeamGenerator)
     assert "max_tokens=6000, tools=TOOLS, thinking=False" in source
     assert "max_tokens=8000, thinking=False" in source
+
+
+def test_team_coder_scene_gets_the_eq_helper_it_forgot_to_paste():
+    from aetherlab.services.agent_team import _ensure_eq_helper
+    from aetherlab.services.scene_validation import validate_scene
+
+    code = ('"""Concept."""\nfrom manim import *\n\nclass AetherLabScene(Scene):\n'
+            '    def construct(self):\n        t = eq("E=mc^2", "E = mc2")\n'
+            '        self.play(Write(t))\n        self.play(t.animate.shift(UP))\n')
+    fixed = _ensure_eq_helper(code)
+    assert "def eq(tex, plain" in fixed and fixed.index("def eq") < fixed.index("class AetherLabScene")
+    assert not [i for i in validate_scene(fixed)[1] if "'eq'" in i]
+    assert _ensure_eq_helper(fixed) == fixed            # idempotent
+
+
+def test_cloud_failure_text_is_the_traceback_not_post_job_git_noise():
+    from aetherlab.services.render_backend import _render_error_excerpt
+
+    log = "".join(
+        f"render\tRender scene\t2026-10-01T07:14:{i:02d}.1Z {line}\n"
+        for i, line in enumerate([
+            "Animation 0: FadeIn(Rectangle)",
+            "Traceback (most recent call last)",
+            "  scene.py line 77 interpolate_color('#7F1D1D', '#F97316', t)",
+            "AttributeError: 'str' object has no attribute '_internal_space'",
+            "##[error]Process completed with exit code 1.",
+            "[command]/usr/bin/git config --global --add safe.directory /work",
+            "Cleaning up orphan processes",
+        ])
+    )
+    excerpt = _render_error_excerpt(log)
+    assert excerpt.startswith("Traceback") and "AttributeError" in excerpt
+    assert "git config" not in excerpt and "2026-10-01T" not in excerpt

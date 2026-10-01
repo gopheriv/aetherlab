@@ -65,6 +65,33 @@ def _workflow_elapsed_metrics(run: dict) -> dict[str, float]:
     return metrics
 
 
+# "render<TAB>Render scene<TAB>2026-10-01T07:14:11Z " - job/step columns and
+# the timestamp GitHub prefixes to every log line.
+_GH_TIMESTAMP_RE = re.compile(r"(?m)^(?:[^\t\n]*\t){0,2}\d{4}-\d\d-\d\dT[\d:.]+Z ?")
+
+
+def _render_error_excerpt(log_text: str, limit: int = 8000) -> str:
+    """The part of a GitHub Actions log that explains a failed render.
+
+    The job log ends with GitHub's post-job cleanup (git config, artifact
+    upload), so its tail hid the traceback from repair and the agent team's
+    Reviewer (live 2026-10-01: an AttributeError arrived as git noise). Prefer
+    the last Python traceback, then the last exception line, then the tail.
+    """
+    text = _GH_TIMESTAMP_RE.sub("", str(log_text or ""))
+    start = text.rfind("Traceback (most recent call last)")
+    if start < 0:
+        match = None
+        for match in re.finditer(r"(?m)^.*\b\w+(?:Error|Exception)\b:.*$", text):
+            pass
+        if match is None:
+            return text[-limit:]
+        start = max(0, text.rfind("\n", 0, max(0, match.start() - 2500)))
+    end = text.find("##[error]", start)
+    excerpt = text[start:end if end > start else None].strip()
+    return excerpt[-limit:]
+
+
 def _parse_runner_metrics(log_text: str) -> dict[str, float | str]:
     """Read numeric/version markers despite GitHub's per-line log prefixes."""
     metrics: dict[str, float | str] = {}
@@ -499,7 +526,10 @@ class CloudRenderBackend:
                     if conclusion == "success":
                         break
                     log_text = await asyncio.to_thread(client.download_run_logs, int(run["id"]))
-                    stderr = log_text[-8000:] if log_text else f"GitHub Actions concluded {conclusion or 'failure'}."
+                    stderr = (
+                        _render_error_excerpt(log_text)
+                        if log_text else f"GitHub Actions concluded {conclusion or 'failure'}."
+                    )
                     kind = _classify_failure(stderr)
                     dump = _dump_render_failure(settings.data_dir, scene.code, stderr, kind)
                     note = f"Cloud render failed [{kind}]: {stderr[-8000:]}"
