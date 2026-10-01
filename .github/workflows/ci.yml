@@ -32,7 +32,11 @@ jobs:
       - name: Run behavioural feature suite
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python test_features.py
+          # A native crash (Qt abort, access violation) ends the process with no
+          # Python traceback; faulthandler prints every thread's stack instead.
+          PYTHONFAULTHANDLER: "1"
+          PYTHONUNBUFFERED: "1"
+        run: python -X faulthandler test_features.py
 
       - name: Regenerate feature tracker
         run: python build_feature_tracker.py
