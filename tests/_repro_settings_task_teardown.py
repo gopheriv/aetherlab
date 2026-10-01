@@ -43,8 +43,12 @@ def main() -> int:
     for _round in range(3):
         window = MainWindow(settings)
         window._start_export_task("Exporting…", lambda _cancel, _progress: "exported")
-        window._export_task.wait(3.0)
-        sip.delete(window)
+        window._export_task.wait(3.0)    # export done: its signals are queued
+        # Close it the way the app does: closeEvent joins the window's own
+        # threads (e.g. the Ollama probe). Destroying a window with a running
+        # QThread aborts by design, which is not the race under test.
+        window.close()
+        sip.delete(window)               # gone before the queued signals arrive
         app.processEvents()
     print("survived", flush=True)
     return 0

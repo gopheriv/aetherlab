@@ -819,7 +819,9 @@ async def write_study_document(request: Any, solver: Any, rag: Any, settings: An
         fallback = _matplotlib_pdf(request, solver, citations, figure, out_dir / "document.pdf", checks)
     except Exception:  # noqa: BLE001
         fallback = None
-    why = f"pdflatex failed ({error})"
+    # Keep the authoring note (for example "Model authoring unavailable"): a
+    # missing pdflatex used to overwrite it, hiding why the content is generic.
+    why = (note + " " if note else "") + f"pdflatex failed ({error})"
     if fallback is not None:
         return StudyDocResult(mode, tex_path, fallback, "matplotlib", authored_by, repaired, checks,
                               f"{why}; rendered a simplified PDF instead.")
