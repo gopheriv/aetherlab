@@ -439,3 +439,29 @@ Decisions recorded with evidence:
 - `vision_model = qwen3.7-plus` does not exist on the MiniMax endpoint. The critic falls back to
   MiniMax-M3 (which accepts images), so this works; setting `vision_model` to `MiniMax-M3` removes
   the one wasted call per session.
+
+## Preflight: dry-run AI scenes before the slow render (2026-10-01)
+
+Not a defect fix but a guard against a defect class seen all week. Runtime crashes (a hex string passed
+to `interpolate_color`, zero-length waits, invented names) and geometry leaving the screen (the 6000 K
+curve at y = 5.96 in blackbody run 6, a formula placed at y = 55) passed every static gate and cost a full
+render (1–5 min locally, ~3.5 min round trip on cloud) before repair could start. The vision critic saw
+geometry only if one of its 6 sampled frames landed on it.
+
+`services/scene_preflight.py` and `_preflight_runner.py` run the scene with Manim's dry run at 2 fps in a
+child process before the first draft render of an AI scene. Built-in and template scenes skip it.
+
+| Scene (real, from this week) | Preflight | Without it |
+|---|---|---|
+| hex-colour crash (team run) | caught in ~5–11 s | crashed after a 2.5 min cloud render |
+| `wait(0.0)` crash (blackbody run 4) | caught in ~4–14 s | crashed after the render |
+| blackbody run 6 (rendered, critic 4/10) | 4 off-frame objects found, incl. the curve and a formula at y=55 | shipped |
+| lagged-group scene | exact duration 3.75 s | static estimate counted 1 s per group |
+
+A crash goes to the existing repair with the real traceback and is re-checked; if it cannot be fixed, the
+original still renders. Off-frame objects get one layout repair, kept only if the re-check shows fewer.
+The preflight and the local render share a TeX cache keyed by the code, so the render reuses the formulas
+the preflight compiled (warm preflight ~15 s; cold ~35–50 s, mostly LaTeX the render no longer repeats).
+Concurrent tournament candidates never share a cache folder. Switch it off with `AETHERLAB_PREFLIGHT=0`.
+Tests: `tests/test_scene_preflight.py` (real dry runs plus pipeline branches). The live end-to-end check was
+stopped by low system memory before the render and is still to do.
