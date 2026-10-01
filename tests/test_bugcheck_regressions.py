@@ -646,3 +646,32 @@ def test_cloud_failure_text_is_the_traceback_not_post_job_git_noise():
     excerpt = _render_error_excerpt(log)
     assert excerpt.startswith("Traceback") and "AttributeError" in excerpt
     assert "git config" not in excerpt and "2026-10-01T" not in excerpt
+
+
+def test_settings_task_signal_after_dialog_teardown_does_not_crash():
+    # CI (windows-latest, Python 3.12) died with an access violation inside a
+    # SettingsDialog lambda slot during F157: a finished signal queued from a
+    # destroyed dialog ran against its deleted button. Bound-method slots are
+    # dropped with the dialog. Run in a child so a regression fails this test
+    # instead of killing the whole session.
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).with_name("_repro_settings_task_teardown.py")
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=120, env=env)
+    assert result.returncode == 0 and "survived" in result.stdout, (
+        result.returncode, result.stdout[-500:], result.stderr[-1500:])
+
+
+def test_settings_dialog_task_signals_have_no_lambda_slots():
+    import inspect
+    import re
+
+    from aetherlab.ui.main_window import SettingsDialog
+
+    source = inspect.getsource(SettingsDialog)
+    assert not re.search(r"_task\.(finished|failed|succeeded|progress)\.connect\(\s*lambda", source)

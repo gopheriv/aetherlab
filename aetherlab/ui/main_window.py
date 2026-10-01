@@ -555,13 +555,20 @@ class SettingsDialog(QtWidgets.QDialog):
             lambda _cancel, _progress: test_connection(probe)
         )
         self._provider_task.succeeded.connect(self._on_provider_test_result)
-        self._provider_task.failed.connect(
-            lambda message: self._on_provider_test_result(
-                (False, f"Connection failed: {message}")
-            )
-        )
-        self._provider_task.finished.connect(lambda: self._test_btn.setEnabled(True))
+        # Bound methods, not lambdas: PyQt drops a bound-method connection when
+        # the dialog is destroyed, so a finished signal still queued from a
+        # closed dialog can never run against its deleted widgets. A lambda has
+        # no receiver; one queued from an earlier dialog crashed the CI runner
+        # with an access violation (F157, 2026-10-01).
+        self._provider_task.failed.connect(self._on_provider_test_failed)
+        self._provider_task.finished.connect(self._on_provider_task_finished)
         self._provider_task.start()
+
+    def _on_provider_test_failed(self, message: str) -> None:
+        self._on_provider_test_result((False, f"Connection failed: {message}"))
+
+    def _on_provider_task_finished(self) -> None:
+        self._test_btn.setEnabled(True)
 
     def _on_provider_test_result(self, result: object) -> None:
         ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
@@ -632,13 +639,15 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._cloud_task = BackgroundTask(setup_cloud)
         self._cloud_task.succeeded.connect(self._on_cloud_test_result)
-        self._cloud_task.failed.connect(
-            lambda message: self._on_cloud_test_result(
-                (False, f"Cloud setup failed: {message}")
-            )
-        )
-        self._cloud_task.finished.connect(lambda: self._cloud_test_btn.setEnabled(True))
+        self._cloud_task.failed.connect(self._on_cloud_test_failed)
+        self._cloud_task.finished.connect(self._on_cloud_task_finished)
         self._cloud_task.start()
+
+    def _on_cloud_test_failed(self, message: str) -> None:
+        self._on_cloud_test_result((False, f"Cloud setup failed: {message}"))
+
+    def _on_cloud_task_finished(self) -> None:
+        self._cloud_test_btn.setEnabled(True)
 
     def _on_cloud_test_result(self, result: object) -> None:
         ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
@@ -707,8 +716,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._github_task.progress.connect(self._on_github_device_code)
         self._github_task.succeeded.connect(self._on_github_token)
         self._github_task.failed.connect(self._on_github_login_failed)
-        self._github_task.finished.connect(lambda: self._get_token_btn.setEnabled(True))
+        self._github_task.finished.connect(self._on_github_task_finished)
         self._github_task.start()
+
+    def _on_github_task_finished(self) -> None:
+        self._get_token_btn.setEnabled(True)
 
     def _on_github_device_code(self, payload: object) -> None:
         import webbrowser
