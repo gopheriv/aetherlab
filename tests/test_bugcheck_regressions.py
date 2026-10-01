@@ -667,11 +667,14 @@ def test_settings_task_signal_after_dialog_teardown_does_not_crash():
         result.returncode, result.stdout[-500:], result.stderr[-1500:])
 
 
-def test_settings_dialog_task_signals_have_no_lambda_slots():
+def test_background_task_and_worker_signals_have_no_lambda_slots():
+    # Signals from worker threads are queued and can arrive after the window
+    # or dialog is gone; only bound-method slots are dropped with it.
     import inspect
     import re
 
-    from aetherlab.ui.main_window import SettingsDialog
+    from aetherlab.ui import main_window
 
-    source = inspect.getsource(SettingsDialog)
-    assert not re.search(r"_task\.(finished|failed|succeeded|progress)\.connect\(\s*lambda", source)
+    source = inspect.getsource(main_window)
+    assert not re.search(
+        r"(task|_task|worker)\.(finished|failed|succeeded|progress)\.connect\(\s*lambda", source)

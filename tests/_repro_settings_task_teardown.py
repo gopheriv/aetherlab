@@ -35,6 +35,17 @@ def main() -> int:
         dialog._cloud_task.wait(3.0)      # worker done: succeeded/finished are queued
         sip.delete(dialog)                # destroy the C++ dialog before delivery
         app.processEvents()               # deliver the queued signals
+    print("settings dialog survived", flush=True)
+
+    # Same race on the main window's export task (the second crash site on CI).
+    from aetherlab.ui.main_window import MainWindow
+
+    for _round in range(3):
+        window = MainWindow(settings)
+        window._start_export_task("Exporting…", lambda _cancel, _progress: "exported")
+        window._export_task.wait(3.0)
+        sip.delete(window)
+        app.processEvents()
     print("survived", flush=True)
     return 0
 

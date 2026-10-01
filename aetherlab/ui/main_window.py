@@ -1150,19 +1150,28 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         task = BackgroundTask(operation)
         self._export_task = task
-        task.succeeded.connect(
-            lambda result: self.statusBar().showMessage(str(result)) if result else None
-        )
-        task.failed.connect(
-            lambda message: self.statusBar().showMessage(f"Export failed: {message}")
-        )
-        task.finished.connect(lambda: self._finish_export_task(task))
+        # Bound methods, not lambdas: an export can finish after its window is
+        # gone (closed, or torn down by a test), and a lambda slot then runs
+        # against the deleted window - an access violation on Windows (CI,
+        # F157, 2026-10-01). PyQt drops bound-method slots with the window.
+        task.succeeded.connect(self._on_export_succeeded)
+        task.failed.connect(self._on_export_failed)
+        task.finished.connect(self._on_export_finished)
         self.statusBar().showMessage(status)
         task.start()
         return True
 
-    def _finish_export_task(self, task: BackgroundTask) -> None:
-        if self._export_task is task:
+    def _on_export_succeeded(self, result: object) -> None:
+        if result:
+            self.statusBar().showMessage(str(result))
+
+    def _on_export_failed(self, message: str) -> None:
+        self.statusBar().showMessage(f"Export failed: {message}")
+
+    def _on_export_finished(self) -> None:
+        # The finished task is no longer running; a newer export that already
+        # started keeps its slot.
+        if self._export_task is not None and not self._export_task.is_running:
             self._export_task = None
 
     def _export_latex(self) -> None:
@@ -1467,7 +1476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lesson_worker.progress.connect(self._on_lesson_progress)
         self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
         self.lesson_worker.failure.connect(self.on_failure)
-        self.lesson_worker.finished.connect(lambda: self.command_bar.set_busy(False))
+        self.lesson_worker.finished.connect(self._on_lesson_worker_finished)
 
         self.command_bar.set_busy(True)
         self.toast.hide()
@@ -1486,6 +1495,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("No lesson to regenerate yet.")
             return
         self.start_lesson(topic, regenerate=True)
+
+    def _on_lesson_worker_finished(self) -> None:
+        # Bound method (not a lambda) so a QThread finishing after the window
+        # is destroyed cannot touch the deleted command bar.
+        self.command_bar.set_busy(False)
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
