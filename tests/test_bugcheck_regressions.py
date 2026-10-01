@@ -678,3 +678,38 @@ def test_background_task_and_worker_signals_have_no_lambda_slots():
     source = inspect.getsource(main_window)
     assert not re.search(
         r"(task|_task|worker)\.(finished|failed|succeeded|progress)\.connect\(\s*lambda", source)
+
+
+def test_ffmpeg_failure_log_keeps_the_error_lines():
+    from aetherlab.services.assembly import _ffmpeg_error_summary
+
+    stderr = (
+        b"Input #0, mov, from 'clip0.mp4':\n"
+        b"[out#0/mp4 @ 0001] Error opening output produced.mp4: Permission denied\n"
+        + b"[libx264 @ 0002] ref B L0: 71.0% 26.8% 2.2%\n" * 40
+        + b"Conversion failed!\n"
+    )
+    summary = _ffmpeg_error_summary(stderr)
+    assert summary.startswith("[out#0/mp4 @ 0001] Error opening output produced.mp4: Permission denied")
+    assert "Conversion failed!" in summary            # the tail is still kept
+
+
+def test_produced_lesson_retries_once_before_plain_concat(monkeypatch, tmp_path):
+    import asyncio
+
+    from aetherlab.services import assembly
+
+    calls = []
+
+    async def flaky_produced(*_args, **_kwargs):
+        calls.append(1)
+        return None if len(calls) == 1 else (tmp_path / "produced.mp4", [4.7, 7.9])
+
+    monkeypatch.setattr(assembly, "_assemble_produced", flaky_produced)
+    monkeypatch.setattr(assembly, "_ffmpeg_exe", lambda: "ffmpeg", raising=False)
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    out, offsets = asyncio.run(assembly.assemble_lesson(
+        [clip, clip], tmp_path / "produced.mp4", lesson_title="T",
+        chapter_titles=["a", "b"], return_offsets=True))
+    assert len(calls) == 2 and offsets == [4.7, 7.9]
