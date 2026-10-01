@@ -1502,7 +1502,17 @@ def t_f107():
     minimax_sg._client = _Client()
     asyncio.run(minimax_sg._generate_remote(
         request, _solver(), _rag(), "AetherLabScene"))
-    assert len(calls) == 2 and all("extra_body" not in call for call in calls), calls
+    # Scene calls default to thinking OFF for MiniMax: with it on, M3 spent the
+    # whole max_tokens budget reasoning and returned no code (live 2026-09-30).
+    assert len(calls) == 2 and all(
+        call.get("extra_body") == {"thinking": {"type": "disabled"}} for call in calls
+    ), calls
+    assert calls[0]["max_tokens"] == 16384, "reasoning storyboard needs room beyond 4096"
+    calls.clear()
+    opted_in = SceneGenerator(minimax, minimax_thinking=True)
+    opted_in._client = _Client()
+    asyncio.run(opted_in._generate_remote(request, _solver(), _rag(), "AetherLabScene"))
+    assert all(call.get("extra_body") == {"thinking": {"type": "enabled"}} for call in calls), calls
     assert is_thinking_only_model("qwen3.7-max-preview")
     assert "qwen3-coder-plus" in model_codegen_warning("qwen3.7-plus", 60)
     assert inspect.getsource(SceneGenerator).count("codegen_request_kwargs") >= 5

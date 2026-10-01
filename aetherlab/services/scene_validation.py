@@ -323,6 +323,15 @@ def _nearest_color_name(name: str, available: set[str]) -> str | None:
     return None
 
 
+# Spelled-out diagonals models invent for Manim's UR/UL/DR/DL (live: UP_RIGHT).
+_DIRECTION_ALIASES = {
+    "UP_RIGHT": "UR", "RIGHT_UP": "UR", "UPPER_RIGHT": "UR",
+    "UP_LEFT": "UL", "LEFT_UP": "UL", "UPPER_LEFT": "UL",
+    "DOWN_RIGHT": "DR", "RIGHT_DOWN": "DR", "LOWER_RIGHT": "DR",
+    "DOWN_LEFT": "DL", "LEFT_DOWN": "DL", "LOWER_LEFT": "DL",
+}
+
+
 def repair_unknown_color_constants(code: str) -> tuple[str, dict[str, str]]:
     """Map invented all-caps color identifiers to real Manim constants.
 
@@ -347,7 +356,7 @@ def repair_unknown_color_constants(code: str) -> tuple[str, dict[str, str]]:
             and node.id not in known
         ):
             continue
-        replacement = _nearest_color_name(node.id, available)
+        replacement = _DIRECTION_ALIASES.get(node.id) or _nearest_color_name(node.id, available)
         if replacement:
             replacements[node.id] = replacement
     if not replacements:
@@ -781,6 +790,92 @@ def _needs_math_mode(tex: str) -> bool:
     )
 
 
+def _nonpositive_literal(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, (int, float))
+        and not isinstance(node.value, bool)
+        and node.value <= 0
+    )
+
+
+def _self_timed_call(node: ast.AST, name: str) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == name
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+    )
+
+
+def _wait_duration_node(call: ast.Call) -> ast.AST | None:
+    if call.args:
+        return call.args[0]
+    return next((kw.value for kw in call.keywords if kw.arg == "duration"), None)
+
+
+def repair_zero_waits(code: str) -> tuple[str, int]:
+    """Drop ``self.wait(0)`` statements: a no-op that Manim 0.21 rejects.
+
+    Models write ``self.wait(0.0)`` to mark an empty hold between beats; the
+    render then dies with "wait() has a duration of 0 <= 0 seconds". Removing
+    the statement changes no timing. A block left empty gets ``pass``.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return code, 0
+    lines = code.splitlines(keepends=True)
+    removals: list[tuple[int, int, bool]] = []
+    for parent in ast.walk(tree):
+        for field_name in ("body", "orelse", "finalbody"):
+            block = getattr(parent, field_name, None)
+            if not isinstance(block, list):
+                continue
+            zero = [
+                statement for statement in block
+                if isinstance(statement, ast.Expr)
+                and _self_timed_call(statement.value, "wait")
+                and _nonpositive_literal(_wait_duration_node(statement.value))
+            ]
+            for statement in zero:
+                removals.append((
+                    statement.lineno, statement.end_lineno or statement.lineno,
+                    len(zero) == len(block) and statement is zero[0],
+                ))
+    if not removals:
+        return code, 0
+    for start, end, needs_pass in sorted(removals, reverse=True):
+        indent = lines[start - 1][: len(lines[start - 1]) - len(lines[start - 1].lstrip())]
+        newline = "\r\n" if lines[start - 1].endswith("\r\n") else "\n"
+        lines[start - 1:end] = [f"{indent}pass{newline}"] if needs_pass else []
+    repaired = "".join(lines)
+    return (repaired, len(removals)) if _parse(repaired) is not None else (code, 0)
+
+
+def lint_nonpositive_durations(code: str) -> list[str]:
+    """Literal ``run_time``/``wait`` durations <= 0 crash the render (Manim 0.21)."""
+    tree = _parse(code)
+    if tree is None:
+        return []
+    issues: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _self_timed_call(node, "wait") and _nonpositive_literal(_wait_duration_node(node)):
+            issues.append(
+                f"self.wait() with a duration <= 0 on line {node.lineno}; Manim raises "
+                "ValueError at render. Remove it or use a positive hold."
+            )
+        for keyword in node.keywords:
+            if keyword.arg == "run_time" and _nonpositive_literal(keyword.value):
+                issues.append(
+                    f"run_time <= 0 on line {node.lineno}; Manim raises ValueError at "
+                    "render. Use a positive run_time."
+                )
+    return issues
+
+
 def repair_text_mode_math(code: str) -> tuple[str, list[str]]:
     """Promote ``Tex("<math>")`` to ``MathTex`` so text-mode math can't crash.
 
@@ -1132,6 +1227,51 @@ def _text_size_warnings(tree: ast.Module, minimum_font_size: float = 20.0) -> li
     return warnings
 
 
+_REDRAWN_TEXT_TYPES = frozenset({
+    "DecimalNumber", "Integer", "Variable", "Text", "MarkupText", "MathTex", "Tex",
+})
+_POSITIONING_METHODS = frozenset({
+    "move_to", "next_to", "to_edge", "to_corner", "shift", "align_to",
+    "set_x", "set_y", "set_z", "center", "arrange", "match_x", "match_y",
+})
+
+
+def _redraw_position_warnings(tree: ast.Module) -> list[str]:
+    """Flag always_redraw(lambda: Text/DecimalNumber(...)) that never positions itself.
+
+    always_redraw rebuilds the mobject from scratch every frame, at the origin.
+    Placing the redraw outside the lambda (arrange/next_to on the returned
+    object) only moves the first frame, so the live number jumps to the centre
+    of the screen and its label is left with a blank gap.
+    """
+    warnings: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and _call_name(node.func).split(".")[-1] == "always_redraw"
+            and node.args
+            and isinstance(node.args[0], ast.Lambda)
+        ):
+            continue
+        body = node.args[0].body
+        built = [
+            _call_name(child.func).split(".")[-1]
+            for child in ast.walk(body)
+            if isinstance(child, ast.Call)
+        ]
+        if not any(name in _REDRAWN_TEXT_TYPES for name in built):
+            continue
+        if any(name in _POSITIONING_METHODS for name in built):
+            continue
+        warnings.append(
+            f"[HYGIENE:REDRAW_POSITION] always_redraw at line {node.lineno} rebuilds a "
+            "text/number mobject at the screen centre every frame; position it inside "
+            "the lambda (for example `.next_to(label, RIGHT)`), or use a DecimalNumber "
+            "with add_updater(lambda m: m.set_value(tracker.get_value())) instead."
+        )
+    return warnings
+
+
 def _is_stage_clear(node: ast.Call) -> bool:
     """True when the whole stage is cleared or gathered into one managed group.
 
@@ -1158,6 +1298,7 @@ def scene_hygiene_warnings(code: str) -> list[str]:
     warnings: list[str] = []
     warnings.extend(_placement_warnings(code, tree))
     warnings.extend(_text_size_warnings(tree))
+    warnings.extend(_redraw_position_warnings(tree))
 
     # A whole-stage clear or gather (FadeOut/Group(*self.mobjects)) manages
     # everything introduced before it, so only introductions after it count.
@@ -1374,15 +1515,27 @@ def check_timeline_runtime(
             elapsed += beat_duration
             continue
         actual_end = elapsed + beat_duration
+        # Judge each beat by its OWN length, plus a looser bound on how far the
+        # running clock has drifted. Comparing absolute boundaries at 0.35 s
+        # made one short intro shift fail every later beat; live runs then spent
+        # four repair calls per attempt chasing a constant offset.
+        scheduled = max(0.0, expected_end - expected_start)
+        length_tolerance = max(tolerance_s, 0.15 * scheduled)
+        try:
+            total = float(events[-1].get("end_s") or expected_end)
+        except (TypeError, ValueError):
+            total = expected_end
+        drift_tolerance = max(1.5, 0.08 * total)
         if (
-            abs(elapsed - expected_start) > tolerance_s
-            or abs(actual_end - expected_end) > tolerance_s
+            abs(beat_duration - scheduled) > length_tolerance
+            or abs(actual_end - expected_end) > drift_tolerance
         ):
             issues.append(
                 f"[TIMING:BEAT_RUNTIME] {event['id']} action budget spans "
-                f"{elapsed:.2f}-{actual_end:.2f}s; schedule requires "
-                f"{expected_start:.2f}-{expected_end:.2f}s (tolerance "
-                f"{tolerance_s:.2f}s). Adjust this beat's animation or hold times."
+                f"{elapsed:.2f}-{actual_end:.2f}s ({beat_duration:.2f}s); schedule "
+                f"requires {expected_start:.2f}-{expected_end:.2f}s ({scheduled:.2f}s, "
+                f"tolerance {length_tolerance:.2f}s per beat, {drift_tolerance:.2f}s "
+                "drift). Adjust this beat's animation or hold times."
             )
         elapsed = actual_end
     return issues
@@ -1526,6 +1679,7 @@ def validate_scene(
         + lint_manim_names(code)
         + lint_constructor_kwargs(code)
         + lint_manim_method_kwargs(code)
+        + lint_nonpositive_durations(code)
         + check_latex_strings(code)
         + check_timeline_markers(code, timeline)
         + check_timeline_runtime(code, timeline)

@@ -216,3 +216,335 @@ def test_bug72_wikibooks_citations_are_labelled_and_filtered():
         [citation, "Taekwondo, Wikibooks: https://en.wikibooks.org/wiki/Taekwondo"],
         {"theory": "projectile motion"}, ProblemRequest(prompt="A ball is kicked."))
     assert kept == [citation]
+
+
+# ── live-run findings (2026-09-30 mission) ──────────────────────────────────
+
+_ADVISORY_ONLY_SCENE = '''from manim import *
+class AetherLabScene(Scene):
+    def construct(self):
+        glow = Circle(color=YELLOW).move_to(LEFT * 2)
+        halo = Square(color=BLUE).move_to(LEFT * 2)
+        self.play(Create(glow), run_time=2)
+        self.play(Create(halo), glow.animate.shift(UP), run_time=2)
+        self.play(halo.animate.rotate(PI / 3), run_time=2)
+        self.wait(1)
+'''
+
+
+class _FakeGenerator:
+    """Stands in for SceneGenerator: fixed code, repair returns a canned reply."""
+
+    repaired_code: str | None = None
+
+    def __init__(self, settings, **_kwargs):
+        self._last_storyboard = None
+        self._last_scene_spec = None
+        self._last_fallback_reason = ""
+
+    async def generate(self, request, solver, rag, class_name):
+        return type(self).code
+
+    async def repair(self, code, error, class_name, *, full_scene=False):
+        return type(self).repaired_code or code
+
+
+def _generate_with(monkeypatch, code, repaired=None):
+    import asyncio
+
+    from aetherlab.core.models import ProblemRequest, RagResult
+    from aetherlab.services import manim_runtime
+
+    fake = type("Fake", (_FakeGenerator,), {"code": code, "repaired_code": repaired})
+    monkeypatch.setattr(manim_runtime, "SceneGenerator", fake)
+    runtime = manim_runtime.ManimRuntime()
+    monkeypatch.setattr(runtime, "_compose_curated", lambda *a, **k: None)
+    settings = SimpleNamespace(openai_api_key="sk-test", render_mode="local", data_dir=None)
+    return asyncio.run(runtime.generate_scene_async(
+        ProblemRequest(prompt="Explain blackbody radiation", duration_target_s=7.0),
+        _solver("Planck's law", ["blackbody"], {"T": 5800.0}),
+        RagResult(keywords=[], hits=[], backend="none"),
+        settings,
+    ))
+
+
+def test_advisory_only_ai_scene_ships_instead_of_the_template(monkeypatch):
+    # Live run 2: an AI scene whose only remaining finding was a heuristic
+    # [HYGIENE:OVERLAP] was discarded for the 5-second domain template.
+    bundle = _generate_with(monkeypatch, _ADVISORY_ONLY_SCENE)
+    assert bundle.used_fallback is False, bundle.fallback_reason
+    assert bundle.code == _ADVISORY_ONLY_SCENE
+    assert any("Shipping the best AI scene with advisory issues" in d
+               for d in bundle.diagnostics), bundle.diagnostics
+
+
+def test_crash_level_lint_goes_to_repair_not_straight_to_the_template(monkeypatch):
+    broken = _ADVISORY_ONLY_SCENE.replace(
+        "halo = Square(color=BLUE).move_to(LEFT * 2)",
+        "halo = Diamond(color=BLUE).move_to(RIGHT * 2)",
+    )
+    fixed = broken.replace("Diamond(color=BLUE)", "Square(color=BLUE).rotate(PI / 4)")
+    bundle = _generate_with(monkeypatch, broken, repaired=fixed)
+    assert bundle.used_fallback is False, bundle.diagnostics
+    assert "Diamond" not in bundle.code and "rotate(PI / 4)" in bundle.code
+
+
+def test_crash_level_scene_never_ships(monkeypatch):
+    broken = _ADVISORY_ONLY_SCENE.replace("Square(", "Diamond(")
+    bundle = _generate_with(monkeypatch, broken)      # repair returns it unchanged
+    assert bundle.used_fallback is True
+    assert "Diamond" not in bundle.code
+
+
+def test_minimax_scene_calls_default_to_thinking_off():
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    minimax = SimpleNamespace(llm_model="MiniMax-M3")
+    assert SceneGenerator(minimax)._minimax_thinking is False
+    assert SceneGenerator(minimax, minimax_thinking=True)._minimax_thinking is True
+
+
+def test_zero_length_waits_are_removed_and_nonpositive_durations_linted():
+    from aetherlab.services.scene_validation import (
+        lint_nonpositive_durations,
+        repair_zero_waits,
+    )
+
+    code = (
+        "class S(Scene):\n    def construct(self):\n"
+        "        self.play(Create(c), run_time=1)\n        self.wait(0.0)\n"
+        "        if flag:\n            self.wait(0)\n        self.wait(1)\n"
+    )
+    assert len(lint_nonpositive_durations(code)) == 2
+    fixed, dropped = repair_zero_waits(code)
+    assert dropped == 2 and lint_nonpositive_durations(fixed) == []
+    assert "            pass\n" in fixed and "self.wait(1)" in fixed
+    assert lint_nonpositive_durations("self.play(A(), run_time=0)\n")
+
+
+def test_failure_classifier_ignores_dvisvgm_info_lines():
+    from aetherlab.services.manim_runtime import _classify_failure
+
+    log = (
+        "INFO Writing '\\lambda_{max}' to media/Tex/abc.tex\n"
+        "INFO dvisvgm media/Tex/abc.dvi\n" * 3
+        + "ValueError: AetherLabScene.wait() has a duration of 0 <= 0 seconds"
+    )
+    assert _classify_failure(log) == "invalid-value"
+    assert _classify_failure("! Undefined control sequence \foo") == "latex"
+
+
+def test_repair_of_an_accepted_scene_is_not_blocked_by_advisory_findings():
+    from aetherlab.services.manim_runtime import _blocking_scene_issues
+
+    timeline = [{"id": "A1.B1", "start_s": 0.0, "end_s": 10.0}]
+    drifted = (
+        "from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n"
+        "        c = Circle()\n        # BEAT A1.B1 | 0.00-10.00 s\n"
+        "        self.play(c.animate.shift(UP), run_time=2)\n        self.wait(1)\n"
+    )
+    ok, issues = _blocking_scene_issues(drifted, timeline)
+    assert ok and issues == []
+    ok, issues = _blocking_scene_issues(drifted.replace("Circle()", "Diamond()"), timeline)
+    assert not ok and any("Diamond" in issue for issue in issues)
+
+
+def test_redrawn_readout_without_position_is_flagged_for_layout_repair():
+    from aetherlab.services.manim_runtime import _LAYOUT_BLOCKERS
+    from aetherlab.services.scene_validation import scene_hygiene_warnings
+
+    unplaced = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        t = ValueTracker(3000)\n"
+        "        value = always_redraw(lambda: DecimalNumber(t.get_value()).scale(0.3))\n"
+        "        group = VGroup(Text('T ='), value).arrange(RIGHT)\n"
+    )
+    placed = unplaced.replace(".scale(0.3))", ".scale(0.3).next_to(label, RIGHT))")
+    flagged = [w for w in scene_hygiene_warnings(unplaced) if w.startswith(_LAYOUT_BLOCKERS)]
+    assert flagged and "REDRAW_POSITION" in flagged[0]
+    assert not [w for w in scene_hygiene_warnings(placed) if "REDRAW_POSITION" in w]
+
+
+def test_critic_requests_disable_minimax_thinking(monkeypatch, tmp_path):
+    import asyncio
+
+    from aetherlab.services import scene_critic
+
+    calls = []
+
+    class _Resp:
+        choices = [SimpleNamespace(message=SimpleNamespace(
+            content='{"verdict": "ship", "score": 8}'))]
+
+    class _Client:
+        chat = SimpleNamespace(completions=SimpleNamespace(create=None))
+
+    async def create(**kwargs):
+        calls.append(kwargs)
+        return _Resp()
+
+    _Client.chat.completions.create = create
+    frame = tmp_path / "frame.png"
+    frame.write_bytes(b"png")
+    monkeypatch.setattr(scene_critic, "extract_frames", lambda *_a, **_k: [frame])
+    monkeypatch.setattr("aetherlab.services.llm_client.make_client", lambda *_a, **_k: _Client())
+    settings = SimpleNamespace(vision_model="MiniMax-M3", llm_model="MiniMax-M3",
+                               openai_api_key="sk-test")
+    result = asyncio.run(scene_critic.critique_video(str(tmp_path / "v.mp4"), "brief", settings))
+    assert result.verdict == "ship"
+    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_beat_timing_judges_beat_length_not_a_constant_intro_offset():
+    code = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        self.play(FadeIn(t), run_time=0.6)\n"
+        "        # BEAT A1.B1 | 0.00-2.73 s\n        self.play(Create(a), run_time=2.73)\n"
+        "        # BEAT A1.B2 | 2.73-5.00 s\n        self.play(Create(b), run_time=2.27)\n"
+    )
+    timeline = [{"id": "A1.B1", "start_s": 0.0, "end_s": 2.73},
+                {"id": "A1.B2", "start_s": 2.73, "end_s": 5.0}]
+    assert check_timeline_runtime(code, timeline) == []
+    short = check_timeline_runtime(code.replace("run_time=2.27", "run_time=0.5"), timeline)
+    assert short and short[0].startswith("[TIMING:BEAT_RUNTIME] A1.B2")
+
+
+def _revision_loop(monkeypatch, scores, passes, tmp_path):
+    """Drive render_scene_with_repair with scripted critic scores."""
+    import asyncio
+    from dataclasses import replace
+
+    from aetherlab.services import scene_critic
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_critic import Critique
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"v")
+    queue = list(scores)
+    calls = {"critique": 0, "render": 0}
+
+    async def fake_critique(*_a, **_k):
+        calls["critique"] += 1
+        score = queue.pop(0)
+        return Critique(verdict="revise" if score < 7 else "ship", score=score, issues=["x"])
+
+    async def fake_revise(self, code, critique, class_name):
+        return ("from manim import *\nclass AetherLabScene(Scene):\n"
+                "    def construct(self):\n        dot = Dot(color=RED)\n"
+                "        self.play(Create(dot))\n        self.play(dot.animate.shift(RIGHT))\n")
+
+    async def fake_render(scene, *_a, **_k):
+        calls["render"] += 1
+        return replace(scene, status="rendered", video_path=str(video))
+
+    monkeypatch.setattr(scene_critic, "critique_video", fake_critique)
+    monkeypatch.setattr(SceneGenerator, "revise", fake_revise)
+    settings = SimpleNamespace(
+        openai_api_key="sk-test", vision_model="v", llm_model="m", render_mode="local",
+        visual_critic_max_passes=passes, visual_critic_keyframes=6, data_dir=tmp_path,
+        narration_enabled=False, tts_voice="", tts_rate="",
+    )
+    runtime = ManimRuntime(settings)
+    monkeypatch.setattr(runtime, "_render_once", fake_render)
+    original = ("from manim import *\nclass AetherLabScene(Scene):\n"
+                "    def construct(self):\n        self.play(Create(Dot()))\n")
+    start = SceneBundle("AetherLabScene", original, "manim-community", "rendered",
+                        video_path=str(video))
+    result = asyncio.run(runtime.render_scene_with_repair(start, settings, quality="l"))
+    return result, calls, original
+
+
+def test_worse_revision_is_reverted_and_revising_stops(monkeypatch, tmp_path):
+    result, calls, original = _revision_loop(monkeypatch, [4.0, 3.0], 3, tmp_path)
+    assert result.code == original and result.quality_score == 4.0
+    assert calls == {"critique": 2, "render": 1}, calls      # no third round
+    assert any("kept the earlier cut" in d for d in result.diagnostics)
+
+
+def test_last_revision_is_scored_before_it_ships(monkeypatch, tmp_path):
+    kept, _calls, original = _revision_loop(monkeypatch, [4.0, 6.5], 1, tmp_path)
+    assert kept.code != original and kept.quality_score == 6.5
+    assert any("Final visual critique" in d for d in kept.diagnostics)
+    reverted, _calls, original = _revision_loop(monkeypatch, [4.0, 3.5], 1, tmp_path)
+    assert reverted.code == original and reverted.quality_score == 4.0
+
+
+def test_repair_that_fixes_the_crash_but_keeps_advisory_drift_still_ships(monkeypatch):
+    # Live Compton run: the repair removed an undefined name but kept an
+    # overlap warning; it was discarded and the template shipped.
+    broken = _ADVISORY_ONLY_SCENE.replace("Square(", "Diamond(")
+    bundle = _generate_with(monkeypatch, broken, repaired=_ADVISORY_ONLY_SCENE)
+    assert bundle.used_fallback is False, bundle.diagnostics
+    assert bundle.code == _ADVISORY_ONLY_SCENE
+
+
+def test_spelled_out_diagonal_directions_are_mapped_to_manim_constants():
+    from aetherlab.services.scene_validation import repair_unknown_color_constants
+
+    code = ("from manim import *\nclass S(Scene):\n    def construct(self):\n"
+            "        d = Dot().move_to(UP_RIGHT * 2 + DOWN_LEFT)\n        t = Text('UP_RIGHT')\n")
+    fixed, mapping = repair_unknown_color_constants(code)
+    assert mapping == {"UP_RIGHT": "UR", "DOWN_LEFT": "DL"}
+    assert "move_to(UR * 2 + DL)" in fixed and "Text('UP_RIGHT')" in fixed
+
+
+def test_repaired_template_is_never_shipped_as_an_ai_scene(monkeypatch):
+    import asyncio
+
+    from aetherlab.core.models import ProblemRequest, RagResult
+    from aetherlab.services import manim_runtime
+
+    class _TemplateGen(_FakeGenerator):
+        code = _ADVISORY_ONLY_SCENE.replace("Square(", "Diamond(")
+        repaired_code = _ADVISORY_ONLY_SCENE
+
+        async def generate(self, request, solver, rag, class_name):
+            self._last_fallback_reason = "AI scene generation failed (timeout)."
+            return type(self).code
+
+    monkeypatch.setattr(manim_runtime, "SceneGenerator", _TemplateGen)
+    runtime = manim_runtime.ManimRuntime()
+    monkeypatch.setattr(runtime, "_compose_curated", lambda *a, **k: None)
+    bundle = asyncio.run(runtime.generate_scene_async(
+        ProblemRequest(prompt="x", duration_target_s=7.0), _solver("s", ["k"], {}),
+        RagResult(keywords=[], hits=[], backend="none"),
+        SimpleNamespace(openai_api_key="sk-test", render_mode="local", data_dir=None),
+    ))
+    assert bundle.used_fallback is True and bundle.fallback_reason
+
+
+def test_cloud_budget_findings_stay_blocking():
+    from aetherlab.services.manim_runtime import _is_advisory_issue
+
+    assert _is_advisory_issue("[HYGIENE:OVERLAP] a and b")
+    assert _is_advisory_issue("[TIMING:BEAT_RUNTIME] A1.B1 ...")
+    assert not _is_advisory_issue("[PERF:CLOUD_COST] estimate 4.2 remains above 3.5.")
+    assert not _is_advisory_issue("[PERF:PLAY_BUDGET] 20 calls exceed 16.")
+
+
+def test_failover_keeps_a_requested_thinking_off():
+    from aetherlab.services.llm_client import FailoverChatClient
+
+    client = FailoverChatClient.__new__(FailoverChatClient)
+    client.purpose = "general"
+    client._fallback_settings = SimpleNamespace(llm_model="MiniMax-M3")
+    backup = client._fallback_kwargs({
+        "model": "k3-agent", "extra_body": {"thinking": {"type": "disabled"}},
+    })
+    assert backup["extra_body"] == {"thinking": {"type": "disabled"}}
+    plain = client._fallback_kwargs({"model": "k3-agent"})
+    assert "extra_body" not in plain
+
+
+def test_ledger_start_clears_metrics_from_a_previous_backend(tmp_path):
+    from aetherlab.services.render_ledger import RenderJobLedger
+
+    ledger = RenderJobLedger(tmp_path / "ledger.json")
+    ledger.start(job_id="j1", backend="local")
+    ledger.metrics("j1", {"backend": "local", "local_manim_version": "0.21.0",
+                          "render_wall_seconds": 60.0})
+    ledger.start(job_id="j1", backend="github-actions")
+    ledger.metrics("j1", {"backend": "github_actions", "render_wall_seconds": 140.0})
+    metrics = ledger.get("j1")["metrics"]
+    assert metrics == {"backend": "github_actions", "render_wall_seconds": 140.0}

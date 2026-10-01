@@ -187,6 +187,10 @@ class RenderJobLedger:
                 "scene_class": str(scene_class), "quality": str(quality), "fps": int(fps or 0),
                 "backend": str(backend), "provider": str(provider), "status": "queued",
             })
+            # Job ids are content-addressed, so a local and a cloud render of
+            # the same scene share a row. Each attempt starts with clean
+            # metrics instead of inheriting the previous backend's fields.
+            r["metrics"] = {}
             r["timeline"].append(asdict(LedgerEvent("queued", _now())))
         self._mutate(job_id, _apply)
 

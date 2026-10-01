@@ -123,9 +123,15 @@ class FailoverChatClient:
         if "temperature" in backup:
             backup["temperature"] = model_policy.request_temperature(fb, backup["temperature"])
         # extra_body only ever carries the primary pathway's request flags
-        # (thinking toggles); rebuild them for the backup model.
-        backup.pop("extra_body", None)
-        thinking = False if self.purpose == "scene" else None
+        # (thinking toggles); rebuild them for the backup model. A caller that
+        # switched thinking off (scene code, the critic's short JSON verdict)
+        # keeps it off: on MiniMax the reasoning otherwise eats max_tokens.
+        extra = backup.pop("extra_body", None) or {}
+        asked_off = (
+            extra.get("thinking", {}).get("type") == "disabled"
+            if isinstance(extra.get("thinking"), dict) else False
+        ) or extra.get("enable_thinking") is False
+        thinking = False if (self.purpose == "scene" or asked_off) else None
         backup.update(model_policy.codegen_request_kwargs(fb, minimax_thinking=thinking))
         return backup
 

@@ -200,6 +200,14 @@ class AsyncLLMCoordinator:
         )
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)
+        # An empty object used to pass as "Remote solver completed." with no
+        # steps or variables, silently feeding a blank solve to every later
+        # stage (seen live with MiniMax-M3). Raise so the bounded retry runs.
+        if not str(payload.get("summary", "")).strip() and not payload.get("derivation_steps"):
+            raise ValueError(
+                "Solver reply had no summary or derivation steps "
+                f"(finish_reason={getattr(response.choices[0], 'finish_reason', None)})."
+            )
         plot = payload.get("plot")
         numeric_spec = payload.get("ode") or payload.get("numeric_spec")
         equations = payload.get("key_equations")

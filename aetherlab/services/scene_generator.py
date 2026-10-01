@@ -9,7 +9,11 @@ import textwrap
 
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.model_policy import codegen_request_kwargs, request_temperature
+from aetherlab.services.model_policy import (
+    codegen_request_kwargs,
+    request_temperature,
+    settings_pathway,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +46,8 @@ to a friend. Correctness is the floor. Wonder is the target.
      curves bleed off-screen or overlap into mud.
 0.6  Surface the solver's `variables` as on-screen, ValueTracker-driven numbers
      (`DecimalNumber` / `always_redraw`) so they read as live and become sliders.
+     always_redraw rebuilds at the screen centre every frame: position the
+     number inside the lambda (`.next_to(label, RIGHT)`).
 0.7  Match the requested total duration (provided in the user brief) within
      ±20%. EVERY act must contain visible physical motion, not only
      FadeIn/Write/Create reveals. Use .animate, Transform/MoveAlongPath, or an
@@ -270,6 +276,9 @@ HARD CONSTRAINTS (violating any ruins the render):
    `grp.scale_to_fit_width(config.frame_width - 1)` and `.move_to(ORIGIN)`,
    or lay out with `.arrange()`/`.next_to()`/`.to_edge()`.
 6. Surface the given variables as ValueTracker-driven DecimalNumbers on screen.
+   always_redraw rebuilds at the screen centre every frame, so position the
+   number INSIDE the lambda (`.next_to(label, RIGHT)`), or give a placed
+   DecimalNumber an updater `lambda m: m.set_value(tracker.get_value())`.
 7. Match each act's duration_s with your run_time/wait budget (±20%).
 8. Every act must visibly MOVE via .animate, Transform/MoveAlongPath, or an
    updater. End with the storyboard's idle loop via ValueTracker + always_redraw;
@@ -636,7 +645,13 @@ class SceneGenerator:
         self, settings: AppSettings, *, minimax_thinking: bool | None = None
     ) -> None:
         self.settings = settings
-        self._minimax_thinking = minimax_thinking
+        # MiniMax "thinking" defaults OFF for every scene-writing call. With it
+        # on, M3 spent its whole max_tokens budget reasoning and returned no
+        # code in every recorded run (A/B 2026-09-24, first live failover, the
+        # 2026-09-30 blackbody run: storyboard JSON cut off, codegen empty,
+        # ~20 min to reach the template); thinking-off produced a rendered AI
+        # scene. Pass minimax_thinking=True to opt back in (e.g. for an A/B).
+        self._minimax_thinking = False if minimax_thinking is None else minimax_thinking
         # Lazy-create client on first use — import is inside _ensure_client
         self._client = None
         # Most recent storyboard (dict) — the critic evaluates renders against it.
@@ -785,8 +800,16 @@ class SceneGenerator:
                 # Ideation runs hot; the codegen pass runs cold. This split is
                 # the whole point of storyboarding separately.
                 temperature=request_temperature(self.settings, temperature),
-                max_tokens=4096,
-                **codegen_request_kwargs(self.settings),
+                # A reasoning model whose thinking cannot be switched off spends
+                # part of this budget thinking; 4096 cut the JSON mid-string.
+                max_tokens=(
+                    16384
+                    if settings_pathway(self.settings).name in {"reasoning", "kimi-reasoning"}
+                    else 4096
+                ),
+                **codegen_request_kwargs(
+                    self.settings, minimax_thinking=self._minimax_thinking
+                ),
             )
             content = response.choices[0].message.content or ""
             board = load_model_json(content)
@@ -1107,7 +1130,7 @@ class SceneGenerator:
             ],
             temperature=request_temperature(self.settings, 0.2),
             max_tokens=32768,
-            **codegen_request_kwargs(self.settings),
+            **codegen_request_kwargs(self.settings, minimax_thinking=self._minimax_thinking),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -1144,7 +1167,7 @@ class SceneGenerator:
             ],
             temperature=request_temperature(self.settings, 0.3),
             max_tokens=32768,
-            **codegen_request_kwargs(self.settings),
+            **codegen_request_kwargs(self.settings, minimax_thinking=self._minimax_thinking),
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
@@ -1200,7 +1223,7 @@ class SceneGenerator:
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=request_temperature(self.settings, 0.5),
             max_tokens=1200,
-            **codegen_request_kwargs(self.settings),
+            **codegen_request_kwargs(self.settings, minimax_thinking=self._minimax_thinking),
         )
         text = (response.choices[0].message.content or "").strip()
         # Strip any accidental markdown fences/headers a model may add.
@@ -1246,6 +1269,7 @@ class SceneGenerator:
         from aetherlab.services.scene_validation import (
             repair_text_mode_math,
             repair_unknown_color_constants,
+            repair_zero_waits,
         )
 
         code, replacements = repair_unknown_color_constants(code)
@@ -1260,6 +1284,10 @@ class SceneGenerator:
         code, promoted = repair_text_mode_math(code)
         if promoted:
             log.info("Promoted text-mode math to MathTex: %s", "; ".join(promoted))
+        # self.wait(0.0) is a no-op that Manim 0.21 rejects at render time.
+        code, dropped = repair_zero_waits(code)
+        if dropped:
+            log.info("Removed %d zero-length self.wait() call(s).", dropped)
         return code
 
     def _fallback_scene(self, class_name: str, solver: SolverResult) -> str:

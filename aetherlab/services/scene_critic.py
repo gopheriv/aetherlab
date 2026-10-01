@@ -22,9 +22,10 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from aetherlab.services.model_policy import request_temperature
+from aetherlab.services.model_policy import codegen_request_kwargs, request_temperature
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -306,6 +307,10 @@ async def critique_video(
         language_model = str(getattr(settings, "llm_model", "") or "")
         if language_model and language_model not in models:
             models.append(language_model)
+        # Skip a vision model this endpoint already rejected as unknown.
+        endpoint = str(getattr(settings, "openai_base_url", "") or "")
+        if len(models) > 1 and (endpoint, models[0]) in _UNAVAILABLE_VISION_MODELS:
+            models = models[1:]
         response = None
         model_used = ""
         for index, model in enumerate(models):
@@ -318,11 +323,19 @@ async def critique_video(
                     ],
                     temperature=request_temperature(settings, 0.2),
                     max_tokens=2048,
+                    # A JSON verdict needs no chain of thought. With MiniMax
+                    # thinking on, the reasoning used up the 2048-token budget
+                    # and the critic got an empty reply, so every critique was
+                    # silently "skipped" (live, 2026-09-30).
+                    **codegen_request_kwargs(
+                        SimpleNamespace(llm_model=model), minimax_thinking=False
+                    ),
                 )
                 model_used = model
                 break
             except Exception as exc:  # noqa: BLE001 - optional alternate model
                 if index == 0 and len(models) > 1 and _is_unknown_model_error(exc):
+                    _UNAVAILABLE_VISION_MODELS.add((endpoint, model))
                     log.info(
                         "Visual critic model %s is unavailable; retrying configured LLM %s.",
                         model, language_model,
@@ -357,6 +370,12 @@ async def critique_video(
     except Exception as exc:  # noqa: BLE001 — critique must never break renders
         log.info("Visual critique unavailable (%s); shipping render as-is.", exc)
         return Critique(verdict="skipped")
+
+
+# (endpoint, vision model) pairs rejected as unknown in this process, so later
+# critiques go straight to the configured LLM instead of re-failing first.
+# Keyed by endpoint so switching provider in Settings starts clean.
+_UNAVAILABLE_VISION_MODELS: set[tuple[str, str]] = set()
 
 
 def _is_unknown_model_error(exc: Exception) -> bool:
