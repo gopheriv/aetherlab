@@ -548,3 +548,68 @@ def test_ledger_start_clears_metrics_from_a_previous_backend(tmp_path):
     ledger.metrics("j1", {"backend": "github_actions", "render_wall_seconds": 140.0})
     metrics = ledger.get("j1")["metrics"]
     assert metrics == {"backend": "github_actions", "render_wall_seconds": 140.0}
+
+
+# ── agent team previews through the render backend (2026-10-01) ─────────────
+
+def _team_preview(monkeypatch, mode, cloud_status):
+    import asyncio
+    from dataclasses import replace
+
+    from aetherlab.services import agent_team, render_backend
+
+    calls = []
+
+    class _Cloud:
+        name = "github-actions"
+
+        async def render(self, scene, **kwargs):
+            calls.append(("cloud", kwargs.get("variant")))
+            if cloud_status == "rendered":
+                return replace(scene, status="rendered", video_path="cloud.mp4",
+                               diagnostics=["Rendered via GitHub Actions (job)."])
+            return replace(scene, status=render_backend.CLOUD_UNAVAILABLE,
+                           diagnostics=["Cloud render unavailable: down"])
+
+    class _Local:
+        name = "local"
+
+        async def render(self, scene, **kwargs):
+            calls.append(("local", None))
+            return replace(scene, status="rendered", video_path="local.mp4")
+
+    monkeypatch.setattr(render_backend, "select_backend", lambda *a, **k: _Cloud())
+    monkeypatch.setattr(render_backend, "LocalRenderBackend", _Local)
+    monkeypatch.setattr(render_backend, "render_timeout_for", lambda *a, **k: 300)
+    monkeypatch.setattr(agent_team, "_frame_grid", lambda video: (b"png", 30.0))
+    team = agent_team.AgentTeamGenerator(SimpleNamespace(render_mode=mode, llm_model="MiniMax-M3"))
+    image, message = asyncio.run(team._preview("code", "AetherLabScene"))
+    return image, message, calls, team.preview_backends
+
+
+def test_team_preview_renders_on_github_actions_in_cloud_mode(monkeypatch):
+    image, message, calls, where = _team_preview(monkeypatch, "cloud", "rendered")
+    assert image == b"png" and "GitHub Actions" in message
+    assert calls == [("cloud", "team-preview")] and where == ["GitHub Actions"]
+
+
+def test_team_preview_never_renders_locally_in_cloud_only_mode(monkeypatch):
+    image, message, calls, _where = _team_preview(monkeypatch, "cloud", "unavailable")
+    assert image is None and "FAILED" in message
+    assert [c[0] for c in calls] == ["cloud"]
+
+
+def test_team_preview_falls_back_to_local_in_auto_mode(monkeypatch):
+    image, message, calls, where = _team_preview(monkeypatch, "auto", "unavailable")
+    assert image == b"png" and [c[0] for c in calls] == ["cloud", "local"]
+    assert where == ["local Manim (cloud unavailable)"]
+
+
+def test_team_lead_and_reviewer_run_with_thinking_off():
+    import inspect
+
+    from aetherlab.services import agent_team
+
+    source = inspect.getsource(agent_team.AgentTeamGenerator)
+    assert "max_tokens=6000, tools=TOOLS, thinking=False" in source
+    assert "max_tokens=8000, thinking=False" in source

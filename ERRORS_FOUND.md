@@ -397,7 +397,7 @@ Not changed; recorded as risks:
 - `_animation_range_for_times` maps critic timestamps to `-n start,end`, but Manim's
   upper bound is exclusive. The partial preview therefore stops one animation early.
   Only the discarded preview is affected (opt-in `AETHERLAB_MANIM_PARTIAL_REVISIONS`).
-- `services/agent_team.py` (a lead agent plus Researcher/Coder/Reviewer, all on MiniMax-M3) was removed on 2026-10-01 at the owner's request: the concept is cancelled for now. Its comparison never ran the team arm. The local experiment scripts and results are archived in `.analysis/_archived_agent_team/` (gitignored), and the module stays recoverable from git history (commit 33e56ec).
+- `services/agent_team.py` (a lead agent plus Researcher/Coder/Reviewer, all on MiniMax-M3) was removed on 2026-10-01 and restored the same day at the owner's request, now **cloud-ready**. The Reviewer's preview renders go through the app's render backend: GitHub Actions in Cloud mode (never local), cloud-then-local in Auto. The lead's tool choice and the Reviewer's JSON verdict run with MiniMax thinking off; the Researcher keeps it on for the numbers. Verified live: a Reviewer preview rendered on GitHub Actions (199 s round trip, frame grid intact). A full team run is still pending: MiniMax's API failed the TLS handshake from this network during the check. The team stays opt-in (no setting enables it in the app); old local experiment files are in `.analysis/_archived_agent_team/`.
 
 ## Live AI-path mission (2026-09-30, MiniMax-M3)
 
