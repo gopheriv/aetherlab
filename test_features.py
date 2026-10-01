@@ -14,6 +14,7 @@ Run: python test_features.py
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import inspect
 import json
 import os
@@ -39,6 +40,7 @@ os.environ["AETHERLAB_LIBRARY_DIR"] = str(_TMP / "lib")
 os.environ["AETHERLAB_CHROMA_PATH"] = str(_TMP / "chroma")
 os.environ.pop("AETHERLAB_OPENAI_API_KEY", None)
 os.environ.pop("OPENAI_API_KEY", None)
+os.environ.pop("AETHERLAB_REVIEW_INTERVALS_DAYS", None)
 # Also neutralize the ~/.qwen autoload: without this, subprocess tests (F02
 # smoke) pick up a live provider key and make real LLM calls — slow and
 # non-deterministic (F02 once timed out at 600s mid-suite because of it).
@@ -58,6 +60,32 @@ for _compat_key in (
     "RENDER_TIER", "MANIM_FPS",
 ):
     os.environ.pop(_compat_key, None)
+
+
+@contextmanager
+def _isolated_app_config_dir(name: str):
+    """Keep config-mutating feature probes inside their own temporary folder."""
+    key = "AETHERLAB_DATA_DIR"
+    previous = os.environ.get(key)
+    os.environ[key] = str(_TMP / f"{name}_config")
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+def _assert_test_config_path(path: Path) -> Path:
+    """Refuse to let a settings probe read or delete outside its test root."""
+    candidate = Path(path).resolve()
+    try:
+        candidate.relative_to(_TMP.resolve())
+    except ValueError as exc:
+        raise AssertionError(f"test settings path escaped temporary root: {candidate}") from exc
+    return candidate
+
 
 results: dict[str, dict] = {}
 
@@ -222,15 +250,21 @@ def t_f06():
     bounded = replace(s, llm_timeout_seconds=17, llm_max_retries=1)
     assert openai_client_kwargs(bounded)["timeout"] == 17
     assert openai_client_kwargs(bounded)["max_retries"] == 1
+    # Every caller gets its client from llm_client.make_client, which builds
+    # both the primary and the backup client from the bounded policy.
+    factory = Path("aetherlab/services/llm_client.py").read_text(encoding="utf-8")
+    assert factory.count("model_policy.openai_client_kwargs(") == 2, "unbounded client in llm_client.py"
     for path in (
         "aetherlab/services/llm.py",
         "aetherlab/services/scene_generator.py",
         "aetherlab/services/scene_critic.py",
         "aetherlab/services/lesson_planner.py",
         "aetherlab/services/fact_check.py",
+        "aetherlab/services/planner.py",
+        "aetherlab/services/research.py",
     ):
         src = Path(path).read_text(encoding="utf-8")
-        assert "openai_client_kwargs" in src, f"unbounded model client in {path}"
+        assert "make_client(" in src and "AsyncOpenAI(" not in src, f"unbounded model client in {path}"
         assert "timeout=max(" not in src, f"hidden timeout floor remains in {path}"
     return (
         f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; "
@@ -239,6 +273,11 @@ def t_f06():
 
 
 def t_f07():
+    with _isolated_app_config_dir("f07"):
+        return _t_f07_body()
+
+
+def _t_f07_body():
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -247,7 +286,7 @@ def t_f07():
     cfg = load_app_config()
     assert cfg.get("model") == "cfg-model", cfg
     assert "api_key" not in cfg, "None should be dropped"
-    p = app_config_path()
+    p = _assert_test_config_path(app_config_path())
     assert p.exists()
     # BUG-45: syntactically valid JSON with the wrong top-level shape is a
     # corrupt config, not an AttributeError during application startup/save.
@@ -283,7 +322,7 @@ def t_f08():
     s = load_settings()
     del os.environ["AETHERLAB_LLM_MODEL"]
     s2 = load_settings()
-    app_config_path().unlink(missing_ok=True)
+    _assert_test_config_path(app_config_path()).unlink(missing_ok=True)
     assert s.llm_model == "env-model", f"env should win, got {s.llm_model}"
     assert s2.llm_model == "cfg-model", f"config should win over default, got {s2.llm_model}"
     return "env > app-config precedence verified"
@@ -585,8 +624,9 @@ def t_f22():
     from aetherlab.services.llm import AsyncLLMCoordinator
     assert hasattr(AsyncLLMCoordinator, "_solve_remote")
     src = inspect.getsource(AsyncLLMCoordinator._solve_remote)
-    assert "temperature=0.2" in src and "plot" in src
-    return "remote solve path present (temp 0.2, plot key)"
+    # The solver asks for 0.2; the model policy may pin it (Kimi accepts only 1).
+    assert "request_temperature(self.settings, 0.2)" in src and "plot" in src
+    return "remote solve path present (temp 0.2 via model policy, plot key)"
 
 
 def t_f23():
@@ -1026,9 +1066,18 @@ def t_f53():
 # ══════════════════════════════════════════════════════════════════════════
 
 def t_f54():
-    src = inspect.getsource(__import__("aetherlab.services.manim_runtime", fromlist=["ManimRuntime"]).ManimRuntime.render_scene)
-    assert "render" in src and "--fps" in src and "--media_dir" in src
-    return "render invokes manim render w/ fps+media_dir"
+    from pathlib import Path
+
+    from aetherlab.services.manim_runtime import ManimRuntime, _manim_render_command
+
+    src = inspect.getsource(ManimRuntime.render_scene)
+    assert "_manim_render_command(" in src
+    command = _manim_render_command(
+        ["python", "-m", "manim"], quality="l", fps=30, seed=7,
+        media_dir=Path("media"), scene_file=Path("scene.py"), class_name="Scene",
+    )
+    assert "render" in command and "--fps" in command and "--media_dir" in command
+    return "render command builder supplies fps+media_dir"
 
 
 def t_f55():
@@ -1200,12 +1249,40 @@ def t_f106():
     from aetherlab.services.scene_validation import (
         validate_scene, lint_manim_names, check_latex_strings, estimate_duration,
         motion_contract_issues, repair_unknown_color_constants, scene_hygiene_warnings,
+        _has_cleanup_between,
+    )
+    assert _has_cleanup_between(
+        ["axes.move_to(ORIGIN)", "self.play(Transform(axes, new_axes))", "new_axes.move_to(ORIGIN)"],
+        1, 3, "axes",
+    ), "Transform(source, target) replaces the source object during a layout move"
+    intentional_transform = '''from manim import *
+import numpy as np
+class S(Scene):
+    def construct(self):
+        axes = Axes().move_to(np.array([0.0, 0.0, 0.0]))
+        # BEAT A1.B1 | 0.00-2.00 s
+        target_axes = Axes().move_to(np.array([0.0, 0.0, 0.0]))
+        self.play(Transform(axes, target_axes))
+'''
+    assert not any(
+        issue.startswith("[HYGIENE:OVERLAP]")
+        for issue in scene_hygiene_warnings(intentional_transform)
     )
     bad = "from manim import *\nclass S(Scene):\n    def construct(self):\n        self.play(ShowCreation(Circle()))\n"
     issues = lint_manim_names(bad)
     assert any("ShowCreation" in i for i in issues), issues
     tex_bad = 'from manim import *\nclass S(Scene):\n    def construct(self):\n        e = MathTex(r"\\frac{a}{b")\n'
     assert check_latex_strings(tex_bad), "unclosed brace must be flagged"
+    tex_missing_denominator = (
+        'from manim import *\nclass S(Scene):\n'
+        '    def construct(self):\n        e = MathTex(r"\\dfrac{a}")\n'
+    )
+    assert any("argument 2" in issue for issue in check_latex_strings(tex_missing_denominator))
+    tex_valid_fraction = (
+        'from manim import *\nclass S(Scene):\n'
+        '    def construct(self):\n        e = MathTex(r"\\dfrac{a}{b}")\n'
+    )
+    assert not check_latex_strings(tex_valid_fraction)
     messy = """from manim import *
 class S(Scene):
     def construct(self):
@@ -1259,6 +1336,12 @@ class AetherLabScene(Scene):
     prompt = (SCENE_GENERATION_SYSTEM_PROMPT + SCENE_CODEGEN_SYSTEM_PROMPT).lower()
     assert "allowed global colors" in prompt and "final three sampled frames" in prompt
     assert "every requested" in prompt and "noun by noun" in prompt
+    assert "five acts" in prompt and "requested total duration" in prompt
+    from aetherlab.services.manim_runtime import _duration_contract_delta
+    assert _duration_contract_delta(27, 30) == 0
+    assert _duration_contract_delta(23, 30) > 0
+    assert _duration_contract_delta(37, 30) > 0
+    assert _duration_contract_delta(45, 45) == 0
     est = estimate_duration(clean)
     assert est.total_seconds > 0 and est.play_calls >= 1
     # wired into generation and repair paths
@@ -1309,7 +1392,32 @@ def t_f107():
     # fail-soft to the single-call cinematic path.
     from dataclasses import replace
     from aetherlab.core.models import ProblemRequest
-    from aetherlab.services.scene_generator import SceneGenerator
+    from aetherlab.services.scene_generator import (
+        SceneGenerator,
+        schedule_storyboard_timeline,
+    )
+    from aetherlab.services.scene_validation import check_timeline_markers
+
+    timed = schedule_storyboard_timeline({
+        "acts": [
+            {"name": "EVOLVE", "duration_s": 8, "beats": [
+                {"detail": "temperature rises", "duration_s": 2,
+                 "narration_cue": "hotter", "anchor_cell": "B2"},
+                {"detail": "peak shifts", "duration_s": 6,
+                 "narration_cue": "shorter wavelength", "anchor_cell": "E3"},
+            ]},
+            {"name": "REVEAL", "duration_s": 4, "beats": ["quantized steps"]},
+        ],
+        "narration": ["Heat the object", "Energy comes in quanta"],
+    }, 12)
+    events = timed["timeline"]
+    assert [(e["start_s"], e["end_s"]) for e in events] == [(0.0, 2.0), (2.0, 8.0), (8.0, 12.0)]
+    marker_code = "\n".join(
+        f"# BEAT {e['id']} | {e['start_s']:.2f}-{e['end_s']:.2f} s" for e in events
+    )
+    assert not check_timeline_markers(marker_code, events)
+    assert check_timeline_markers(marker_code.splitlines()[1], events)
+
     keyless = replace(_settings(), openai_api_key=None)
     board = asyncio.run(SceneGenerator(keyless).storyboard(
         ProblemRequest(prompt="x"), _solver(), _rag()))
@@ -1348,24 +1456,67 @@ def t_f107():
         _settings(), openai_api_key="sk-test", llm_model="qwen3.7-plus"
     ))
     sg._client = _Client()
+    request = ProblemRequest(prompt="pendulum", duration_target_s=45)
+    default_request = ProblemRequest(prompt="default duration")
+    assert default_request.canonical_payload()["duration_target_s"] == 30
     code = asyncio.run(sg._generate_remote(
-        ProblemRequest(prompt="pendulum"), _solver(), _rag(), "AetherLabScene"))
+        request, _solver(), _rag(), "AetherLabScene"))
     assert len(calls) == 2, "storyboard call + codegen call expected"
     assert calls[0]["temperature"] == 0.9 and calls[1]["temperature"] == 0.15
+    assert "45 seconds" in calls[0]["messages"][1]["content"]
+    codegen_user = next(
+        message["content"] for message in calls[1]["messages"]
+        if message["role"] == "user"
+    )
+    assert "45 seconds" in codegen_user
+    assert "five acts" in calls[0]["messages"][0]["content"].lower()
+    assert "sum to it within 5%" in calls[0]["messages"][0]["content"].lower()
     assert all(
         call.get("extra_body") == {"enable_thinking": False} for call in calls
     ), calls
-    assert "Locked storyboard" in calls[1]["messages"][1]["content"]
+    # A valid scene spec supersedes the raw "Locked storyboard" block; it must
+    # still carry the director's creative plan and timed beats into codegen.
+    assert "Canonical scene specification (aetherlab.scene_spec.v1)" in codegen_user
+    assert '"concept": "c"' in codegen_user and '"name": "ESTABLISH"' in codegen_user
+    assert "Mandatory beat-boundary comments" in codegen_user
+    assert "# BEAT A1.B1 | 0.00-45.00 s" in codegen_user
     assert sg._last_storyboard and "acts" in sg._last_storyboard
+    assert sg._last_storyboard["timeline"][0]["end_s"] == 45.0
+    assert "TIMED DETAIL + CLEAN FRAME CONTRACT" in calls[1]["messages"][0]["content"]
+    assert "A1.B1" in codegen_user
     assert "class AetherLabScene" in code
     from aetherlab.services.model_policy import (
         codegen_request_kwargs, is_thinking_only_model, model_codegen_warning,
     )
     assert codegen_request_kwargs(sg.settings) == {"extra_body": {"enable_thinking": False}}
+    minimax = replace(sg.settings, llm_model="MiniMax-M3")
+    assert codegen_request_kwargs(minimax) == {}
+    assert codegen_request_kwargs(minimax, minimax_thinking=False) == {
+        "extra_body": {"thinking": {"type": "disabled"}}
+    }
+    assert codegen_request_kwargs(minimax, minimax_thinking=True) == {
+        "extra_body": {"thinking": {"type": "enabled"}}
+    }
+    calls.clear()
+    minimax_sg = SceneGenerator(minimax)
+    minimax_sg._client = _Client()
+    asyncio.run(minimax_sg._generate_remote(
+        request, _solver(), _rag(), "AetherLabScene"))
+    # Scene calls default to thinking OFF for MiniMax: with it on, M3 spent the
+    # whole max_tokens budget reasoning and returned no code (live 2026-09-30).
+    assert len(calls) == 2 and all(
+        call.get("extra_body") == {"thinking": {"type": "disabled"}} for call in calls
+    ), calls
+    assert calls[0]["max_tokens"] == 16384, "reasoning storyboard needs room beyond 4096"
+    calls.clear()
+    opted_in = SceneGenerator(minimax, minimax_thinking=True)
+    opted_in._client = _Client()
+    asyncio.run(opted_in._generate_remote(request, _solver(), _rag(), "AetherLabScene"))
+    assert all(call.get("extra_body") == {"thinking": {"type": "enabled"}} for call in calls), calls
     assert is_thinking_only_model("qwen3.7-max-preview")
     assert "qwen3-coder-plus" in model_codegen_warning("qwen3.7-plus", 60)
     assert inspect.getsource(SceneGenerator).count("codegen_request_kwargs") >= 5
-    return "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
+    return "hot storyboard/cold codegen; Qwen + MiniMax thinking toggles; coder guidance (F107)"
 
 
 def t_f108():
@@ -1441,7 +1592,7 @@ def t_f108():
             "        self.play(dot.animate.shift(RIGHT))\n"
         )
 
-    async def fake_render(scene, settings, quality, progress=None, variant=""):
+    async def fake_render(scene, settings, quality, progress=None, variant="", **_kwargs):
         calls["render"] += 1
         if calls["render"] == 1:
             return replace(
@@ -2748,10 +2899,20 @@ def t_f133():
 
 def t_f134():
     # Bug 1 — the sync fix: isolated dir + disable_caching + this-render discovery.
-    from aetherlab.services.manim_runtime import ManimRuntime, _find_video_in
+    from pathlib import Path
+
+    from aetherlab.services.manim_runtime import (
+        ManimRuntime, _find_video_in, _manim_render_command,
+    )
     src = inspect.getsource(ManimRuntime.render_scene)
-    assert "--disable_caching" in src and "_RUNS_DIR" in src and "uuid" in src
+    assert "_RUNS_DIR" in src and "uuid" in src
     assert "subprocess_kwargs" in src and "_find_video_in" in src
+    assert "cache_enabled=bool(safe_lineage)" in src
+    command = _manim_render_command(
+        ["python", "-m", "manim"], quality="l", fps=30, seed=7,
+        media_dir=Path("media"), scene_file=Path("scene.py"), class_name="Scene",
+    )
+    assert "--disable_caching" in command
     # _find_video_in prefers the class-named mp4 that belongs to THIS render.
     media = _TMP / "vid_media" / "videos" / "scene" / "480p30"
     media.mkdir(parents=True, exist_ok=True)
@@ -2786,7 +2947,7 @@ def t_f135():
     rt = ManimRuntime(_settings())
     calls: list[str] = []
 
-    async def _fake_render_once(scene, settings, quality, progress=None, variant=""):
+    async def _fake_render_once(scene, settings, quality, progress=None, variant="", **_kwargs):
         calls.append(quality)
         return _replace(scene, status="rendered", video_path=str(_TMP / f"r_{quality}.mp4"))
 
@@ -3120,6 +3281,9 @@ def t_f145():
     assert lv._explore_canvas._state is not None  # canvas seeded from the domain
     got = []
     lv.chapter_seek_requested.connect(lambda s: got.append(s))
+    # This assertion covers outline seek wiring, not the interactive knowledge
+    # check dialog. Keep the headless test non-modal when a chapter has a cue.
+    lv._show_chapter_checks = lambda _chapter_index: True
     lv._on_outline_click(lv._outline.item(0))
     assert got == [0.0] and lv._tabs.currentIndex() == 0  # click seeks + shows Video
     # BUG-9 UI regression: if a middle renderable chapter failed, offsets are
@@ -3411,6 +3575,11 @@ def t_f152():
 
 
 def t_f153():
+    with _isolated_app_config_dir("f153"):
+        return _t_f153_body()
+
+
+def _t_f153_body():
     # Settings round-trip for cloud render config; token is config-only and masked elsewhere.
     from aetherlab.core.settings import save_app_config, load_settings, app_config_path
     save_app_config({
@@ -3429,8 +3598,12 @@ def t_f153():
     assert s.github_token == "github_pat_TESTTOKEN"
     assert s.cloud_render_threshold == 3.5 and s.cloud_poll_seconds == 4
     assert s.cloud_render_timeout == 123
-    app_config_path().unlink(missing_ok=True)
+    _assert_test_config_path(app_config_path()).unlink(missing_ok=True)
     keys = (
+        "AETHERLAB_OPENAI_API_KEY", "AETHERLAB_OPENAI_BASE_URL", "AETHERLAB_LLM_MODEL",
+        "AETHERLAB_PROVIDER", "OPENAI_API_KEY", "OPENAI_BASE_URL", "GPT_API_KEY",
+        "GPT_BASE_URL", "DASHSCOPE_API_KEY", "LLM_BASE_URL", "MANIM_MODEL",
+        "GPT_MODEL", "CHAT_MODEL",
         "AETHERLAB_RENDER_MODE", "AETHERLAB_RENDER_REPO", "AETHERLAB_GITHUB_WORKFLOW",
         "AETHERLAB_GITHUB_BRANCH", "AETHERLAB_CLOUD_POLL_SECONDS",
         "AETHERLAB_CLOUD_RENDER_TIMEOUT", "CLOUD_RENDER_ENABLED", "CLOUD_RENDER_REPO",
@@ -3524,6 +3697,8 @@ def t_f154():
             with zipfile.ZipFile(bio, "w") as zf:
                 zf.writestr(self.name, b"\x00\x00\x00\x18ftypmp42" + b"0" * 256)
             return bio.getvalue()
+        def download_run_logs(self, run_id):
+            return ""
 
     s = replace(_settings(), render_mode="cloud", github_repo="owner/render",
                 github_token="ghp_" + "x" * 24)
@@ -3623,7 +3798,7 @@ def t_f154():
 
 
 def t_f155():
-    # Cloud unavailable/no token fails soft through ManimRuntime._render_once to local.
+    # Explicit Cloud mode does not start a heavy local render after cloud failure.
     from dataclasses import replace
     from aetherlab.core.models import SceneBundle
     from aetherlab.services.manim_runtime import ManimRuntime
@@ -3650,12 +3825,11 @@ def t_f155():
     finally:
         rb.LocalRenderBackend = orig
         rb._github_cli_token = orig_cli_token
-    assert out.status == "rendered" and calls["local"] == 1
+    assert out.status == rb.CLOUD_UNAVAILABLE and calls["local"] == 0
     assert any("GitHub token" in d for d in out.diagnostics)
-    assert any("rendered locally" in d for d in out.diagnostics)
 
-    # BUG-37: exhausting the cloud poll budget is also cloud unavailability,
-    # not a terminal render-timeout. Cancel the remote run and fall back now.
+    # BUG-37: exhausting the cloud poll budget cancels the remote run. In
+    # explicit Cloud mode it remains unavailable rather than rendering locally.
     class TimeoutClient:
         def __init__(self): self.cancelled = []
         def find_repo_artifact(self, name): return None
@@ -3692,10 +3866,10 @@ def t_f155():
         rb.LocalRenderBackend = orig
         rb.select_backend = orig_select
         rb.render_timeout_for = orig_timeout
-    assert out2.status == "rendered" and calls["local"] == 1
+    assert out2.status == rb.CLOUD_UNAVAILABLE and calls["local"] == 0
     assert timeout_client.cancelled == [91]
-    assert any("timed out" in d.lower() and "falling back" in d.lower() for d in out2.diagnostics)
-    return "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
+    assert any("timed out" in d.lower() and "fallback was skipped" in d.lower() for d in out2.diagnostics)
+    return "explicit Cloud mode stops on unavailable/timeout without local fallback (F155)"
 
 
 def t_f156():
@@ -3801,7 +3975,7 @@ def t_f158():
     from aetherlab.services.render_backend import RENDER_WORKFLOW_YAML
     wf = Path(".github/workflows/render.yml").read_text(encoding="utf-8")
     doc = Path("docs/CLOUD_RENDERING.md").read_text(encoding="utf-8")
-    assert "workflow_dispatch" in wf and "manim==0.20.1" in wf
+    assert "workflow_dispatch" in wf and "manim==0.21.0" in wf
     assert "jobs/<job_id>.py" in doc and "Cloud" in doc
     # BUG-18 regression: `cache: pip` in setup-python needs a requirements.txt/
     # pyproject.toml, which a render repo has neither of — the step ERRORS and
@@ -3977,7 +4151,7 @@ def t_f160():
     render_video = _TMP / "critic.mp4"
     render_video.write_bytes(b"fake")
 
-    async def fake_render_once(bundle, _settings_arg, _quality, _progress=None):
+    async def fake_render_once(bundle, _settings_arg, _quality, _progress=None, **_kwargs):
         bundle.status = "rendered"
         bundle.video_path = str(render_video)
         return bundle
@@ -4274,8 +4448,11 @@ def t_f163():
     sg._client = _Client()
     asyncio.run(sg._generate_remote(
         ProblemRequest(prompt="damped oscillator"), _solver(), _rag(), "AetherLabScene"))
-    codegen_system = calls[1]["messages"][0]["content"]
-    assert "Reference exemplar" in codegen_system, "exemplar not injected into codegen prompt"
+    codegen_system = "\n".join(
+        message["content"] for message in calls[1]["messages"]
+        if message.get("role") == "system"
+    )
+    assert "Reference exemplar" in codegen_system, "exemplar not injected into codegen system context"
     assert "oscillator" in codegen_system, "domain-matched exemplar expected"
     return "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
 
@@ -4296,7 +4473,10 @@ def t_f164():
 def t_f165():
     from tools.tracker_integrity_audit import audit
 
-    report = audit(allow_pending_result="F168")
+    # include_run_status=False: this test runs inside the harness and therefore
+    # reads the PREVIOUS run's results file. Asserting artifact consistency here;
+    # rejecting a failing run is t_f215's job (and the CLI --check gate's).
+    report = audit(allow_pending_result="F168", include_run_status=False)
     assert report["feature_count"] >= 168, report
     assert report["story_count"] == report["feature_count"], report
     assert report["result_count"] >= report["feature_count"] - 1, report
@@ -5313,7 +5493,7 @@ def t_f178():
         def __init__(self, settings):
             pass
 
-        def render_scene(self, scene, settings, quality):
+        def render_scene(self, scene, settings, quality, **_kwargs):
             with lock:
                 live["cur"] += 1
                 live["max"] = max(live["max"], live["cur"])
@@ -5747,7 +5927,7 @@ def t_f191():
     assert code is not None
     compile(code, "<scene>", "exec")
     assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
-    assert "MoveAlongPath" in code and "set_points_smoothly" in code
+    assert "point_at_time" in code and "set_points_as_corners" in code
     return f"trajectory component composes a compilable numeric-driven scene ({len(code)} chars)"
 
 
@@ -5776,7 +5956,7 @@ def t_f193():
     )
     assert bundle.status == "compiled", bundle.status
     assert any("curated component" in d for d in bundle.diagnostics), bundle.diagnostics
-    assert "set_points_smoothly" in bundle.code
+    assert "point_at_time" in bundle.code
     return "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
 
 
@@ -5808,8 +5988,1000 @@ def t_f195():
     return f"verifier flags unphysical growth ({report.summary})"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Quality integrity — no silent degradation (found by driving the live app)
+# ══════════════════════════════════════════════════════════════════════════
+
+def t_f196():
+    # A transient provider error must NOT silently downgrade to canned physics.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest, SolverResult
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    st = dataclasses.replace(_settings(), openai_api_key="fake-key-for-retry-test")
+    req = ProblemRequest(prompt="Derive the damped harmonic oscillator")
+
+    c = AsyncLLMCoordinator(st); calls = {"n": 0}
+    async def flaky(_r):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("503 transient")
+        return SolverResult(summary="real", derivation_steps=["s"], keywords=["k"],
+                            variables={}, model_name=st.llm_model)
+    c._solve_remote = flaky
+    r = asyncio.run(c.solve(req))
+    assert calls["n"] == 3, calls
+    assert r.model_name == st.llm_model, f"must recover, not fall back: {r.model_name}"
+
+    c2 = AsyncLLMCoordinator(st); calls2 = {"n": 0}
+    async def always_fail(_r):
+        calls2["n"] += 1
+        raise RuntimeError("provider down")
+    c2._solve_remote = always_fail
+    r2 = asyncio.run(c2.solve(req))
+    assert calls2["n"] == 3 and r2.model_name == "deterministic-fallback"
+    # The downgrade must be stated plainly, not buried.
+    assert "not solved physics" in r2.raw_response, r2.raw_response
+    return "solver retries transient failures; persistent failure is reported loudly"
+
+
+def t_f197():
+    # A stingy/flaky plan must never drop a modality the heuristic requires.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest, OutputPlan
+    from aetherlab.services.planner import Planner, _union
+    stingy = OutputPlan(needs_numeric=False, needs_2d=False, needs_3d=False,
+                        needs_animation=False, needs_pdf=True, rationale="pdf only",
+                        model_name="qwen")
+    floor = OutputPlan(needs_numeric=True, needs_2d=True, needs_3d=False,
+                       needs_animation=True, needs_pdf=True)
+    u = _union(stingy, floor)
+    assert u.enabled() == ["numeric", "2d", "animation", "pdf"], u.enabled()
+    assert "Heuristic floor also required" in u.rationale
+    assert u.model_name == "qwen"  # keeps provenance
+
+    # All remote attempts failing degrades to the floor, never below it.
+    st = dataclasses.replace(_settings(), openai_api_key="fake-key-for-retry-test")
+    p = Planner(st); calls = {"n": 0}
+    async def boom(_r):
+        calls["n"] += 1
+        raise RuntimeError("planner down")
+    p._plan_remote = boom
+    got = asyncio.run(p.plan(ProblemRequest(prompt="Simulate the damped harmonic oscillator")))
+    assert calls["n"] == 3, calls
+    assert got.needs_animation and got.needs_numeric, got.enabled()
+    return "planner unions with the heuristic floor and retries before conceding"
+
+
+def t_f198():
+    # The keyless fallback ODE models a damped oscillator: attach it only when
+    # the question is one, so verification never claims checks it didn't run.
+    import dataclasses
+    from aetherlab.core.models import ProblemRequest
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    from aetherlab.services.verify import verify_solution
+    st = dataclasses.replace(_settings(), openai_api_key=None)
+
+    off_topic = ProblemRequest(prompt="Explain what entropy is conceptually")
+    sol = asyncio.run(AsyncLLMCoordinator(st).solve(off_topic))
+    assert sol.numeric_spec is None, "must not attach an oscillator ODE to an entropy question"
+    assert "No numeric model" in verify_solution(sol, off_topic).summary
+
+    on_topic = ProblemRequest(prompt="Derive the damped harmonic oscillator")
+    sol2 = asyncio.run(AsyncLLMCoordinator(st).solve(on_topic))
+    assert sol2.numeric_spec is not None
+    assert verify_solution(sol2, on_topic).ok
+    return "fallback ODE only attached on-topic; off-topic verification stays honest"
+
+
+def t_f199():
+    # Text-mode math in Tex() aborts LaTeX ("Missing $ inserted." / "\mathcal
+    # allowed only in math mode") and kills a whole render. Observed on real
+    # cloud renders: Tex("m_1"), Tex("\theta_1"), Tex("\mathcal{L}").
+    from aetherlab.services.scene_validation import (
+        _needs_math_mode,
+        check_latex_strings,
+        repair_text_mode_math,
+    )
+    for s in ("m_1", r"\theta_1", r"\mathcal{L}", r"\frac{a}{b}", r"\vec{r}_1"):
+        assert _needs_math_mode(s), f"{s!r} is math and must require math mode"
+    for s in ("Hello world", "Energy (J)", "$m_1$", r"50\% done", r"\textbf{Bold}"):
+        assert not _needs_math_mode(s), f"{s!r} is plain text and must stay Tex"
+
+    code = (
+        "from manim import *\n"
+        "class S(Scene):\n"
+        "    def construct(self):\n"
+        '        a = Tex("m_1")\n'
+        '        b = Tex("\\\\mathcal{L}")\n'
+        '        c = Tex("Double pendulum")\n'
+        '        d = MathTex("m_2")\n'
+    )
+    assert any("text-mode" in i for i in check_latex_strings(code)), "must be flagged"
+    fixed, notes = repair_text_mode_math(code)
+    assert len(notes) == 2, notes
+    assert 'MathTex("m_1")' in fixed and 'MathTex("\\\\mathcal{L}")' in fixed
+    assert 'Tex("Double pendulum")' in fixed and 'MathTex("m_2")' in fixed  # untouched
+    assert not [i for i in check_latex_strings(fixed) if "text-mode" in i]
+    compile(fixed, "<scene>", "exec")
+    return "text-mode math promoted to MathTex (render-killer auto-repaired)"
+
+
+def t_f200():
+    # Pendulum problems get a real rod+bob driven by the *nonlinear* numeric
+    # solution, chosen ahead of the generic time-series trajectory. The
+    # component integrates its own pendulum ODE (needs no attached spec) and a
+    # non-pendulum oscillator must still route to the trajectory curve.
+    from aetherlab.services.scene_components import compose_component_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    pend = _solver(summary="Simple pendulum swings",
+                   keywords=["pendulum"],
+                   variables={"gravity": 9.81, "length": 1.0, "damping": 0.1})
+    code = compose_component_code("AetherLabScene", pend)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "nonlinear pendulum" in code and "TracedPath" in code and "np.interp" in code
+    # Built its own spec — no numeric_spec on the solver.
+    assert pend.numeric_spec is None
+    # Regression: a plain oscillator (no pendulum signal) stays on the trajectory.
+    osc = _solver(numeric_spec=fallback_numeric_spec())
+    osc_code = compose_component_code("AetherLabScene", osc)
+    assert osc_code and "point_at_time" in osc_code and "nonlinear pendulum" not in osc_code
+    return f"pendulum component staged from nonlinear solution ({len(code)} chars); oscillator unaffected"
+
+
+def t_f201():
+    # A phase-space framing (v vs x) is composed only when the prompt asks for
+    # it, driven by the exact integrated 2-state trajectory; a plain oscillator
+    # without that framing keeps the time-series trajectory.
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    ph = _solver(summary="Phase portrait of the damped oscillator",
+                 keywords=["oscillator", "phase portrait"],
+                 numeric_spec=fallback_numeric_spec())
+    code = compose_scene_code("AetherLabScene", ph)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "phase portrait" in code and "MoveAlongPath" in code and "set_points_smoothly" in code
+    # Regression: same spec, no phase framing -> the trajectory time series.
+    plain = _solver(numeric_spec=fallback_numeric_spec())
+    plain_code = compose_scene_code("AetherLabScene", plain)
+    assert plain_code and "phase portrait" not in plain_code and "point_at_time" in plain_code
+    return f"phase portrait composed on request ({len(code)} chars); default stays time-series"
+
+
+def t_f202():
+    # Electrostatics problems get a curated field-line scene (streamlines of the
+    # charge configuration integrated in Python), since no time-ODE component
+    # fires for them. A moving test charge guarantees on-screen motion.
+    from aetherlab.services.scene_components import compose_component_code
+    em = _solver(summary="Electric dipole field",
+                 keywords=["electric", "dipole", "charge"],
+                 variables={"separation": 2.4})
+    code = compose_component_code("AetherLabScene", em)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "electric field lines" in code and "MoveAlongPath" in code and "set_points_smoothly" in code
+    # Regression: a plain oscillator is not mistaken for a field problem.
+    from aetherlab.services.numeric import fallback_numeric_spec
+    osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "electric field lines" not in osc
+    return f"dipole field-line component composed ({len(code)} chars); oscillator unaffected"
+
+
+def t_f203():
+    # Fourier / series prompts get the rotating-vector epicycle build; the bare
+    # word "harmonic" (harmonic oscillator) must NOT trigger it.
+    from aetherlab.services.scene_components import compose_component_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    fo = _solver(summary="Fourier series of a square wave",
+                 keywords=["fourier", "square wave"], variables={})
+    code = compose_component_code("AetherLabScene", fo)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "Fourier epicycles" in code and "TracedPath" in code and "always_redraw" in code
+    # Regression: harmonic *oscillator* stays a trajectory, not a Fourier scene.
+    osc = compose_component_code(
+        "AetherLabScene",
+        _solver(keywords=["harmonic", "oscillator"], numeric_spec=fallback_numeric_spec()),
+    )
+    assert osc and "Fourier epicycles" not in osc and "point_at_time" in osc
+    return f"Fourier epicycle component composed ({len(code)} chars); harmonic-oscillator not stolen"
+
+
+def t_f204():
+    # Quantum prompts get a wavepacket sloshing in a potential well (probability
+    # density as a shaded Gaussian), not a bare graph.
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    q = _solver(summary="Quantum harmonic oscillator wavefunction",
+                keywords=["quantum", "wavefunction"], variables={})
+    code = compose_scene_code("AetherLabScene", q)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "quantum wavepacket" in code and "Polygon" in code and "always_redraw" in code
+    # Regression: a *classical* harmonic oscillator stays a trajectory.
+    osc = compose_scene_code("AetherLabScene",
+                             _solver(keywords=["oscillator", "harmonic"], numeric_spec=fallback_numeric_spec()))
+    assert osc and "quantum wavepacket" not in osc and "point_at_time" in osc
+    return f"quantum wavepacket component composed ({len(code)} chars); classical oscillator unaffected"
+
+
+def t_f205():
+    # Interference / double-slit prompts get Young's two-source stage with an
+    # intensity pattern; nothing else claims them.
+    from aetherlab.services.scene_components import compose_component_code
+    d = _solver(summary="Double-slit interference pattern",
+                keywords=["double slit", "interference"], variables={})
+    code = compose_component_code("AetherLabScene", d)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "double-slit interference" in code and "Arc" in code and "set_points_smoothly" in code
+    # Regression: a plain oscillator is not mistaken for an interference problem.
+    from aetherlab.services.numeric import fallback_numeric_spec
+    osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "double-slit interference" not in osc
+    # Review-pack regression: a quantum-framed double-slit prompt must still get
+    # the fringe stage, not the wavepacket-in-a-well component.
+    qd = compose_component_code("AetherLabScene", _solver(
+        summary="Quantum double-slit interference of electrons",
+        keywords=["double-slit interference", "quantum"], variables={}))
+    assert qd and "double-slit interference" in qd and "quantum wavepacket" not in qd
+    return f"double-slit interference component composed ({len(code)} chars); oscillator unaffected"
+
+
+def t_f206():
+    # Thermodynamics / kinetic-theory prompts get a gas of bouncing particles
+    # (updater-driven, seeded) with a Maxwell-Boltzmann reference.
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    g = _solver(summary="Kinetic theory of an ideal gas",
+                keywords=["kinetic theory", "ideal gas"], variables={})
+    code = compose_scene_code("AetherLabScene", g)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "kinetic theory" in code and "add_updater" in code and "velocity" in code
+    # Deterministic: the same prompt bakes identical particle initial conditions.
+    again = compose_scene_code("AetherLabScene", g)
+    assert again == code, "kinetic-theory scene must be deterministic (seeded)"
+    # Regression: a plain oscillator stays a trajectory.
+    osc = compose_scene_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "kinetic theory" not in osc and "point_at_time" in osc
+    return f"kinetic-theory component composed + deterministic ({len(code)} chars); oscillator unaffected"
+
+
+def t_f207():
+    # The chaotic double pendulum integrates the full 4-state nonlinear system
+    # and is chosen ahead of the single pendulum (whose domain also matches
+    # "pendulum"). A single-pendulum prompt must still get the single component.
+    from aetherlab.services.scene_components import compose_component_code
+    dp = _solver(summary="Chaotic double pendulum",
+                 keywords=["double pendulum", "chaos"], variables={"gravity": 9.81})
+    code = compose_component_code("AetherLabScene", dp)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "double pendulum" in code and "TracedPath" in code
+    # Regression: a *single* pendulum is not stolen by the double-pendulum path.
+    sp = compose_component_code("AetherLabScene",
+                            _solver(keywords=["pendulum"], variables={"gravity": 9.81, "length": 1.0}))
+    assert sp and "nonlinear pendulum" in sp and "double pendulum" not in sp
+    return f"double-pendulum component integrates 4-state chaos ({len(code)} chars); single pendulum unaffected"
+
+
+def t_f208():
+    # Geometric optics: a thin-lens ray diagram with the image placed by the
+    # thin-lens equation (real, inverted for an object beyond f).
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    ln = _solver(summary="Thin-lens image formation",
+                 keywords=["lens", "focal length"], variables={})
+    code = compose_scene_code("AetherLabScene", ln)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "thin-lens ray diagram" in code and "MoveAlongPath" in code and "Ellipse" in code
+    # Regression: a plain oscillator is not mistaken for an optics problem.
+    osc = compose_scene_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "thin-lens ray diagram" not in osc
+    return f"thin-lens ray-diagram component composed ({len(code)} chars); oscillator unaffected"
+
+
+def t_f209():
+    # Standing wave: a resonant normal mode with fixed nodes and oscillating
+    # antinodes; must not steal the plain (traveling) oscillator/wave default.
+    from aetherlab.services.scene_components import compose_component_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    sw = _solver(summary="Standing wave on a string",
+                 keywords=["standing wave", "normal mode"], variables={"mode": 3})
+    code = compose_component_code("AetherLabScene", sw)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "standing wave" in code and "DashedVMobject" in code and "always_redraw" in code
+    # Regression: a plain oscillator stays a trajectory.
+    osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "standing wave" not in osc and "point_at_time" in osc
+    return f"standing-wave component composed ({len(code)} chars); oscillator unaffected"
+
+
+def t_f210():
+    # Kepler orbit: integrates the real two-body problem and shows two equal-time
+    # sectors (equal area by Kepler's 2nd law). Chosen for orbit/gravitation.
+    from aetherlab.services.scene_components import compose_component_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    o = _solver(summary="Kepler orbit of a planet",
+                keywords=["orbit", "kepler", "planet"], variables={})
+    code = compose_component_code("AetherLabScene", o)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "Kepler orbit" in code and "equal areas in equal times" in code and "TracedPath" in code
+    # "hydrogen orbital" must NOT become a planetary orbit (the "orbit" substring
+    # trap) — it falls through to the 3-D field surface instead.
+    from aetherlab.core.models import OutputPlan
+    ho = compose_component_code("AetherLabScene",
+                            _solver(keywords=["orbital", "hydrogen", "3d"]),
+                            OutputPlan(needs_3d=True))
+    assert ho and "Kepler orbit" not in ho
+    # Regression: a plain oscillator stays a trajectory.
+    osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "Kepler orbit" not in osc and "point_at_time" in osc
+    return f"Kepler-orbit component integrates two-body + equal-area law ({len(code)} chars)"
+
+
+def t_f211():
+    # surface3d renders the problem's ACTUAL field, not one generic bump: a
+    # point-charge 1/r peak, a dipole, a saddle, a p-orbital, or the Gaussian
+    # default — each a real ThreeDScene that compiles.
+    from aetherlab.services.scene_components import surface3d
+    from aetherlab.core.models import SolverResult
+    cases = {
+        "1/r potential": ["1/r", "potential of a"],
+        "dipole potential": ["dipole"],
+        "saddle: unstable": ["saddle", "unstable equilibrium"],
+        "p-orbital": ["orbital", "hydrogen"],
+        "Gaussian field": ["oscillator"],  # the default (also the F192 shape)
+    }
+    seen = set()
+    for marker, kws in cases.items():
+        sv = SolverResult(summary="3D field", derivation_steps=[], keywords=kws,
+                          variables={}, model_name="t")
+        code = surface3d.build("AetherLabScene", sv)
+        assert code and "ThreeDScene" in code and marker in code, (marker, kws)
+        compile(code, "<scene>", "exec")
+        seen.add(marker)
+    assert len(seen) == 5
+    return "surface3d picks the real field (1/r, dipole, saddle, p-orbital, Gaussian) — all render as ThreeDScene"
+
+
+def t_f212():
+    # Curated components track the problem's actual numbers: a supplied variable
+    # changes the composed scene, while an empty solver still renders the
+    # canonical default (so nothing regresses when the solver gives no numbers).
+    from aetherlab.services.scene_components import (
+        double_slit, fourier_epicycles, kinetic_theory, lens, orbit, quantum,
+        standing_wave,
+    )
+    from aetherlab.core.models import SolverResult
+
+    def sv(**variables):
+        return SolverResult(summary="", derivation_steps=[], keywords=[],
+                            variables=variables, model_name="t")
+
+    # (component, marker-in-default, variables-that-must-change-the-output)
+    cases = [
+        (orbit, "Kepler orbit", {"eccentricity": 0.15}),
+        (quantum, "quantum wavepacket", {"stiffness": 4.0, "mass": 1.0}),
+        (double_slit, "double-slit interference", {"separation": 1.7, "wavelength": 0.6}),
+        (fourier_epicycles, "Fourier epicycles", {"terms": 8}),
+        (kinetic_theory, "kinetic theory", {"particles": 12, "temperature": 1500}),
+        (lens, "thin-lens ray diagram", {"focal_length": 2.4, "object_distance": 5.0}),
+        (standing_wave, "standing wave", {"mode": 5}),
+    ]
+    changed = []
+    for module, marker, variables in cases:
+        default = module.build("AetherLabScene", sv())
+        assert default and marker in default, marker
+        compile(default, "<scene>", "exec")
+        tuned = module.build("AetherLabScene", sv(**variables))
+        assert tuned and marker in tuned, marker
+        compile(tuned, "<scene>", "exec")
+        assert tuned != default, f"{marker}: variables {variables} did not change the scene"
+        changed.append(marker.split()[0])
+    # Fourier explicitly: 8 terms -> 8 odd harmonics baked in.
+    assert "[1, 3, 5, 7, 9, 11, 13, 15]" in fourier_epicycles.build("S", sv(terms=8))
+    return f"{len(changed)} curated components track solver variables; empty solver keeps canonical default"
+
+
+def t_f213():
+    # Coupled oscillators: integrate the real two-mass coupled ODE so the energy
+    # visibly beats between the masses; chosen ahead of the single standing wave.
+    from aetherlab.services.scene_components import compose_component_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    co = _solver(summary="Two coupled oscillators exchange energy",
+                 keywords=["coupled oscillators", "two masses"],
+                 variables={"stiffness": 1.0, "mass": 1.0})
+    code = compose_component_code("AetherLabScene", co)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
+    assert "coupled oscillators" in code and "np.interp" in code and "set_points_smoothly" in code
+    # Regression: a bare "standing wave" prompt still gets the standing wave.
+    sw = compose_component_code("AetherLabScene", _solver(keywords=["standing wave"]))
+    assert sw and "standing wave" in sw and "coupled oscillators" not in sw
+    # Regression: a plain oscillator stays a trajectory.
+    osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "coupled oscillators" not in osc and "point_at_time" in osc
+    return f"coupled-oscillator component integrates the two-mass ODE ({len(code)} chars)"
+
+
+def t_f214():
+    # Concave mirror: reflective image formation by the mirror equation; a lens
+    # prompt must still get the lens (mirror is excluded from the lens stems).
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.numeric import fallback_numeric_spec
+    mi = _solver(summary="Concave-mirror image formation",
+                 keywords=["concave mirror", "mirror equation"], variables={})
+    code = compose_scene_code("AetherLabScene", mi)
+    assert code is not None
+    compile(code, "<scene>", "exec")
+    assert "concave mirror ray diagram" in code and "Arc(" in code and "MoveAlongPath" in code
+    # Regression: a lens prompt is not stolen by the mirror path.
+    ln = compose_scene_code("AetherLabScene", _solver(keywords=["lens", "focal length"]))
+    assert ln and "thin-lens ray diagram" in ln and "concave mirror" not in ln
+    # Regression: a plain oscillator is not mistaken for an optics problem.
+    osc = compose_scene_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
+    assert osc and "concave mirror ray diagram" not in osc
+    return f"concave-mirror ray-diagram component composed ({len(code)} chars); lens unaffected"
+
+
+def t_f215():
+    # The verification gate must be able to go red. Drives a synthetic failing
+    # run through all three layers that used to swallow it (BUG-60/61/62).
+    import importlib.util
+    import json as _json
+
+    # (1) BUG-60: the harness process exit code follows the run.
+    assert failure_exit_code({"F01": {"status": "PASS"}}) == 0
+    assert failure_exit_code({"F01": {"status": "PASS"}, "F02": {"status": "FAIL"}}) == 1
+
+    # (2) BUG-61/62: the generator refuses to relabel a failing defect feature
+    #     FIXED, and a failing run overrides the hand-stamped Phase-4 column.
+    root = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location(
+        "_f215_tracker", root / "build_feature_tracker.py"
+    )
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    defect_fid = next(iter(gen.DEFECTS))
+    plain_fid = next(r[0] for r in gen.FEATURES if r[0] not in gen.DEFECTS)
+    gen.apply_results({
+        defect_fid: {"status": "FAIL", "note": "synthetic gate probe"},
+        plain_fid: {"status": "FAIL", "note": "synthetic gate probe"},
+    })
+    status_col = gen.HEADERS.index("Status")
+    phase4_col = gen.HEADERS.index("Phase-4 result")
+    rows = {r[0]: r for r in gen.FEATURES}
+    assert rows[defect_fid][status_col] == "REGRESSED", rows[defect_fid][status_col]
+    assert "REGRESSION" in rows[defect_fid][status_col + 1]
+    assert rows[defect_fid][phase4_col] == "FAIL", rows[defect_fid][phase4_col]
+    assert rows[plain_fid][status_col] == "FAIL"
+    assert rows[plain_fid][phase4_col] == "FAIL"
+
+    # (3) BUG-60: the integrity audit refuses to certify a run with failures,
+    #     instead of absorbing them into a regenerated spreadsheet.
+    from tools import tracker_integrity_audit as tia
+
+    doctored = _TMP / "f215_results.json"
+    live = _json.loads(tia.RESULTS_JSON.read_text(encoding="utf-8"))
+    live[plain_fid] = {"status": "FAIL", "note": "synthetic gate probe"}
+    doctored.write_text(_json.dumps(live), encoding="utf-8")
+    original = tia.RESULTS_JSON
+    try:
+        tia.RESULTS_JSON = doctored
+        report = tia.audit()
+    finally:
+        tia.RESULTS_JSON = original
+    assert not report["ok"], "audit certified a run containing failures"
+    assert any(
+        "Feature harness failures recorded" in issue and plain_fid in issue
+        for issue in report["issues"]
+    ), report["issues"]
+    return (
+        f"gate fails loudly: exit code follows the run; {defect_fid} REGRESSED not FIXED; "
+        f"Phase-4 overridden to FAIL; audit rejects failing results (F215)"
+    )
+
+
+def t_f216():
+    # Curated components get intro/closing explanation cards whose numbers come
+    # from the component's own params()/numeric solve, stay LaTeX-free and use
+    # only glyphs verified to render, and fill the requested duration.
+    import re
+
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.numeric import fallback_numeric_spec
+    from aetherlab.services.scene_components import compose_scene_code, lens, pendulum
+    from aetherlab.services.scene_components.explain import (
+        _BUILDERS,
+        add_explanation,
+        explanation_for,
+    )
+    from aetherlab.services.scene_validation import (
+        estimate_duration,
+        scene_hygiene_warnings,
+        validate_scene,
+    )
+
+    osc = fallback_numeric_spec()
+    ode_vars = {"damping": 0.2, "stiffness": 1.5, "mass": 1.0}
+    cases = [
+        (["pendulum"], "Small-angle pendulum", {}, None),
+        (["Kepler orbit"], "Kepler equal-area law", {}, None),
+        (["standing wave"], "Standing wave on a string", {}, None),
+        (["Fourier series"], "Fourier series", {}, None),
+        (["electric dipole", "field lines"], "Dipole field lines", {}, None),
+        (["double-slit interference", "quantum"], "Double-slit interference", {}, None),
+        (["coupled oscillators"], "Coupled oscillators", {}, None),
+        (["quantum", "wavefunction"], "Quantum harmonic oscillator", {}, None),
+        (["kinetic theory"], "Ideal gas", {"temperature": 600}, None),
+        (["lens"], "Thin lens", {}, None),
+        (["concave mirror"], "Concave mirror", {}, None),
+        (["double pendulum"], "Double pendulum", {}, None),
+        (["phase portrait"], "Damped oscillator phase portrait", ode_vars, osc),
+        (["oscillator"], "Damped spring", ode_vars, osc),
+    ]
+    for keywords, summary, variables, spec in cases:
+        sv = _solver(summary=summary, keywords=keywords, variables=variables, numeric_spec=spec)
+        code = compose_scene_code("AetherLabScene", sv, None, 30.0)
+        assert code and "AetherLab explanation layer" in code, summary
+        assert "MathTex" not in code and "Tex(" not in code, f"{summary}: explanation must stay LaTeX-free"
+        assert validate_code_safety(code)[0], summary
+        ok, issues = validate_scene(code, require_motion=True)
+        assert ok, (summary, issues)
+        assert not any("ACCUMULATION" in w for w in scene_hygiene_warnings(code)), summary
+        est = estimate_duration(code).total_seconds
+        assert 24.0 <= est <= 36.0, f"{summary}: {est:.1f}s outside 30s ±20%"
+        # v4: light v2-style cards only. The v3 scaffold (a prediction card etc.
+        # on every topic) was rated below v2, so it must not come back by default.
+        assert "What the animation shows" in code and "Predict first" not in code, summary
+
+    # Every explanation string uses only glyphs verified to render in Manim Text
+    # (the subscript o/i forms rendered as blank boxes and were removed).
+    verified = set("°²·½×ħΔΣγθλπψω₁₂→∂√∝≈")
+    for name in _BUILDERS:
+        for keywords, summary, variables, spec in cases:
+            exp = explanation_for(name, _solver(summary=summary, keywords=keywords,
+                                                variables=variables, numeric_spec=spec or osc))
+            if not exp:
+                continue
+            text = " ".join([
+                exp["heading"], exp["equation"], exp["watch"], exp["takeaway"], *exp["facts"],
+                exp.get("predict", ""), exp.get("answer", ""), *(exp.get("misconception") or ()),
+                *[c[0] for c in exp.get("captions", [])],
+            ])
+            bad = {c for c in text if ord(c) > 127} - verified
+            assert not bad, f"{name}: unverified glyphs {bad}"
+
+    # Numbers are the component's own: the lens image distance on screen is the
+    # one the ray diagram draws, and the pendulum's first swing (57 degree
+    # release) is measured longer than the small-angle formula.
+    lens_sv = _solver(keywords=["lens"], variables={"focal_length": 2.2, "object_distance": 4.5})
+    di = lens.params(lens_sv)["di"]
+    assert any(f"{di:.2f}" in fact for fact in explanation_for("lens", lens_sv)["facts"])
+    pend = explanation_for("pendulum", _solver(keywords=["pendulum"], variables={}))
+    first = next(f for f in pend["facts"] if f.startswith("First swing"))
+    assert float(first.split(":")[1].split()[0]) > 2.05, first
+    assert "Wide swings take longer" in pend["takeaway"]
+    assert pendulum.params(_solver(variables={}))["theta0"] == 1.0
+
+    # Longer requests get longer holds; fail-soft on anything unusable.
+    sv = _solver(keywords=["standing wave"], variables={})
+    short = estimate_duration(compose_scene_code("S", sv, None, 20.0)).total_seconds
+    long_ = estimate_duration(compose_scene_code("S", sv, None, 45.0)).total_seconds
+    assert long_ > short, (short, long_)
+    assert explanation_for("no-such-component", sv) is None
+    assert add_explanation("not python (", {"heading": "h", "facts": ["f"]}) == "not python ("
+    three_d = "from manim import *\nclass S(ThreeDScene):\n    def construct(self):\n        self.wait(1)\n"
+    assert add_explanation(three_d, {"heading": "h", "facts": ["f"]}) == three_d
+
+    # The clutter heuristic treats FadeOut(*self.mobjects) as a full cleanup.
+    busy = "\n".join(f"        self.play(FadeIn(Dot()), run_time=0.1)" for _ in range(14))
+    head = "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+    assert any("ACCUMULATION" in w for w in scene_hygiene_warnings(head + busy))
+    cleared = head + busy + "\n        self.play(FadeOut(*self.mobjects))\n        self.play(FadeIn(Dot()))\n"
+    assert not any("ACCUMULATION" in w for w in scene_hygiene_warnings(cleared))
+    gathered = head + busy + "\n        _stage = Group(*self.mobjects)\n        self.play(FadeIn(Dot()))\n"
+    assert not any("ACCUMULATION" in w for w in scene_hygiene_warnings(gathered))
+
+    # The v3 devices stay available as opt-in ingredients. When an explanation
+    # asks for them, captions run one at a time, point only at objects the
+    # scene really creates, and the misconception is crossed out beside a thumbnail.
+    from aetherlab.services.scene_components import compose_component_code
+
+    base = compose_component_code("S", _solver(keywords=["pendulum"], variables={}))
+    opted = add_explanation(base, {
+        "heading": "h", "equation": "e", "watch": "w", "facts": ["f1", "f2"], "takeaway": "t",
+        "predict": "Heavier bob?", "answer": "Same period.", "outro": "beside",
+        "misconception": ("Heavier is faster.", "Mass cancels."),
+        "captions": [("one", "bob"), ("two", "readout"), ("three", "no_such_name")],
+    }, 30.0)
+    assert "Predict first" in opted and "to_corner(UL" in opted and "Cross(_mis_wrong" in opted
+    windows = [(float(a), float(b)) for a, b in re.findall(
+        r"_cap_\d\.add_updater\(lambda m: m\.set_opacity\(_cap_alpha\(_clock\.get_value\(\), "
+        r"([\d.]+), ([\d.]+)\)\)\)", opted)]
+    assert len(windows) == 3 and all(b1 < a2 for (_, b1), (a2, _) in zip(windows, windows[1:]))
+    anchors = set(re.findall(r"_cap_point_update\(m, _cap_\d, lambda: (\w+),", opted))
+    assert anchors == {"bob", "readout"}, anchors   # the unknown anchor is dropped
+    assert validate_scene(opted, require_motion=True)[0] and validate_code_safety(opted)[0]
+    return (
+        f"{len(cases)} curated scenes explained with light cards, safe, valid, ~30s; "
+        f"glyphs verified; opt-in devices render correctly (F216)"
+    )
+
+
+def t_f217():
+    # Each review topic gets its own creative scenario (a race, a stopwatch, a
+    # build-up...) restaging the component's physics. Each must be safe, valid
+    # and ~30 s, and its on-screen claims must hold numerically. A scenario
+    # that breaks falls back to the plain component.
+    import math
+
+    import numpy as np
+
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_components import compose_scene_code, scenarios
+    from aetherlab.services.scene_components.scenarios import (
+        energy_buckets,
+        field_arrows,
+        fourier_buildup,
+        kepler_stopwatch,
+        pendulum_race,
+        photon_buildup,
+    )
+    from aetherlab.services.scene_validation import estimate_duration, validate_scene
+
+    topics = {
+        "the pendulum race": ["pendulum"],
+        "Kepler's stopwatch": ["Kepler orbit"],
+        "two waves meet": ["standing wave"],
+        "a square wave, one circle at a time": ["Fourier series"],
+        "follow the arrows": ["electric dipole", "field lines"],
+        "photon by photon": ["double-slit interference", "quantum"],
+        "energy buckets": ["coupled oscillators"],
+    }
+    for marker, keywords in topics.items():
+        code = compose_scene_code("S", _solver(keywords=keywords, variables={}), None, 30.0)
+        assert code and f"scenario: {marker}" in code, (marker, code[:200] if code else code)
+        assert "What the animation shows" in code and "MathTex" not in code, marker
+        assert validate_code_safety(code)[0], marker
+        ok, issues = validate_scene(code, require_motion=True)
+        assert ok, (marker, issues)
+        est = estimate_duration(code).total_seconds
+        assert 24.0 <= est <= 36.0, f"{marker}: {est:.1f}s"
+    assert len(set(scenarios.SCENARIOS.values())) == len(topics)
+
+    sv = _solver(variables={})
+    race = pendulum_race._race(sv)
+    periods = {k: pendulum_race._first_period(race[k][2]) for k in ("short", "long", "small", "big")}
+    assert abs(periods["long"] / periods["short"] - math.sqrt(2)) < 0.01, periods
+    assert periods["big"] > 1.03 * periods["small"], periods
+
+    orbit = kepler_stopwatch._orbit_samples(_solver(keywords=["Kepler orbit"], variables={}))
+    areas, dists = orbit["area"], orbit["dist"]
+    assert (max(areas) - min(areas)) / (sum(areas) / len(areas)) < 0.02, areas
+    assert max(dists) / min(dists) > 2.0, dists
+
+    over = fourier_buildup._overshoots([1, 3, 5, 7, 9, 11, 13, 15, 17])
+    assert over[0] > over[-1] and 8.5 <= over[-1] <= 10.0, over
+
+    k = 1.9
+    two = np.array([h[1] for h in photon_buildup._sample(k, True, 520, 2026)])
+    one = np.array([h[1] for h in photon_buildup._sample(k, False, 420, 926)])
+    dark_two = float(np.mean(np.cos(k * two) ** 2 < 0.1))
+    dark_one = float(np.mean(np.cos(k * one) ** 2 < 0.1))
+    assert dark_two < 0.03 and dark_one > 0.1, (dark_two, dark_one)   # bands vs no bands
+
+    run = energy_buckets._run(_solver(keywords=["coupled oscillators"], variables={}))
+    assert run["peak_share"] > 0.85, run["peak_share"]
+    assert abs(run["peak_t"] - run["transfer"]) / run["transfer"] < 0.1, (run["peak_t"], run["transfer"])
+
+    stops = field_arrows._probes(2.4)
+    assert stops[3][1] > stops[2][1] > stops[1][1] > stops[0][1] == 1.0, stops
+
+    # Fail-soft: a scenario that raises leaves the plain component in place.
+    original = pendulum_race.build
+    try:
+        def broken(*_a, **_k):
+            raise RuntimeError("boom")
+        pendulum_race.build = broken
+        fallback = compose_scene_code("S", _solver(keywords=["pendulum"], variables={}), None, 30.0)
+    finally:
+        pendulum_race.build = original
+    assert fallback and "nonlinear pendulum" in fallback and "scenario:" not in fallback
+    return (
+        f"{len(topics)} topic scenarios composed (safe, valid, ~30 s); race √2, equal areas, "
+        f"Gibbs {over[-1]:.1f}%, bands vs hump, energy transfer {run['peak_share']:.0%} verified (F217)"
+    )
+
+
+def t_f218():
+    # A concrete problem with its givens gets a ~1 minute video that solves it
+    # (its own device: two shadows / two clocks / Newton's cannon) and proves
+    # the answer with the simulation. Without givens, the topic scenario plays.
+    import math
+    import re
+
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.scene_components.problems import (
+        moon_clock,
+        orbit_period,
+        projectile_landing,
+    )
+    from aetherlab.services.scene_validation import estimate_duration, validate_scene
+
+    problems = {
+        "where does the kicked ball land": _solver(
+            summary="A ball is kicked at 18 m/s at 40 degrees. How far away does it land?",
+            keywords=["projectile", "kicked ball"], variables={"v0": 18.0, "theta": 40.0}),
+        "a grandfather clock on another world": _solver(
+            summary="A grandfather clock pendulum is taken to the Moon. How long is one swing?",
+            keywords=["pendulum", "Moon", "clock"], variables={"length": 0.994, "g": 1.62}),
+        "how long is one lap of the ISS": _solver(
+            summary="The ISS orbits 420 km above Earth. How long is one orbit?",
+            keywords=["ISS", "orbit"], variables={"altitude_km": 420.0}),
+    }
+    verified = set("°²·½×ħΔΣγθλπψω₁₂→∂√∝≈⁰¹³⁴⁵⁶⁷⁸⁹")
+    for marker, sv in problems.items():
+        code = compose_scene_code("S", sv, None, 60.0)
+        assert code and f"problem: {marker}" in code, marker
+        assert "What the animation shows" not in code, f"{marker}: problem videos need no cards"
+        assert validate_code_safety(code)[0], marker
+        ok, issues = validate_scene(code, require_motion=True)
+        assert ok, (marker, issues)
+        assert estimate_duration(code).total_seconds >= 45.0, marker   # lower bound (loops count once)
+        texts = " ".join(text for _, text in re.findall(r"Text\((['\"])(.*?)\1", code, re.S))
+        bad = {c for c in texts if ord(c) > 127} - verified
+        assert not bad, f"{marker}: unverified glyphs {bad}"
+
+    # Without the givens the topic's explainer scenario plays instead.
+    plain = compose_scene_code("S", _solver(keywords=["pendulum"], variables={}), None, 30.0)
+    assert "scenario: the pendulum race" in plain
+    kepler = compose_scene_code("S", _solver(keywords=["Kepler orbit"], variables={}), None, 30.0)
+    assert "scenario: Kepler's stopwatch" in kepler
+
+    # The numbers each video states hold up numerically.
+    p = projectile_landing.params(problems["where does the kicked ball land"])
+    sol = projectile_landing._solve(p)
+    assert abs(sol["landing_num"] - sol["range"]) < 0.01 * sol["range"]
+    assert abs(sol["range"] - 32.5) < 0.1 and abs(sol["t"] - 2.36) < 0.01, (sol["range"], sol["t"])
+    assert abs(sol["what_if"][30] - sol["what_if"][60]) < 1e-6 and sol["what_if"][45] > sol["what_if"][30]
+    assert projectile_landing.params(_solver(variables={"v0": 18.0, "theta": 0.698}))["angle"] > 39.9
+
+    m = moon_clock._solve(moon_clock.params(problems["a grandfather clock on another world"]))
+    assert abs(m["swing_earth"] - 1.0) < 0.01 and abs(m["swing_there"] - 2.46) < 0.01, m["swing_there"]
+    assert abs(m["measured"] - m["swing_there"]) < 0.02 * m["swing_there"]
+    assert abs(m["sync_length"] - 0.994 * 1.62 / 9.81) < 1e-9
+
+    o = orbit_period._solve(orbit_period.params(problems["how long is one lap of the ISS"]))
+    assert o["closure"] < 0.01 and abs(o["period"] / 60 - 92.8) < 0.2, o["period"] / 60
+    assert abs((o["geo_r"] - 6.371e6) / 1000 - 35786) < 60, o["geo_r"]
+    assert orbit_period._sci(6.791e6) == "6.79 × 10⁶"
+    assert math.isclose(orbit_period.params(_solver(variables={"altitude": 420000.0}))["altitude_km"], 420.0)
+    return (
+        "3 problem videos (kicked ball 32.5 m, Moon clock 2.46 s, ISS 92.8 min) solve, "
+        "self-check by simulation, use verified glyphs; plain topics keep scenarios (F218)"
+    )
+
+
+def t_f219():
+    # A backup provider takes over any model call the primary fails (cut
+    # connection, error status, empty reply), re-deriving model, temperature
+    # and thinking flags for the backup's family. Kimi models get temperature 1.
+    import asyncio
+    import os
+    from types import SimpleNamespace
+
+    import httpx
+    import openai
+
+    from aetherlab.core.settings import load_settings, save_app_config
+    from aetherlab.services import llm_client
+    from aetherlab.services.model_policy import fallback_settings, request_temperature, resolve_pathway
+
+    assert resolve_pathway("k3-agent").fixed_temperature == 1.0
+    assert resolve_pathway("MiniMax-M3").fixed_temperature is None
+
+    saved = {k: os.environ.pop(k, None) for k in (
+        "AETHERLAB_FALLBACK_OPENAI_API_KEY", "AETHERLAB_FALLBACK_OPENAI_BASE_URL", "AETHERLAB_FALLBACK_LLM_MODEL")}
+    try:
+        save_app_config({"fallback_api_key": "mm-key", "fallback_base_url": "https://api.minimax.io/v1",
+                         "fallback_model": "MiniMax-M3"})
+        s = load_settings()
+        assert (s.fallback_llm_model, s.fallback_base_url) == ("MiniMax-M3", "https://api.minimax.io/v1")
+        save_app_config({"fallback_api_key": None, "fallback_base_url": None, "fallback_model": None})
+        assert fallback_settings(load_settings()) is None
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    calls = []
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.base_url = kwargs.get("base_url")
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+        async def _create(self, **kwargs):
+            calls.append((self.base_url, kwargs))
+            if "kimi" in self.base_url:
+                raise openai.APIConnectionError(request=httpx.Request("POST", self.base_url))
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+
+    settings = SimpleNamespace(
+        openai_api_key="k", openai_base_url="https://agent-gw.kimi.com/coding/v1", llm_model="k3-agent",
+        vision_model=None, llm_timeout_seconds=900, llm_max_retries=0,
+        fallback_api_key="m", fallback_base_url="https://api.minimax.io/v1", fallback_llm_model="MiniMax-M3")
+    real = openai.AsyncOpenAI
+    openai.AsyncOpenAI = FakeAsyncOpenAI
+    try:
+        client = llm_client.make_client(settings)
+        reply = asyncio.run(client.chat.completions.create(
+            model="k3-agent", temperature=request_temperature(settings, 0.2), messages=[]))
+    finally:
+        openai.AsyncOpenAI = real
+    assert reply.choices[0].message.content == "ok"
+    assert calls[0][1]["temperature"] == 1.0 and calls[1][1]["model"] == "MiniMax-M3"
+    assert calls[1][1]["temperature"] == 0.2 and client.last_served_by == "MiniMax-M3"
+    return "backup provider takes over a failed K3 call as MiniMax-M3 at the wanted temperature (F219)"
+
+
+def t_f220():
+    # Well-explained LaTeX PDFs: a topic gets a study guide, a problem gets
+    # theory plus a step-by-step solution, a boxed answer and independent checks.
+    # Model LaTeX can only break one equation (the compile heals); with no model
+    # a document is still built from the solver.
+    import asyncio
+    import shutil
+    from types import SimpleNamespace
+
+    from aetherlab.__main__ import build_parser
+    from aetherlab.core.models import ProblemRequest, RagResult
+    from aetherlab.services import study_document as sd
+
+    assert sd.classify("A ball is kicked at 18 m/s at 40 degrees. How far does it land?") == "problem"
+    assert sd.classify("Explain Planck's law of blackbody radiation") == "topic"
+    parsed = sd._parse_json(r'{"title": "t", "sections": [{"heading": "h", "paragraphs": ["p"],'
+                            r' "equations": [{"latex": "\frac{a}{b} + \theta", "note": ""}]}]}')
+    assert parsed["sections"][0]["equations"][0]["latex"] == "\\frac{a}{b} + \\theta"
+
+    content = {
+        "title": "Kicked ball", "restatement": "r", "given": [{"symbol": "v_0", "value": "18\\,\\mathrm{m/s}",
+                                                                 "meaning": "speed"}],
+        "find": ["range $R$"], "theory": [{"heading": "Projectiles", "paragraphs": ["two motions"],
+                                          "equations": [{"latex": "x = v_x t", "note": ""}]}],
+        "plan": ["time of flight", "range"],
+        "steps": [{"title": "Time", "explanation": "up and down", "latex": "t = 2 v_y / g"},
+                  {"title": "Oops", "explanation": "bad", "latex": "\\frac{1}{"}],
+        "final_answer": {"statement": "R = 32.5 m", "latex": "R = 32.5\\,\\mathrm{m}"},
+        "checks": ["units"], "common_mistakes": ["using degrees"], "summary": ["done"],
+    }
+    request = ProblemRequest(prompt="A ball is kicked at 18 m/s at 40 degrees. How far does it land?")
+    doc = sd.build_document(content, "problem", request, ["Ref A"], ["simulated: 32.53 m"], None, "test")
+    source, _ = doc.render(set())
+    for piece in ("\\section{Theory you need}", "\\section{Solution}", "\\begin{answerbox}",
+                  "Independent checks by AetherLab", "\\begin{warnbox}", "\\section*{References}"):
+        assert piece in source, piece
+    have_tex = shutil.which("pdflatex") is not None
+    if have_tex:
+        (_TMP / "f220").mkdir(exist_ok=True)
+        pdf, repaired, error = sd.compile_healing(doc, _TMP / "f220" / "document.tex")
+        assert pdf is not None and repaired == 1 and error == "", (repaired, error)
+
+    out = asyncio.run(sd.write_study_document(
+        ProblemRequest(prompt="Explain damped oscillations"), _solver(),
+        RagResult(keywords=[], hits=[], backend="t"), SimpleNamespace(openai_api_key=None), _TMP / "f220b"))
+    assert out.mode == "topic" and out.tex_path.exists() and (out.pdf_path is not None or not have_tex)
+
+    assert build_parser().parse_args(["--pdf", "x"]).pdf == "x"
+    src = Path("aetherlab/ui/main_window.py").read_text(encoding="utf-8")
+    assert "write_study_document(" in src, "Export PDF uses the study document"
+    return (
+        f"topic/problem PDFs: parsed LaTeX JSON, theory + solution + answer + checks, "
+        f"broken equation healed ({'pdflatex' if have_tex else 'no pdflatex'}), offline fallback, CLI --pdf (F220)"
+    )
+
+
+def t_f221():
+    # Harder problem videos (v6): relativity, quantum, chaos and normal modes,
+    # each with its own device, typeset math (with a text fallback when LaTeX
+    # is missing), 80 s or more of full working, and a numerical proof of the
+    # answer. They must not steal plain topics or the v5 problems.
+    import ast
+    import re
+
+    from aetherlab.services.code_safety import validate_code_safety
+    from aetherlab.services.scene_components import compose_scene_code
+    from aetherlab.services.scene_components.problems import (
+        chaos_horizon,
+        coupled_swing,
+        muon_paradox,
+        quantum_dot,
+    )
+    from aetherlab.services.scene_components.problems._kit import VERIFIED_GLYPHS, plain_glyphs
+    from aetherlab.services.scene_validation import estimate_duration, validate_scene
+
+    cases = {
+        "do the muons reach the ground": _solver(
+            summary="Muons made 15 km up fly down at 0.995c; half-life 1.52 microseconds. What fraction arrives?",
+            keywords=["muon", "time dilation"], variables={"h": 15000.0, "v": 0.995, "t_half": 1.52e-6}),
+        "what colour does the trapped electron glow": _solver(
+            summary="An electron in a 1.0 nm box (particle in a box) drops from n = 3 to n = 2. What colour?",
+            keywords=["particle in a box"], variables={"L": 1.0e-9, "n_i": 3, "n_f": 2}),
+        "how far ahead can we predict a double pendulum": _solver(
+            summary="Two double pendulums start 1e-6 rad apart. When do they disagree? (chaos)",
+            keywords=["double pendulum", "chaos"], variables={"theta1": 120.0, "theta2": -10.0, "delta": 1e-6}),
+        "how long until the swing walks across": _solver(
+            summary="Two 1 m pendulums coupled by a k = 1 N/m spring; one is pulled 10 degrees aside.",
+            keywords=["coupled pendulums"], variables={"L": 1.0, "m": 1.0, "k": 1.0, "theta0": 10.0}),
+    }
+    for marker, sv in cases.items():
+        code = compose_scene_code("S", sv, None, 60.0)
+        assert code and f"problem: {marker}" in code, marker
+        assert validate_code_safety(code)[0], marker
+        ok, issues = validate_scene(code, require_motion=True)
+        assert ok, (marker, issues)
+        assert estimate_duration(code).total_seconds >= 60.0, marker   # lower bound (loops count once)
+        assert "MathTex(tex" in code and "except Exception" in code, f"{marker}: typeset math needs its fallback"
+        data = ast.literal_eval(re.search(r"^        D = (\{.*\})$", code, re.M).group(1))
+        literals = "".join(t for _, t in re.findall(r"Text\((['\"])(.*?)\1", code, re.S))
+        bad = (plain_glyphs(data) | {c for c in literals if ord(c) > 127}) - VERIFIED_GLYPHS
+        assert not bad, f"{marker}: unverified glyphs {bad}"
+
+    # The stated numbers hold up against independent calculations.
+    m = muon_paradox._solve(muon_paradox.params(cases["do the muons reach the ground"]))
+    assert abs(m["gamma"] - 10.01) < 0.01 and abs(m["t_lab"] * 1e6 - 50.28) < 0.05 and abs(m["tau"] * 1e6 - 5.02) < 0.01
+    assert abs(m["relativistic"] - 0.1012) < 0.001 and m["classical"] < 1e-9
+    assert abs(m["ode_fraction"] - m["relativistic"]) < 1e-6 and abs(m["survivors"] / m["n"] - m["relativistic"]) < 0.05
+    q = quantum_dot._solve(quantum_dot.params(cases["what colour does the trapped electron glow"]))
+    assert abs(q["e1"] - 0.376) < 0.001 and abs(q["lam"] - 659.4) < 0.5 and abs(q["lam_num"] - q["lam"]) < 0.5
+    assert quantum_dot.colour_name(q["lam"]) == "red" and 520 < q["what_if"][0][1] < 540
+    c = chaos_horizon._solve(chaos_horizon.params(cases["how far ahead can we predict a double pendulum"]))
+    splits = [r["split"] for r in c["runs"]]
+    assert abs(splits[0] - 12.85) < 0.3 and 4.0 < splits[1] - splits[0] < 10.0, splits
+    assert abs(c["rate"] - 1.0) < 0.1 and c["drift"] < 1e-8
+    w = coupled_swing._solve(coupled_swing.params(cases["how long until the swing walks across"]))
+    assert abs(w["T"] - 10.32) < 0.05 and abs(w["T_sim"] - w["T"]) < 0.03 * w["T"] and w["left"] < 0.01
+
+    # Plain topics and the v5 problems keep their own videos.
+    assert "problem: how far ahead" not in (compose_scene_code("S", _solver(keywords=["double pendulum"]), None, 30.0) or "")
+    assert "scenario: the pendulum race" in compose_scene_code("S", _solver(keywords=["pendulum"], variables={}), None, 30.0)
+    kicked = _solver(summary="A ball is kicked at 18 m/s at 40 degrees. How far?", keywords=["projectile"],
+                     variables={"v0": 18.0, "theta": 40.0})
+    assert "problem: where does the kicked ball land" in compose_scene_code("S", kicked, None, 60.0)
+    return (
+        f"4 harder problem videos: muons (γ {m['gamma']:.1f}, {100 * m['relativistic']:.1f}% arrive), "
+        f"quantum dot ({q['lam']:.0f} nm), chaos (split {splits[0]:.1f} s, +{splits[1] - splits[0]:.1f} s per 1000×), "
+        f"coupled pendulums ({w['T']:.1f} s); typeset math with fallback, verified glyphs, routing kept (F221)"
+    )
+
+
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())
          if name.startswith("t_f") and callable(globals()[name])}
+
+
+def failure_exit_code(results_map: dict[str, dict]) -> int:
+    """Return the process exit code for a finished run (BUG-60).
+
+    The harness used to `return 0` unconditionally, so the CI step that runs it
+    could never fail on a feature regression — the whole 'NNN/NNN green' claim
+    was unenforced. Kept as a pure function so t_f215 can assert both branches
+    without running the suite.
+    """
+    return 1 if any(r.get("status") == "FAIL" for r in results_map.values()) else 0
 
 
 def main() -> int:
@@ -5832,7 +7004,7 @@ def main() -> int:
         json.dumps(results, indent=2), encoding="utf-8", newline="\n"
     )
     print("Wrote feature_test_results.json")
-    return 0
+    return failure_exit_code(results)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,12 @@ class AppSettings:
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 0
     llm_context_window: int = 250_000
+    # Optional backup provider (OpenAI-compatible). When all three are set,
+    # every model call that fails on the primary (connection cut, timeout,
+    # error status, empty reply) is retried once here; see llm_client.py.
+    fallback_api_key: str | None = None
+    fallback_base_url: str | None = None
+    fallback_llm_model: str | None = None
     # Optional vision-capable model (same OpenAI-compatible endpoint) used by
     # the scene critic to look at rendered frames. None disables the critique
     # loop entirely (renders ship uncritiqued, as before).
@@ -43,6 +49,8 @@ class AppSettings:
     narration_enabled: bool = False
     tts_voice: str = "en-US-AndrewMultilingualNeural"
     tts_rate: str = "+8%"
+    # Local-only spaced-review schedule expressed as comma-separated days.
+    review_intervals_days: str = "1,3,7,14"
     # Pluggable render backend. Local is today's behavior; cloud/auto are
     # additive and fail soft to local when GitHub Actions is unavailable.
     render_mode: str = "local"  # local | cloud | auto
@@ -199,6 +207,10 @@ def load_settings() -> AppSettings:
     else:
         source = qwen.get("source", "environment")
 
+    fallback_api_key = _first_env("AETHERLAB_FALLBACK_OPENAI_API_KEY") or app_cfg.get("fallback_api_key")
+    fallback_base_url = _first_env("AETHERLAB_FALLBACK_OPENAI_BASE_URL") or app_cfg.get("fallback_base_url")
+    fallback_llm_model = _first_env("AETHERLAB_FALLBACK_LLM_MODEL") or app_cfg.get("fallback_model")
+
     cloud_enabled = _as_bool(
         os.getenv("CLOUD_RENDER_ENABLED"),
         legacy_env.get("CLOUD_RENDER_ENABLED"),
@@ -213,15 +225,23 @@ def load_settings() -> AppSettings:
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,
+        fallback_api_key=fallback_api_key or None,
+        fallback_base_url=fallback_base_url or None,
+        fallback_llm_model=fallback_llm_model or None,
         llm_timeout_seconds=max(
             5.0,
             min(
-                900.0,
+                # Mirrors model_policy.MAX_LLM_TIMEOUT_SECONDS — reasoning
+                # models legitimately need minutes for one call.
+                1800.0,
                 _as_float(
                     _first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT"),
                     app_cfg.get("llm_timeout_seconds"),
                     _first_mapping(legacy_env, "LLM_TIMEOUT"),
-                    default=60.0,
+                    # An explicit setting always wins; only the DEFAULT is
+                    # model-aware, so selecting a reasoning model works out of
+                    # the box instead of timing out into the fallback template.
+                    default=_default_llm_timeout(llm_model),
                 ),
             ),
         ),
@@ -257,6 +277,11 @@ def load_settings() -> AppSettings:
             or "en-US-AndrewMultilingualNeural"
         ),
         tts_rate=_first_env("AETHERLAB_TTS_RATE", "TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
+        review_intervals_days=(
+            _first_env("AETHERLAB_REVIEW_INTERVALS_DAYS")
+            or app_cfg.get("review_intervals_days")
+            or "1,3,7,14"
+        ),
         render_mode=_render_mode(
             os.getenv("AETHERLAB_RENDER_MODE")
             or app_cfg.get("render_mode")
@@ -351,6 +376,19 @@ def load_settings() -> AppSettings:
         api_key_source=api_key_source,
         provider_warning=provider_warning,
     )
+
+
+def _default_llm_timeout(model: str) -> float:
+    """Per-model default budget, or 60s if the policy module is unavailable.
+
+    Imported lazily so core.settings keeps no hard dependency on services.
+    """
+    try:
+        from aetherlab.services.model_policy import default_timeout_for
+
+        return float(default_timeout_for(model))
+    except Exception:  # noqa: BLE001 — a default must never break settings load
+        return 60.0
 
 
 def _first_env(*names: str) -> str | None:

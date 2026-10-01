@@ -68,6 +68,16 @@ class AetherLabPipeline:
                 scene.status = "compiled"
                 scene.video_path = ""
 
+            try:
+                from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+                refresh_scene_bundle_spec(scene, request, solver, rag)
+                self.cache.store_scene(key, scene)
+            except Exception as exc:  # noqa: BLE001 - the spec cannot block a solve
+                scene.diagnostics.append(
+                    f"Scene specification unavailable: {type(exc).__name__}."
+                )
+
             # Render to MP4 (skip if a valid cached video already exists);
             # render-time API errors get a bounded LLM self-repair pass.
             if scene.status == "compiled":
@@ -75,6 +85,14 @@ class AetherLabPipeline:
                     scene, self.settings, brief=request.prompt
                 )
                 self.cache.store_scene(key, scene)
+
+        try:
+            from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+            refresh_scene_bundle_spec(scene, request, solver, rag)
+            self.cache.store_scene(key, scene)
+        except Exception as exc:  # noqa: BLE001 - evidence export never blocks a solve
+            scene.diagnostics.append(f"Scene specification unavailable: {type(exc).__name__}.")
 
         return PipelineResult(
             request=request,
@@ -118,10 +136,24 @@ class AetherLabPipeline:
         return True
 
     def _scene_cache_usable(self, scene) -> bool:
+        if _stale_fallback_scene(scene, self.settings):
+            return False
         min_score = float(getattr(self.settings, "min_quality_score", 0.0) or 0.0)
         if min_score <= 0:
             return True
         return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
+
+
+def _stale_fallback_scene(scene, settings) -> bool:
+    """True for a cached built-in template when an AI scene is now possible.
+
+    A timed-out or failed generation caches the domain template with
+    ``used_fallback``. Reusing it pinned that prompt to the template forever,
+    even after the provider recovered, so with a key configured it is a miss.
+    """
+    return bool(getattr(scene, "used_fallback", False)) and bool(
+        getattr(settings, "openai_api_key", None)
+    )
 
 
 def _video_exists(video_path: str) -> bool:

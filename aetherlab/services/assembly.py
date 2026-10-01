@@ -89,11 +89,18 @@ async def assemble_lesson(
 
     # Produced lesson (cards + crossfades) when we have card metadata.
     if lesson_title or chapter_titles:
-        produced = await _assemble_produced(
-            ffmpeg, clips, Path(out_path),
-            lesson_title=lesson_title, lesson_subtitle=lesson_subtitle,
-            chapter_titles=chapter_titles or [], palette=palette, timeout=timeout,
-        )
+        produced = None
+        # One retry before downgrading: a failure at the very end of an
+        # otherwise complete encode (seen on a Windows CI runner) is usually
+        # transient, and the fallback silently drops every card and crossfade.
+        for _attempt in range(2):
+            produced = await _assemble_produced(
+                ffmpeg, clips, Path(out_path),
+                lesson_title=lesson_title, lesson_subtitle=lesson_subtitle,
+                chapter_titles=chapter_titles or [], palette=palette, timeout=timeout,
+            )
+            if produced:
+                break
         if produced:
             path, chapter_starts = produced
             return _result(path, chapter_starts)
@@ -418,6 +425,23 @@ async def _xfade_chain(
     return await _run(cmd, timeout)
 
 
+def _ffmpeg_error_summary(stderr: bytes, tail: int = 400) -> str:
+    """ffmpeg's error lines plus the end of its log.
+
+    The tail alone is mostly encoder statistics, which hid the actual error
+    behind "Conversion failed!" (Windows CI, 2026-10-01).
+    """
+    text = stderr.decode(errors="replace")
+    markers = ("error", "invalid", "failed", "denied", "no such", "cannot", "unable")
+    errors = [
+        line.strip() for line in text.splitlines()
+        if any(marker in line.lower() for marker in markers)
+        and "conversion failed" not in line.lower()
+    ]
+    summary = " | ".join(dict.fromkeys(errors[:8]))
+    return (summary + " || tail: " if summary else "") + text[-tail:]
+
+
 async def _run(cmd: list[str], timeout: int) -> bool:
     from aetherlab.core.proc import subprocess_kwargs
 
@@ -442,6 +466,6 @@ async def _run(cmd: list[str], timeout: int) -> bool:
         log.warning("ffmpeg assembly timed out.")
         return False
     if proc.returncode != 0:
-        log.warning("ffmpeg assembly failed: %s", stderr.decode(errors="replace")[-600:])
+        log.warning("ffmpeg assembly failed: %s", _ffmpeg_error_summary(stderr))
         return False
     return True

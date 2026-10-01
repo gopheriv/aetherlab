@@ -20,6 +20,7 @@ from typing import Any
 
 from aetherlab import __version__
 from aetherlab.services.pdf import export_lesson_study_guide
+from aetherlab.services.scene_specification import public_scene_spec
 
 
 @dataclass(frozen=True)
@@ -78,10 +79,17 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
                     _writestr(zf, entries, f"{root}/media/lesson.vtt", vtt_text)
                 for idx, scene in enumerate(getattr(bundle, "chapter_scenes", []) or [], 1):
                     code = str(getattr(scene, "code", "") or "")
-                    if not code.strip():
-                        continue
-                    name = _scene_filename(bundle, idx)
-                    _writestr(zf, entries, f"{root}/scenes/{name}", code)
+                    if code.strip():
+                        name = _scene_filename(bundle, idx)
+                        _writestr(zf, entries, f"{root}/scenes/{name}", code)
+                    spec = public_scene_spec(getattr(scene, "scene_spec", None))
+                    if spec is not None:
+                        _writestr(
+                            zf,
+                            entries,
+                            f"{root}/evidence/scene_{idx:02d}.json",
+                            json.dumps(spec, indent=2, ensure_ascii=False),
+                        )
 
         os.replace(staging, output_path)
     except BaseException:
@@ -112,6 +120,11 @@ def _metadata(bundle: Any) -> dict[str, Any]:
             i: i
             for i, _scene in enumerate(getattr(bundle, "chapter_scenes", []) or [])
         }
+    evidence_specs = [
+        f"evidence/scene_{index:02d}.json"
+        for index, scene in enumerate(getattr(bundle, "chapter_scenes", []) or [], 1)
+        if public_scene_spec(getattr(scene, "scene_spec", None)) is not None
+    ]
     chapters = []
     for idx, chapter in enumerate(getattr(plan, "chapters", []) or []):
         render_index = rendered_map.get(idx)
@@ -159,6 +172,7 @@ def _metadata(bundle: Any) -> dict[str, Any]:
             "subtitles_srt": "media/lesson.srt",
             "subtitles_vtt": "media/lesson.vtt",
             "study_guide": "study_guide.tex",
+            "evidence_specs": evidence_specs,
         },
     }
 

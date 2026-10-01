@@ -347,6 +347,22 @@ class SettingsDialog(QtWidgets.QDialog):
         narr_hint.setWordWrap(True)
         form.addWidget(narr_hint)
 
+        form.addSpacing(4)
+        form.addWidget(self._section("LEARNING"))
+        self._review_intervals_combo = QtWidgets.QComboBox()
+        self._review_intervals_combo.setEditable(True)
+        self._review_intervals_combo.addItems(["1,3,7,14", "1,2,4,8", "1,7,14", "1"])
+        saved_intervals = str(
+            getattr(settings, "review_intervals_days", "1,3,7,14") or "1,3,7,14"
+        )
+        if self._review_intervals_combo.findText(saved_intervals) < 0:
+            self._review_intervals_combo.addItem(saved_intervals)
+        self._review_intervals_combo.setCurrentText(saved_intervals)
+        self._review_intervals_combo.setToolTip(
+            "Days between successful retrieval checks, as comma-separated values (1 to 365)."
+        )
+        form.addLayout(self._labeled("Review intervals (days)", self._review_intervals_combo))
+
         # ── Paths ──
         form.addSpacing(4)
         form.addWidget(self._section("PATHS"))
@@ -539,13 +555,20 @@ class SettingsDialog(QtWidgets.QDialog):
             lambda _cancel, _progress: test_connection(probe)
         )
         self._provider_task.succeeded.connect(self._on_provider_test_result)
-        self._provider_task.failed.connect(
-            lambda message: self._on_provider_test_result(
-                (False, f"Connection failed: {message}")
-            )
-        )
-        self._provider_task.finished.connect(lambda: self._test_btn.setEnabled(True))
+        # Bound methods, not lambdas: PyQt drops a bound-method connection when
+        # the dialog is destroyed, so a finished signal still queued from a
+        # closed dialog can never run against its deleted widgets. A lambda has
+        # no receiver; one queued from an earlier dialog crashed the CI runner
+        # with an access violation (F157, 2026-10-01).
+        self._provider_task.failed.connect(self._on_provider_test_failed)
+        self._provider_task.finished.connect(self._on_provider_task_finished)
         self._provider_task.start()
+
+    def _on_provider_test_failed(self, message: str) -> None:
+        self._on_provider_test_result((False, f"Connection failed: {message}"))
+
+    def _on_provider_task_finished(self) -> None:
+        self._test_btn.setEnabled(True)
 
     def _on_provider_test_result(self, result: object) -> None:
         ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
@@ -616,13 +639,15 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._cloud_task = BackgroundTask(setup_cloud)
         self._cloud_task.succeeded.connect(self._on_cloud_test_result)
-        self._cloud_task.failed.connect(
-            lambda message: self._on_cloud_test_result(
-                (False, f"Cloud setup failed: {message}")
-            )
-        )
-        self._cloud_task.finished.connect(lambda: self._cloud_test_btn.setEnabled(True))
+        self._cloud_task.failed.connect(self._on_cloud_test_failed)
+        self._cloud_task.finished.connect(self._on_cloud_task_finished)
         self._cloud_task.start()
+
+    def _on_cloud_test_failed(self, message: str) -> None:
+        self._on_cloud_test_result((False, f"Cloud setup failed: {message}"))
+
+    def _on_cloud_task_finished(self) -> None:
+        self._cloud_test_btn.setEnabled(True)
 
     def _on_cloud_test_result(self, result: object) -> None:
         ok, message = result if isinstance(result, tuple) and len(result) == 2 else (
@@ -691,8 +716,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._github_task.progress.connect(self._on_github_device_code)
         self._github_task.succeeded.connect(self._on_github_token)
         self._github_task.failed.connect(self._on_github_login_failed)
-        self._github_task.finished.connect(lambda: self._get_token_btn.setEnabled(True))
+        self._github_task.finished.connect(self._on_github_task_finished)
         self._github_task.start()
+
+    def _on_github_task_finished(self) -> None:
+        self._get_token_btn.setEnabled(True)
 
     def _on_github_device_code(self, payload: object) -> None:
         import webbrowser
@@ -753,6 +781,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "narration_enabled": self._narration_check.isChecked(),
             "auto_tournament": self._auto_tournament_check.isChecked(),
             "tts_voice": self._tts_voice_edit.text().strip() or None,
+            "review_intervals_days": self._review_intervals_combo.currentText().strip(),
         }
 
 
@@ -783,12 +812,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._export_task: BackgroundTask | None = None
         self._close_pending = False
         self._last_result: PipelineResult | None = None
+        self._active_solver: SolverResult | None = None
         self._has_result = False
         self._timeline_started = False
         from aetherlab.services.course_mode import CourseProgressStore
 
         self.course_progress = CourseProgressStore(
-            self.settings.data_dir / "course_progress.json"
+            self.settings.data_dir / "course_progress.json",
+            review_intervals_days=self.settings.review_intervals_days,
         )
 
         self.setObjectName("MainWindow")
@@ -972,6 +1003,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lesson_view.export_requested.connect(self._export_study_guide)
         self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
         self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
+        self.lesson_view.review_due_clicked.connect(self._review_due_questions)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
 
@@ -1118,19 +1150,28 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         task = BackgroundTask(operation)
         self._export_task = task
-        task.succeeded.connect(
-            lambda result: self.statusBar().showMessage(str(result)) if result else None
-        )
-        task.failed.connect(
-            lambda message: self.statusBar().showMessage(f"Export failed: {message}")
-        )
-        task.finished.connect(lambda: self._finish_export_task(task))
+        # Bound methods, not lambdas: an export can finish after its window is
+        # gone (closed, or torn down by a test), and a lambda slot then runs
+        # against the deleted window - an access violation on Windows (CI,
+        # F157, 2026-10-01). PyQt drops bound-method slots with the window.
+        task.succeeded.connect(self._on_export_succeeded)
+        task.failed.connect(self._on_export_failed)
+        task.finished.connect(self._on_export_finished)
         self.statusBar().showMessage(status)
         task.start()
         return True
 
-    def _finish_export_task(self, task: BackgroundTask) -> None:
-        if self._export_task is task:
+    def _on_export_succeeded(self, result: object) -> None:
+        if result:
+            self.statusBar().showMessage(str(result))
+
+    def _on_export_failed(self, message: str) -> None:
+        self.statusBar().showMessage(f"Export failed: {message}")
+
+    def _on_export_finished(self) -> None:
+        # The finished task is no longer running; a newer export that already
+        # started keeps its slot.
+        if self._export_task is not None and not self._export_task.is_running:
             self._export_task = None
 
     def _export_latex(self) -> None:
@@ -1153,44 +1194,55 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._last_result:
             self.statusBar().showMessage("No pipeline result to export.")
             return
+        from aetherlab.services.study_document import classify
+
+        request = self._last_result.request
+        mode = classify(request.normalized_prompt())
+        default_name = "worked_solution.pdf" if mode == "problem" else "study_guide.pdf"
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export PDF", "derivation.pdf", "PDF Files (*.pdf)"
+            self, "Export PDF", default_name, "PDF Files (*.pdf)"
         )
         if not path:
             return
         destination = Path(path)
         solver = self._last_result.solver
-        summary = str(solver.summary)
-        steps = list(solver.derivation_steps)
-        variables = dict(solver.variables)
-        equations = list(getattr(solver, "key_equations", None) or [])
-        request = self._last_result.request
         rag = self._last_result.rag
+        settings = self.settings
 
-        def export_pdf(cancel, _progress):
+        def export_pdf(cancel, progress):
+            import asyncio
             from tempfile import TemporaryDirectory
 
             from aetherlab.core.atomic_file import atomic_copy_file
             from aetherlab.services.research import build_research_pdf
+            from aetherlab.services.study_document import write_study_document
+
+            def report(message: str) -> None:
+                if callable(progress):
+                    progress(message)
 
             with TemporaryDirectory(prefix="aetherlab_export_") as tmp_name:
-                # Cited research PDF: numeric-ground-truth figure + RAG
-                # citations + physics verification (services/research.py).
-                research = build_research_pdf(request, solver, rag, Path(tmp_name))
+                # Well-explained study document: a topic guide, or theory plus a
+                # step-by-step worked solution for a problem (study_document.py).
+                doc = asyncio.run(write_study_document(
+                    request, solver, rag, settings, Path(tmp_name),
+                    progress=report, cancel_check=cancel.is_set,
+                ))
+                if doc.pdf_path and doc.pdf_path.exists():
+                    atomic_copy_file(doc.pdf_path, destination, cancel_check=cancel.is_set)
+                    kind = "Worked solution" if doc.mode == "problem" else "Study guide"
+                    extra = f" ({doc.note})" if doc.note else ""
+                    return f"{kind} PDF exported ({doc.authored_by}): {destination}{extra}"
+                # Fall back to the cited research PDF (services/research.py).
+                research = build_research_pdf(request, solver, rag, Path(tmp_name) / "research")
                 if research.pdf_path and research.pdf_path.exists():
                     atomic_copy_file(research.pdf_path, destination, cancel_check=cancel.is_set)
-                    return (
-                        f"Research PDF exported via {research.backend} "
-                        f"({len(research.citations)} citation(s)): {destination}"
-                    )
+                    return f"Research PDF exported via {research.backend}: {destination}"
                 fallback = destination.with_suffix(".tex")
-                atomic_copy_file(research.tex_path, fallback, cancel_check=cancel.is_set)
-                return (
-                    "No PDF backend available. "
-                    f"LaTeX saved instead: {fallback}"
-                )
+                atomic_copy_file(doc.tex_path, fallback, cancel_check=cancel.is_set)
+                return f"No PDF backend available. LaTeX saved instead: {fallback}"
 
-        self._start_export_task("Preparing research PDF…", export_pdf)
+        self._start_export_task("Writing the PDF (this can take a few minutes)…", export_pdf)
 
     def _export_scene(self) -> None:
         if not self._last_result:
@@ -1314,6 +1366,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "narration_enabled": "1" if vals["narration_enabled"] else "0",
                     "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
+                    "review_intervals_days": vals["review_intervals_days"],
                 }
             )
 
@@ -1326,7 +1379,8 @@ class MainWindow(QtWidgets.QMainWindow):
             from aetherlab.services.course_mode import CourseProgressStore
 
             self.course_progress = CourseProgressStore(
-                self.settings.data_dir / "course_progress.json"
+                self.settings.data_dir / "course_progress.json",
+                review_intervals_days=self.settings.review_intervals_days,
             )
             self.library_panel.set_settings(self.settings)
             self.empty_view.set_status(
@@ -1422,7 +1476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lesson_worker.progress.connect(self._on_lesson_progress)
         self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
         self.lesson_worker.failure.connect(self.on_failure)
-        self.lesson_worker.finished.connect(lambda: self.command_bar.set_busy(False))
+        self.lesson_worker.finished.connect(self._on_lesson_worker_finished)
 
         self.command_bar.set_busy(True)
         self.toast.hide()
@@ -1441,6 +1495,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("No lesson to regenerate yet.")
             return
         self.start_lesson(topic, regenerate=True)
+
+    def _on_lesson_worker_finished(self) -> None:
+        # Bound method (not a lambda) so a QThread finishing after the window
+        # is destroyed cannot touch the deleted command bar.
+        self.command_bar.set_busy(False)
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
@@ -1494,6 +1553,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lesson_view.set_course_summary(
                 f"{summary.message} Next: {summary.next_topic}"
             )
+            self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
         except Exception:  # noqa: BLE001
             self.lesson_view.set_course_summary(
                 "Course progress is unavailable for this lesson."
@@ -1507,7 +1567,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             summary = self.course_progress.record_quiz_answer(
-                bundle.plan, int(question_index), bool(correct), str(choice)
+                bundle.plan, int(question_index), bool(correct), str(choice),
+                confidence_level=self.lesson_view.confidence_for_question(question_index),
             )
         except Exception as exc:  # noqa: BLE001
             self.statusBar().showMessage(f"Could not save course progress: {exc}")
@@ -1515,8 +1576,58 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lesson_view.set_course_summary(
             f"{summary.message} Next: {summary.next_topic}"
         )
+        self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
         self.statusBar().showMessage(
             f"Course progress saved · {summary.correct}/{summary.attempts}"
+        )
+
+    def _review_due_questions(self) -> None:
+        """Run a short self-rated retrieval session from local due prompts."""
+        reviews = self.course_progress.due_reviews(limit=20)
+        if not reviews:
+            self.lesson_view.set_due_review_count(0)
+            self.statusBar().showMessage("No review questions are due right now.")
+            return
+        for item in reviews:
+            ask = QtWidgets.QMessageBox(self)
+            ask.setWindowTitle("Spaced review")
+            ask.setText(str(item.get("prompt") or "Review this concept"))
+            ask.setInformativeText(
+                f"{item.get('lesson_title', 'Lesson')} · {item.get('concept', '')}\n\n"
+                "Try to recall the answer before revealing it."
+            )
+            reveal = ask.addButton("Reveal answer", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            ask.addButton("Finish later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            ask.exec()
+            if ask.clickedButton() is not reveal:
+                break
+
+            answer_box = QtWidgets.QMessageBox(self)
+            answer_box.setWindowTitle("Check your recall")
+            answer_box.setText(
+                str(item.get("answer") or "Open response: compare with your lesson notes.")
+            )
+            explanation = str(item.get("why", "")).strip()
+            answer_box.setInformativeText(explanation or str(item.get("concept", "")))
+            recalled = answer_box.addButton(
+                "I recalled it", QtWidgets.QMessageBox.ButtonRole.YesRole
+            )
+            missed = answer_box.addButton(
+                "Needs another review", QtWidgets.QMessageBox.ButtonRole.NoRole
+            )
+            skip = answer_box.addButton("Stop", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            answer_box.exec()
+            selected = answer_box.clickedButton()
+            if selected is skip or selected not in {recalled, missed}:
+                break
+            self.course_progress.record_review_result(item, selected is recalled)
+
+        count = self.course_progress.due_review_count()
+        self.lesson_view.set_due_review_count(count)
+        if getattr(self, "_last_lesson", None):
+            self._refresh_course_summary(self._last_lesson)
+        self.statusBar().showMessage(
+            f"Review saved · {count} question{'s' if count != 1 else ''} due"
         )
 
     def _export_study_guide(self) -> None:
@@ -1656,11 +1767,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"Plan: {enabled}")
 
     def on_solver_ready(self, solver: SolverResult) -> None:
+        self._active_solver = solver
         self.analysis_panel.set_solver_result(solver)
         self.parameter_dock.set_variables(solver.variables)
         self.simulation_panel.set_solver(solver)
         self.stepper.set_stage(0, "complete")
         self.sidebar.set_result_available(True)
+
+    def _apply_scene_spec_to_ui(self, solver: SolverResult, scene_spec: dict) -> None:
+        self.analysis_panel.set_solver_result(solver, scene_spec)
+        self.simulation_panel.set_solver(solver, scene_spec)
 
     def on_rag_ready(self, rag: RagResult) -> None:
         self.reference_panel.set_rag_result(rag)
@@ -1669,17 +1785,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_scene_ready(self, scene: SceneBundle) -> None:
         self._has_result = True
         self.simulation_panel.hide_loading()
+        if self._active_solver and isinstance(scene.scene_spec, dict):
+            self._apply_scene_spec_to_ui(self._active_solver, scene.scene_spec)
         self.simulation_panel.set_scene_bundle(scene)
         self.stepper.set_stage(2, "complete")
         # Reveal the result: switch the workspace to the Scene view
         self.sidebar.select(2)
 
     def on_render_ready(self, scene: SceneBundle) -> None:
+        if self._active_solver and isinstance(scene.scene_spec, dict):
+            self._apply_scene_spec_to_ui(self._active_solver, scene.scene_spec)
         self.simulation_panel.set_video(scene)
         self.stepper.set_stage(3, "complete")
         if any("Cloud render unavailable; rendered locally." in d for d in scene.diagnostics):
             self.statusBar().showMessage("Cloud render unavailable — rendered locally.")
             self.toast.show_message("warning", "Cloud render unavailable — rendered locally.")
+        elif (
+            str(getattr(self.settings, "render_mode", "local")).lower() == "cloud"
+            and scene.status in {"cloud-unavailable", "render-error", "render-timeout"}
+        ):
+            detail = next((
+                str(message) for message in reversed(scene.diagnostics)
+                if "cloud" in str(message).lower()
+            ), f"Cloud render failed with status {scene.status}.")
+            message = f"Cloud render failed; local rendering was not started. {detail}"
+            self.statusBar().showMessage(message)
+            self.toast.show_message("error", message, details=True)
+            self.simulation_panel.show_error_banner(
+                "Cloud render", detail, "\n".join(scene.diagnostics[-12:]),
+            )
 
     def on_failure(self, error: PipelineError) -> None:
         self.simulation_panel.hide_loading()

@@ -1,0 +1,25 @@
+{
+  "schema": "aetherlab.human_review.v1",
+  "instructions": "Review the full video at normal speed; use contact sheets only to locate frames. Rate each axis from 1 (poor) to 5 (excellent). Leave a rating null if you cannot judge it.",
+  "scale": {
+    "1": "serious problems; the scene misleads, is hard to read, or fails to teach",
+    "2": "weak; major corrections needed",
+    "3": "usable; noticeable issues remain",
+    "4": "strong; only small issues",
+    "5": "excellent and clear"
+  },
+  "cases": [
+    {"id": "pendulum", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "kepler_orbit", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "standing_wave", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "fourier_series", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "em_field", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "projectile", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "collision", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "doppler", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "interference", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "rc_circuit", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "escape_velocity", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}},
+    {"id": "lesson_kepler", "ratings": {"legibility": null, "physics": null, "pacing": null, "teaching_value": null}}
+  ]
+}

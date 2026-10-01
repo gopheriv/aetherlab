@@ -20,7 +20,7 @@ GENERATOR = ROOT / "build_feature_tracker.py"
 FEATURE_TESTS = ROOT / "test_features.py"
 ERRORS_FOUND = ROOT / "ERRORS_FOUND.md"
 
-VALID_STATUSES = {"Documented", "PASS", "FAIL", "PARTIAL", "FIXED"}
+VALID_STATUSES = {"Documented", "PASS", "FAIL", "PARTIAL", "FIXED", "REGRESSED"}
 VALID_TEST_METHODS = {"headless", "static", "gui"}
 VALID_PERSONAS = {"P1", "P2", "P3", "P4", "P5"}
 VALID_STORY_TEST_METHODS = {"harness", "scripted-ui", "manual", "live-cloud"}
@@ -96,7 +96,9 @@ def _contiguous(ids: list[str]) -> list[str]:
     return sorted(expected - set(ids), key=lambda x: int(x[1:]))
 
 
-def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
+def audit(
+    *, allow_pending_result: str | None = None, include_run_status: bool = True
+) -> dict[str, Any]:
     issues: list[str] = []
     module = _load_generator()
     expected = _expected_rows(module)
@@ -176,6 +178,26 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         if not str(result.get("note", "")).strip():
             issues.append(f"{fid} missing result note")
 
+    # BUG-60: the audit used to certify a tracker regenerated from *failing*
+    # results — rebuilding simply absorbed the failures into the spreadsheet and
+    # every downstream gate went green. A run with failures is never certifiable,
+    # however the statuses happen to be stamped.
+    # `include_run_status` exists only so t_f165 — which runs *inside* the
+    # harness and therefore reads the PREVIOUS run's results — can assert
+    # artifact consistency without asserting on a stale run status. Without it a
+    # single failing run would fail t_f165 forever: its own recorded failure
+    # would keep the audit red on every subsequent run. The CLI `--check` gate
+    # (the CI path) always includes it, and t_f215 asserts that it rejects.
+    harness_failures = sorted(
+        (fid for fid, result in results.items() if result.get("status") == "FAIL"),
+        key=lambda fid: int(fid[1:]) if re.fullmatch(r"F\d+", fid) else 0,
+    )
+    if include_run_status and harness_failures:
+        issues.append(
+            "Feature harness failures recorded in feature_test_results.json: "
+            f"{harness_failures}"
+        )
+
     errors_text = ERRORS_FOUND.read_text(encoding="utf-8")
     errors_bug_ids = set(re.findall(r"BUG-\d+", errors_text))
     defect_bug_ids = set()
@@ -183,7 +205,12 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
     for fid, note in module.DEFECTS.items():
         if fid not in csv_id_set:
             issues.append(f"DEFECTS references unknown feature {fid}")
-        if next((r for r in csv_rows if r["ID"] == fid), {}).get("Status") != "FIXED":
+        defect_status = next((r for r in csv_rows if r["ID"] == fid), {}).get("Status")
+        if defect_status == "REGRESSED":
+            issues.append(
+                f"DEFECTS feature {fid} REGRESSED: a previously-fixed defect is failing again"
+            )
+        elif defect_status != "FIXED":
             issues.append(f"DEFECTS feature {fid} is not marked FIXED")
         defect_bug_ids.update(re.findall(r"BUG-\d+", note))
     missing_bug_docs = sorted(defect_bug_ids - errors_bug_ids, key=lambda b: int(b.split("-")[1]))

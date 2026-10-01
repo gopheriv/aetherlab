@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from aetherlab.services.model_policy import request_temperature
 from aetherlab.services.pdf import _latex_escape, compile_latex_to_pdf
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,10 @@ def build_citations(rag: Any) -> list[str]:
         name = getattr(hit, "source_name", None) or "reference"
         page = getattr(hit, "page_number", None)
         label = f"{name}" + (f", p.{page}" if page else "")
+        source = str(getattr(hit, "source_path", "") or "")
+        if source.startswith(("http://", "https://")):
+            site = "Wikibooks" if "wikibooks.org" in source.lower() else "Wikipedia"
+            label = f"{name}, {site}: {source}"
         if label not in seen:
             seen.add(label)
             citations.append(label)
@@ -108,11 +113,23 @@ def build_latex(
     narrative: str = "", verification: list[str] | None = None,
 ) -> str:
     esc = _latex_escape
-    title = esc((solver.summary[:80].strip() if getattr(solver, "summary", "") else "") or "AetherLab Derivation")
+    # The problem itself is the natural title of a research note. The solver's
+    # summary must NOT be used here: on the keyless path it is an internal
+    # diagnostic ("No API key configured; deterministic fallback used ...").
+    raw_title = request.normalized_prompt().strip() or "AetherLab Derivation"
+    title = esc(raw_title if len(raw_title) <= 90 else raw_title[:89].rstrip() + "...")
     prompt = esc(request.normalized_prompt())
-    abstract = esc(narrative.strip()) if narrative.strip() else esc(
-        getattr(solver, "summary", "") or "Analytical derivation and numerical solution."
-    )
+    summary = (getattr(solver, "summary", "") or "").strip()
+    if narrative.strip():
+        abstract = esc(narrative.strip())
+    elif getattr(solver, "model_name", "") == "deterministic-fallback":
+        abstract = esc(
+            "Generated offline with AetherLab's deterministic solver (no model configured). "
+            "The derivation scaffold and parameters below are analytic; the figure and the "
+            "verification checks are computed from the numerical ground truth."
+        )
+    else:
+        abstract = esc(summary or "Analytical derivation and numerical solution.")
     steps = "\n".join(
         rf"  \item {esc(step)}" for step in getattr(solver, "derivation_steps", [])
     ) or r"  \item No derivation steps available."
@@ -269,13 +286,9 @@ async def compose_narrative(request: Any, solver: Any, settings: Any) -> str:
     if not getattr(settings, "openai_api_key", None):
         return ""
     try:
-        from openai import AsyncOpenAI
+        from aetherlab.services.llm_client import make_client
 
-        client = AsyncOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            timeout=max(getattr(settings, "llm_timeout_seconds", 30), 30),
-        )
+        client = make_client(settings)
         response = await client.chat.completions.create(
             model=settings.llm_model,
             messages=[
@@ -287,7 +300,7 @@ async def compose_narrative(request: Any, solver: Any, settings: Any) -> str:
                     f"Problem: {request.normalized_prompt()}\nSummary: {getattr(solver, 'summary', '')}"
                 )},
             ],
-            temperature=0.3,
+            temperature=request_temperature(settings, 0.3),
             max_tokens=220,
         )
         return (response.choices[0].message.content or "").strip()

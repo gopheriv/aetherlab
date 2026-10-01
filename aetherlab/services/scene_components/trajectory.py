@@ -84,12 +84,30 @@ class {class_name}(Scene):
 
         points = [axes.coords_to_point(x, y) for x, y in zip(xs, ys)]
         curve = VMobject(color=BLUE)
-        curve.set_points_smoothly(points)
+        # Keep every solver sample as a path vertex so the rendered curve
+        # cannot bow away from the numerical trajectory between samples.
+        curve.set_points_as_corners(points)
         tracer = Dot(points[0], color=YELLOW, radius=0.07)
+
+        def point_at_time(alpha):
+            # solve_numeric samples at uniform time intervals; interpolate by
+            # sample index so tracer progress represents elapsed time, not
+            # the path's changing arc length.
+            position = np.clip(alpha, 0.0, 1.0) * (len(points) - 1)
+            index = min(int(position), len(points) - 2)
+            fraction = position - index
+            return points[index] + fraction * (points[index + 1] - points[index])
 
         self.play(Create(axes), FadeIn(title), FadeIn(x_label), FadeIn(y_label), run_time=1.0)
         self.play(Create(curve), run_time=3.0)
         self.add(tracer)
-        self.play(MoveAlongPath(tracer, curve), run_time=2.5)
+        self.play(
+            UpdateFromAlphaFunc(
+                tracer,
+                lambda mob, alpha: mob.move_to(point_at_time(alpha)),
+                rate_func=linear,
+            ),
+            run_time=2.5,
+        )
         self.wait(0.5)
 '''

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import math
 import sqlite3
 from datetime import datetime
@@ -1008,7 +1009,10 @@ class ParameterDock(QtWidgets.QWidget):
 class _CollapsibleStepWidget(QtWidgets.QWidget):
     """Single collapsible derivation step with expand/collapse toggle."""
 
-    def __init__(self, index: int, text: str, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, index: int, text: str, evidence: dict | None = None,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1032,8 +1036,25 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         )
         header_layout.addWidget(step_num)
 
-        preview = text[:60] + "\u2026" if len(text) > 60 else text
-        preview_label = QtWidgets.QLabel(preview)
+        status = str((evidence or {}).get("status", "not_checked"))
+        status_label = QtWidgets.QLabel({
+            "passed": "CHECKED",
+            "failed": "REVIEW",
+            "not_checked": "NOT CHECKED",
+        }.get(status, "NOT CHECKED"))
+        status_color = {
+            "passed": "#86EFAC", "failed": "#FCA5A5", "not_checked": "#94A3B8",
+        }.get(status, "#94A3B8")
+        status_label.setObjectName("DerivationCheckStatus")
+        status_label.setStyleSheet(
+            f"color: {status_color}; font-size: 9px; font-weight: 700; "
+            "letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; "
+            f"background-color: {status_color}18;"
+        )
+        status_label.setToolTip(str((evidence or {}).get("detail", "")))
+        header_layout.addWidget(status_label)
+
+        preview_label = QtWidgets.QLabel("Try a hint before opening the worked step")
         preview_label.setStyleSheet("color: #94A3B8; font-size: 11px;")
         header_layout.addWidget(preview_label, 1)
 
@@ -1048,28 +1069,84 @@ class _CollapsibleStepWidget(QtWidgets.QWidget):
         copy_btn.clicked.connect(lambda: _copy_to_clipboard(text))
         header_layout.addWidget(copy_btn)
 
+        self._details = QtWidgets.QWidget()
+        details_layout = QtWidgets.QVBoxLayout(self._details)
+        details_layout.setContentsMargins(28, 4, 6, 6)
+        details_layout.setSpacing(6)
+        hint = QtWidgets.QLabel(
+            "Hint: write the starting law, identify the quantity you need, and name "
+            "the assumption that connects them."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #A5B4FC; font-size: 11px; padding: 4px 0;")
+        details_layout.addWidget(hint)
+        if evidence:
+            evidence_detail = str(evidence.get("detail", "")).strip()
+            claim = str(evidence.get("claim", "")).strip()
+            before = str(evidence.get("from_expression", "")).strip()
+            after = str(evidence.get("to_expression", "")).strip()
+            source = str(evidence.get("source_ref", "")).strip()
+            text_lines = []
+            if claim:
+                text_lines.append(claim)
+            if before or after:
+                text_lines.append(f"{before}  →  {after}".strip())
+            if evidence_detail:
+                text_lines.append(evidence_detail)
+            substitution_status = str(evidence.get("substitution_status", "not_checked"))
+            substitution_detail = str(evidence.get("substitution_detail", "")).strip()
+            if substitution_status != "not_checked" and substitution_detail:
+                text_lines.append(
+                    f"Numeric substitution ({substitution_status}): {substitution_detail}"
+                )
+            text_lines.append(f"Source: {source}" if source else "Source: not supplied")
+            evidence_label = QtWidgets.QLabel("\n".join(text_lines))
+            evidence_label.setObjectName("DerivationEvidence")
+            evidence_label.setWordWrap(True)
+            evidence_label.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            evidence_label.setStyleSheet(
+                "color: #CBD5E1; font-size: 10px; padding: 6px 8px; "
+                "background-color: #111827; border-radius: 5px;"
+            )
+            details_layout.addWidget(evidence_label)
+        reveal_btn = QtWidgets.QPushButton("Reveal worked step")
+        reveal_btn.setObjectName("GhostButton")
+        reveal_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        details_layout.addWidget(reveal_btn, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
+
         self._body = QtWidgets.QLabel(text)
         self._body.setWordWrap(True)
+        self._body.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         self._body.setStyleSheet(
             "color: #E2E8F0; font-size: 12px; padding: 8px 8px 8px 28px; "
             "background-color: #0F0F17; border-radius: 6px; margin-top: 4px;"
         )
         self._body.hide()
+        details_layout.addWidget(self._body)
+        self._details.hide()
+        reveal_btn.clicked.connect(lambda: self._reveal_step(reveal_btn))
 
         self._expanded = False
         self._full_text = text
 
         header.mousePressEvent = lambda e: self._toggle()  # type: ignore[assignment]
         layout.addWidget(header)
-        layout.addWidget(self._body)
+        layout.addWidget(self._details)
 
     def _toggle(self) -> None:
         self._expanded = not self._expanded
-        self._body.setVisible(self._expanded)
+        self._details.setVisible(self._expanded)
         self._arrow.setText("\u25bc" if self._expanded else "\u25b6")
         self._arrow.setStyleSheet(
             f"color: {'#22D3EE' if self._expanded else '#475569'}; font-size: 10px;"
         )
+
+    def _reveal_step(self, button: QtWidgets.QPushButton) -> None:
+        self._body.show()
+        button.setText("Worked step revealed")
+        button.setEnabled(False)
 
 
 def _copy_to_clipboard(text: str) -> None:
@@ -1115,6 +1192,15 @@ class AnalysisPanel(QtWidgets.QWidget):
         )
         card_layout.addWidget(self.summary)
 
+        self._verification = QtWidgets.QLabel(
+            "Numeric model checks are separate from the written derivation."
+        )
+        self._verification.setWordWrap(True)
+        self._verification.setStyleSheet(
+            "color: #94A3B8; font-size: 11px; padding: 2px 6px;"
+        )
+        card_layout.addWidget(self._verification)
+
         # Keyword chips (violet pills)
         self._chips_row = QtWidgets.QWidget()
         self._chips_layout = QtWidgets.QHBoxLayout(self._chips_row)
@@ -1132,7 +1218,7 @@ class AnalysisPanel(QtWidgets.QWidget):
         sth_label.setObjectName("SectionTitle")
         sth_layout.addWidget(sth_label)
         sth_layout.addStretch()
-        self._expand_all_btn = QtWidgets.QPushButton("Expand all")
+        self._expand_all_btn = QtWidgets.QPushButton("Show hints")
         self._expand_all_btn.setObjectName("GhostButton")
         self._expand_all_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._expand_all_btn.clicked.connect(self._toggle_all_steps)
@@ -1209,10 +1295,12 @@ class AnalysisPanel(QtWidgets.QWidget):
             if w._expanded != self._all_expanded:
                 w._toggle()
         self._expand_all_btn.setText(
-            "Collapse all" if self._all_expanded else "Expand all"
+            "Hide hints" if self._all_expanded else "Show hints"
         )
 
-    def set_solver_result(self, solver: SolverResult) -> None:
+    def set_solver_result(
+        self, solver: SolverResult, scene_spec: dict | None = None,
+    ) -> None:
         cache_note = "  [cache]" if solver.cached else ""
         self._summary_text = f"{solver.summary}{cache_note}"
         # Hero equation banner (design v2 §5.1): the solver's first governing
@@ -1234,6 +1322,71 @@ class AnalysisPanel(QtWidgets.QWidget):
             self.summary.setToolTip("")
         self._empty_label.hide()
 
+        derivation = {"items": []}
+        spec_records = None
+        try:
+            from aetherlab.services.scene_specification import validate_scene_spec
+
+            if (
+                isinstance(scene_spec, dict)
+                and validate_scene_spec(scene_spec)["status"] == "passed"
+            ):
+                physics = scene_spec.get("physics", {})
+                spec_records = physics.get("derivation_records", [])
+                verification = scene_spec.get("verification", {})
+                derivation = verification.get("derivations", {"items": []})
+                units = verification.get("units", {"status": "not_checked", "message": "not checked"})
+                numeric = verification.get("numeric_model", {})
+                numeric_checks = numeric.get("checks", [])
+                has_numeric_model = isinstance(physics.get("numeric_model"), dict)
+            else:
+                from aetherlab.services.derivation_verify import (
+                    verify_derivation_records,
+                    verify_ode_units,
+                )
+                from aetherlab.services.verify import verify_solution
+
+                report = verify_solution(solver)
+                derivation = verify_derivation_records(solver)
+                units = verify_ode_units(solver)
+                numeric_checks = [
+                    {"status": "passed" if check.passed else "failed"}
+                    for check in report.checks
+                ]
+                has_numeric_model = bool(getattr(solver, "numeric_spec", None))
+            evidence = [
+                f"Algebra: {derivation['message']}",
+                f"Units: {units['message']}",
+            ]
+            if has_numeric_model and numeric_checks:
+                passed = sum(
+                    1 for check in numeric_checks
+                    if isinstance(check, dict) and check.get("status") == "passed"
+                )
+                failed = len(numeric_checks) - passed
+                detail = f"Numeric model: {passed}/{len(numeric_checks)} checks passed."
+                if failed:
+                    detail += f" {failed} need review."
+                detail += " " + " ".join(evidence)
+                self._verification.setText(detail)
+                self._verification.setStyleSheet(
+                    f"color: {'#86EFAC' if not failed and derivation['status'] != 'failed' and units['status'] != 'failed' else '#FCD34D'}; font-size: 11px; padding: 2px 6px;"
+                )
+            else:
+                self._verification.setText(
+                    "No deterministic numeric check is available. " + " ".join(evidence)
+                )
+                self._verification.setStyleSheet(
+                    "color: #FCD34D; font-size: 11px; padding: 2px 6px;"
+                )
+        except Exception:  # noqa: BLE001 - verification status must never block results
+            self._verification.setText(
+                "Numeric verification is unavailable; the written derivation is unverified."
+            )
+            self._verification.setStyleSheet(
+                "color: #FCD34D; font-size: 11px; padding: 2px 6px;"
+            )
+
         # Keyword chips
         while self._chips_layout.count() > 1:
             item = self._chips_layout.takeAt(0)
@@ -1253,9 +1406,37 @@ class AnalysisPanel(QtWidgets.QWidget):
             w.deleteLater()
         self._step_widgets.clear()
         self._steps_text = list(solver.derivation_steps)
+        evidence_by_step = {}
+        records_for_steps = (
+            spec_records
+            if isinstance(spec_records, list)
+            else getattr(solver, "derivation_records", []) or []
+        )
+        for record in records_for_steps:
+            if not isinstance(record, dict):
+                continue
+            try:
+                step_index = int(record.get("step_index"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            evidence_by_step[step_index] = record
+        try:
+            checks = derivation.get("items", [])
+            for check in checks:
+                if not isinstance(check, dict):
+                    continue
+                step_index = int(check.get("step_index", 0) or 0)
+                if step_index in evidence_by_step:
+                    evidence_by_step[step_index] = {
+                        **evidence_by_step[step_index], **check,
+                    }
+        except (TypeError, ValueError, OverflowError):
+            pass
 
         for index, step in enumerate(solver.derivation_steps, start=1):
-            widget = _CollapsibleStepWidget(index, step)
+            widget = _CollapsibleStepWidget(
+                index, step, evidence_by_step.get(index),
+            )
             self._steps_vbox.insertWidget(self._steps_vbox.count() - 1, widget)
             self._step_widgets.append(widget)
 
@@ -1845,8 +2026,11 @@ class SimulationPanel(QtWidgets.QWidget):
         new_pos = max(0, self._player.position() + delta_ms)
         self._player.setPosition(new_pos)
 
-    def set_solver(self, solver: SolverResult) -> None:
+    def set_solver(
+        self, solver: SolverResult, scene_spec: dict | None = None,
+    ) -> None:
         self._solver = solver
+        self._scene_spec = scene_spec if isinstance(scene_spec, dict) else None
         self._rebuild_canvas()
 
     def _rebuild_canvas(self) -> None:
@@ -1854,19 +2038,32 @@ class SimulationPanel(QtWidgets.QWidget):
             return
         # Preserve any live slider adjustments instead of resetting to defaults.
         params = dict(self._solver.variables)
+        raw_title = self._solver.summary or "Simulation"
+        plot = getattr(self._solver, "plot", None)
+        numeric_spec = getattr(self._solver, "numeric_spec", None)
+        try:
+            from aetherlab.services.scene_specification import canvas_inputs_from_scene_spec
+
+            projected = canvas_inputs_from_scene_spec(getattr(self, "_scene_spec", None))
+            if projected is not None:
+                raw_title = projected["title"] or raw_title
+                params = projected["params"] or params
+                plot = projected["plot"]
+                numeric_spec = projected["numeric_spec"]
+        except Exception:  # noqa: BLE001 - the solver path remains a safe fallback
+            pass
         current = getattr(self._live_canvas, "_state", None)
         if current and current.params:
             params.update(current.params)
         from aetherlab.services.mathtext import plain_math
 
-        raw_title = self._solver.summary or "Simulation"
         title = plain_math(raw_title)[:70]
         state = build_canvas_state(
             title=title,
             params=params,
             phase_portrait=self._phase_check.isChecked(),
-            plot=getattr(self._solver, "plot", None),
-            numeric_spec=getattr(self._solver, "numeric_spec", None),
+            plot=plot,
+            numeric_spec=numeric_spec,
         )
         self._live_canvas.set_state(state)
 
@@ -3568,11 +3765,22 @@ class _QuestionCard(QtWidgets.QFrame):
         prompt.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 600;")
         layout.addWidget(prompt)
 
+        self._confidence = None
+
         self._feedback = QtWidgets.QLabel("")
         self._feedback.setWordWrap(True)
         self._feedback.setStyleSheet("color: #94A3B8; font-size: 12px;")
 
         if question.choices:  # MCQ
+            self._confidence = QtWidgets.QComboBox()
+            self._confidence.addItem("Confidence: low", "low")
+            self._confidence.addItem("Confidence: medium", "medium")
+            self._confidence.addItem("Confidence: high", "high")
+            self._confidence.setCurrentIndex(1)
+            self._confidence.setToolTip(
+                "Rate how confident you feel before checking the answer."
+            )
+            layout.addWidget(self._confidence)
             self._group = QtWidgets.QButtonGroup(self)
             for choice in question.choices:
                 rb = QtWidgets.QRadioButton(choice)
@@ -3598,6 +3806,8 @@ class _QuestionCard(QtWidgets.QFrame):
         if self._answered:
             return
         self._answered = True
+        if self._confidence is not None:
+            self._confidence.setEnabled(False)
         correct = str(choice).strip() == str(self._q.answer).strip()
         why = f" — {self._q.why}" if self._q.why else ""
         self._feedback.setText(
@@ -3610,9 +3820,106 @@ class _QuestionCard(QtWidgets.QFrame):
             button.setEnabled(False)
         self.answer_recorded.emit(correct, str(choice))
 
+    def confidence_level(self) -> str:
+        return str(self._confidence.currentData() or "medium") if self._confidence else "medium"
+
     def _reveal_open(self) -> None:
         self._feedback.setText(f"Model answer: {self._q.answer}")
         self._feedback.setStyleSheet("color: #10B981; font-size: 12px;")
+
+
+class _LessonCheckDialog(QtWidgets.QDialog):
+    """Prediction/retrieval gate that reveals feedback only after submission."""
+
+    def __init__(self, question: dict, kind: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._question = question
+        self._kind = kind
+        self._radios: list[QtWidgets.QRadioButton] = []
+        self.setWindowTitle("Predict before play" if kind == "prediction" else "Quick recall")
+        self.setMinimumWidth(420)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        heading = QtWidgets.QLabel(
+            "Make a prediction before this chapter starts."
+            if kind == "prediction" else "Recall the previous chapter before continuing."
+        )
+        heading.setStyleSheet("color: #22D3EE; font-size: 13px; font-weight: 700;")
+        layout.addWidget(heading)
+        prompt = QtWidgets.QLabel(str(question.get("q", "")))
+        prompt.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        prompt.setWordWrap(True)
+        layout.addWidget(prompt)
+
+        choices = [str(choice) for choice in question.get("choices", []) if str(choice).strip()]
+        self._answer_edit = None
+        if choices:
+            for choice in choices:
+                radio = QtWidgets.QRadioButton(choice)
+                self._radios.append(radio)
+                layout.addWidget(radio)
+        else:
+            self._answer_edit = QtWidgets.QLineEdit()
+            self._answer_edit.setPlaceholderText("Your answer")
+            layout.addWidget(self._answer_edit)
+
+        self._feedback = QtWidgets.QLabel("")
+        self._feedback.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self._feedback.setWordWrap(True)
+        self._feedback.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        layout.addWidget(self._feedback)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch()
+        self._submit = QtWidgets.QPushButton("Submit answer")
+        self._submit.setObjectName("PrimaryButton")
+        self._continue = QtWidgets.QPushButton("Continue")
+        self._continue.setObjectName("PrimaryButton")
+        self._continue.setEnabled(False)
+        buttons.addWidget(self._submit)
+        buttons.addWidget(self._continue)
+        layout.addLayout(buttons)
+        self._submit.clicked.connect(self._submit_answer)
+        self._continue.clicked.connect(self.accept)
+
+    def _submit_answer(self) -> None:
+        selected = next((radio.text() for radio in self._radios if radio.isChecked()), "")
+        if self._answer_edit is not None:
+            selected = self._answer_edit.text().strip()
+        if not selected:
+            self._feedback.setText("Choose an option or enter a response first.")
+            return
+
+        choices = [str(choice) for choice in self._question.get("choices", [])]
+        expected = str(self._question.get("answer", "")).strip()
+        if choices and expected:
+            selected_key = " ".join(selected.casefold().split())
+            expected_key = " ".join(expected.casefold().split())
+            correct = selected_key == expected_key
+            if not correct and len(expected) == 1 and expected.isalpha():
+                correct = (
+                    0 <= ord(expected.upper()) - ord("A") < len(choices)
+                    and selected == choices[ord(expected.upper()) - ord("A")]
+                )
+            if not correct and len(expected) > 2 and expected[1] in ".):":
+                correct = expected_key[2:].strip() == selected_key
+            verdict = "That's right." if correct else "Not quite; compare your answer with the explanation."
+            color = "#86EFAC" if correct else "#FCD34D"
+        else:
+            verdict = "Response recorded. Compare it with the model answer."
+            color = "#A5B4FC"
+        explanation = str(self._question.get("why", "")).strip()
+        model_answer = f"Model answer: {expected}" if expected else ""
+        detail = " ".join(part for part in (verdict, model_answer, explanation) if part)
+        self._feedback.setText(detail)
+        self._feedback.setStyleSheet(f"color: {color}; font-size: 11px;")
+        for radio in self._radios:
+            radio.setEnabled(False)
+        if self._answer_edit is not None:
+            self._answer_edit.setEnabled(False)
+        self._submit.setEnabled(False)
+        self._continue.setEnabled(True)
 
 
 class LessonView(QtWidgets.QWidget):
@@ -3623,12 +3930,17 @@ class LessonView(QtWidgets.QWidget):
     export_requested = QtCore.pyqtSignal()
     share_bundle_requested = QtCore.pyqtSignal()
     quiz_answered = QtCore.pyqtSignal(int, bool, str)  # question index, correct, choice
+    review_due_clicked = QtCore.pyqtSignal()
     regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._bundle = None
         self._chapter_offsets: list[float] = []
+        self._chapter_playable: list[bool] = []
+        self._completed_gate_checks: set[tuple[int, str]] = set()
+        self._gate_in_progress = False
+        self._quiz_confidence: dict[int, str] = {}
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
@@ -3692,6 +4004,17 @@ class LessonView(QtWidgets.QWidget):
             "border: 1px solid #1E293B; border-radius: 8px; background: #0D0D14;"
         )
         questions_page_layout.addWidget(self._course_status)
+        self._review_due_button = QtWidgets.QPushButton("Review due questions")
+        self._review_due_button.setObjectName("ReviewDueQuestions")
+        self._review_due_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._review_due_button.setStyleSheet(
+            "QPushButton { color: #C4B5FD; background: #171326; border: 1px solid #4C3B78; "
+            "border-radius: 8px; padding: 7px 10px; text-align: left; }"
+            "QPushButton:hover { background: #211A36; }"
+        )
+        self._review_due_button.clicked.connect(self.review_due_clicked.emit)
+        self._review_due_button.hide()
+        questions_page_layout.addWidget(self._review_due_button)
 
         self._questions_scroll = QtWidgets.QScrollArea()
         self._questions_scroll.setWidgetResizable(True)
@@ -3757,7 +4080,8 @@ class LessonView(QtWidgets.QWidget):
             self._player.setVideoOutput(self._video_widget)
 
             controls = QtWidgets.QHBoxLayout()
-            for label, slot in (("play", lambda: self._player.play()),
+            self._player.positionChanged.connect(self._on_player_position_changed)
+            for label, slot in (("play", self._request_play),
                                 ("pause", lambda: self._player.pause()),
                                 ("square", lambda: self._player.stop())):
                 b = QtWidgets.QPushButton()
@@ -3799,6 +4123,9 @@ class LessonView(QtWidgets.QWidget):
         self._outline.clear()
         transcript_html: list[str] = []
         self._chapter_offsets = []
+        self._chapter_playable = []
+        self._completed_gate_checks.clear()
+        self._quiz_confidence.clear()
         # True per-chapter start times in the assembled video (account for the
         # intro/chapter title cards + crossfades). These align with the RENDERED
         # chapters, so walk plan.chapters with a separate rendered index; a
@@ -3814,13 +4141,15 @@ class LessonView(QtWidgets.QWidget):
             else {}
         )
         try:
-            from aetherlab.services.lesson_pipeline import _RENDERED_KINDS
+            from aetherlab.services import lesson_pipeline
+
+            rendered_kinds = set(lesson_pipeline._RENDERED_KINDS)
         except Exception:  # noqa: BLE001
-            _RENDERED_KINDS = {"scene", "equation_card", "recap"}
+            rendered_kinds = {"scene", "equation_card", "recap"}
         t = 0.0
         r = 0  # index into the rendered-chapter-aligned offsets/durations
         for i, ch in enumerate(plan.chapters):
-            is_rendered = ch.kind in _RENDERED_KINDS
+            is_rendered = ch.kind in rendered_kinds
             missing_render = bool(mapped_rendered and is_rendered and i not in mapped_rendered)
             if mapped_rendered:
                 mapped_r = mapped_rendered.get(i)
@@ -3831,15 +4160,21 @@ class LessonView(QtWidgets.QWidget):
             suffix = " (not rendered)" if missing_render else ""
             item = QtWidgets.QListWidgetItem(f"{i + 1}. {ch.title}{suffix}")
             item.setData(QtCore.Qt.ItemDataRole.UserRole, seek)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, i)
+            self._chapter_playable.append(is_rendered and not missing_render)
             if missing_render:
                 item.setToolTip("This chapter did not render; the lesson continues with available chapters.")
                 item.setForeground(QtGui.QColor("#64748B"))
             self._outline.addItem(item)
             self._chapter_offsets.append(seek)
-            fc = f" <span style='color:#64748B'>({ch.fact_check})</span>" if ch.fact_check else ""
+            safe_title = html.escape(str(ch.title))
+            fc = (
+                f" <span style='color:#64748B'>({html.escape(str(ch.fact_check))})</span>"
+                if ch.fact_check else ""
+            )
             transcript_html.append(
-                f"<p><b style='color:#22D3EE'>{i + 1}. {ch.title}</b>{fc}<br>"
-                f"<span style='color:#E2E8F0'>{ch.narration or ch.goal}</span></p>"
+                f"<p><b style='color:#22D3EE'>{i + 1}. {safe_title}</b>{fc}<br>"
+                f"<span style='color:#E2E8F0'>{html.escape(str(ch.narration or ch.goal))}</span></p>"
             )
             if mapped_r is not None:
                 dur = durations[mapped_r] if mapped_r < len(durations) else 0.0
@@ -3855,7 +4190,9 @@ class LessonView(QtWidgets.QWidget):
         for i, q in enumerate(plan.questions, 1):
             card = _QuestionCard(i, q)
             card.answer_recorded.connect(
-                lambda correct, choice, idx=i - 1: self._on_quiz_answer(idx, correct, choice)
+                lambda correct, choice, idx=i - 1, question_card=card: self._on_quiz_answer(
+                    idx, correct, choice, question_card.confidence_level()
+                )
             )
             self._questions_layout.insertWidget(self._questions_layout.count() - 1, card)
 
@@ -3865,19 +4202,131 @@ class LessonView(QtWidgets.QWidget):
                 if c not in cites:
                     cites.append(c)
         self._references.setHtml(
-            "<br>".join(f"• {c}" for c in cites) if cites
-            else "<span style='color:#64748B'>No citations available.</span>"
+            " ".join(
+                f"<span style='color:#C4B5FD;background:#1E1B33;"
+                f"border:1px solid #4C3B78;border-radius:10px;padding:3px 8px;margin:2px'>"
+                f"{html.escape(c)}</span>"
+                for c in cites
+            ) if cites else "<span style='color:#64748B'>No citations available.</span>"
         )
 
         self._seed_explore(plan)
         self.set_course_summary("Course progress starts when you answer a quiz question.")
+        self.set_due_review_count(0)
         self._set_populated(True)
 
     def set_course_summary(self, message: str) -> None:
         self._course_status.setText(message)
 
-    def _on_quiz_answer(self, question_index: int, correct: bool, choice: str) -> None:
+    def set_due_review_count(self, count: int) -> None:
+        count = max(0, int(count))
+        self._review_due_button.setText(
+            f"Review {count} due question{'s' if count != 1 else ''}"
+        )
+        self._review_due_button.setVisible(count > 0)
+
+    def confidence_for_question(self, question_index: int) -> str:
+        return self._quiz_confidence.get(int(question_index), "medium")
+
+    def _on_quiz_answer(
+        self, question_index: int, correct: bool, choice: str,
+        confidence_level: str = "medium",
+    ) -> None:
+        self._quiz_confidence[int(question_index)] = str(confidence_level)
         self.quiz_answered.emit(question_index, bool(correct), str(choice))
+
+    def _request_play(self) -> None:
+        if self._player is None:
+            return
+        chapter_index = self._chapter_for_position(self._player.position() / 1000.0)
+        if chapter_index is None or self._show_chapter_checks(chapter_index):
+            self._player.play()
+
+    def _chapter_for_position(self, seconds: float) -> int | None:
+        playable = [
+            index for index, is_playable in enumerate(self._chapter_playable)
+            if is_playable
+        ]
+        if not playable:
+            return None
+        current = playable[0]
+        for index in playable:
+            if index < len(self._chapter_offsets) and self._chapter_offsets[index] <= seconds:
+                current = index
+            elif index < len(self._chapter_offsets):
+                break
+        return current
+
+    def _show_chapter_checks(self, chapter_index: int) -> bool:
+        if self._gate_in_progress or self._bundle is None:
+            return True
+        chapters = self._bundle.plan.chapters
+        checks: list[tuple[int, str, dict]] = []
+        if chapter_index > 0 and chapter_index - 1 < len(chapters):
+            previous = chapters[chapter_index - 1].retrieval
+            if isinstance(previous, dict):
+                checks.append((chapter_index - 1, "retrieval", previous))
+        if 0 <= chapter_index < len(chapters):
+            prediction = chapters[chapter_index].prediction
+            if isinstance(prediction, dict):
+                checks.append((chapter_index, "prediction", prediction))
+
+        pending = [
+            (owner, kind, question) for owner, kind, question in checks
+            if (owner, kind) not in self._completed_gate_checks
+            and str(question.get("q", "")).strip()
+        ]
+        if not pending:
+            return True
+        self._gate_in_progress = True
+        try:
+            for owner, kind, question in pending:
+                dialog = _LessonCheckDialog(question, kind, self)
+                if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                    return False
+                self._completed_gate_checks.add((owner, kind))
+            return True
+        finally:
+            self._gate_in_progress = False
+
+    def _on_player_position_changed(self, milliseconds: int) -> None:
+        if self._player is None or self._bundle is None or self._gate_in_progress:
+            return
+        try:
+            from PyQt6.QtMultimedia import QMediaPlayer
+
+            if self._player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+                return
+        except Exception:  # noqa: BLE001 - multimedia state is optional
+            return
+        chapter_index = self._chapter_for_position(milliseconds / 1000.0)
+        if chapter_index is None:
+            return
+        has_pending = any(
+            (owner, kind) not in self._completed_gate_checks
+            for owner, kind, _question in self._chapter_gate_candidates(chapter_index)
+        )
+        if has_pending:
+            # Stop on the first update at a chapter boundary, then resume only
+            # after the student submits each available check.
+            self._player.pause()
+            if self._show_chapter_checks(chapter_index):
+                self._player.play()
+
+    def _chapter_gate_candidates(self, chapter_index: int) -> list[tuple[int, str, dict]]:
+        if self._bundle is None:
+            return []
+        chapters = self._bundle.plan.chapters
+        candidates: list[tuple[int, str, dict]] = []
+        if chapter_index > 0 and chapter_index - 1 < len(chapters):
+            previous = chapters[chapter_index - 1].retrieval
+            if isinstance(previous, dict) and str(previous.get("q", "")).strip():
+                candidates.append((chapter_index - 1, "retrieval", previous))
+        if 0 <= chapter_index < len(chapters):
+            prediction = chapters[chapter_index].prediction
+            if isinstance(prediction, dict) and str(prediction.get("q", "")).strip():
+                candidates.append((chapter_index, "prediction", prediction))
+        return candidates
 
     def _seed_explore(self, plan) -> None:
         """Seed the 'Play with it' canvas from the lesson's domain + the
@@ -3907,24 +4356,36 @@ class LessonView(QtWidgets.QWidget):
         if seconds is None:
             return
         seconds = float(seconds)
+        index = item.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+        if index is None:
+            return
+        index = int(index)
+        if self._player is not None:
+            self._player.pause()
         self.chapter_seek_requested.emit(seconds)
         # Seek the inline player to the chapter start and show the Video tab.
         if self._player is not None:
             self._player.setPosition(int(seconds * 1000))
             self._tabs.setCurrentIndex(0)
-            self._player.play()
+            target = index
+            while target < len(self._chapter_playable) and not self._chapter_playable[target]:
+                target += 1
+            if target >= len(self._chapter_playable):
+                target = index - 1
+                while target >= 0 and not self._chapter_playable[target]:
+                    target -= 1
+            if target < 0 or self._show_chapter_checks(target):
+                self._player.play()
 
 
 def _bundle_chapter_durations(bundle) -> list[float]:
     """Best-effort per-chapter clip durations (seconds) for outline seeking."""
     durations: list[float] = []
     try:
-        from pathlib import Path as _P
-
         from aetherlab.services.voiceover import _duration_sync
         for scene in bundle.chapter_scenes:
             vp = getattr(scene, "video_path", "")
-            durations.append(_duration_sync(_P(vp)) if vp and _P(vp).exists() else 0.0)
+            durations.append(_duration_sync(Path(vp)) if vp and Path(vp).exists() else 0.0)
     except Exception:  # noqa: BLE001
         pass
     return durations

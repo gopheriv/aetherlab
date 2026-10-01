@@ -21,7 +21,7 @@
   },
   "F06": {
     "status": "PASS",
-    "note": "model=gpt-5.5 data_dir set timeout=60.0; bounded async client retries; manim-bot aliases load (BUG-34)"
+    "note": "model=gpt-5.5 data_dir set timeout=900.0; bounded async client retries; manim-bot aliases load (BUG-34)"
   },
   "F07": {
     "status": "PASS",
@@ -85,7 +85,7 @@
   },
   "F22": {
     "status": "PASS",
-    "note": "remote solve path present (temp 0.2, plot key)"
+    "note": "remote solve path present (temp 0.2 via model policy, plot key)"
   },
   "F23": {
     "status": "PASS",
@@ -117,7 +117,7 @@
   },
   "F30": {
     "status": "PASS",
-    "note": "whitespace-normalized key c98442358635"
+    "note": "whitespace-normalized key 03b04becd521"
   },
   "F31": {
     "status": "PASS",
@@ -213,7 +213,7 @@
   },
   "F54": {
     "status": "PASS",
-    "note": "render invokes manim render w/ fps+media_dir"
+    "note": "render command builder supplies fps+media_dir"
   },
   "F55": {
     "status": "PASS",
@@ -425,11 +425,11 @@
   },
   "F107": {
     "status": "PASS",
-    "note": "hot storyboard/cold codegen; Qwen thinking disabled + coder guidance (BUG-43, F107)"
+    "note": "hot storyboard/cold codegen; Qwen + MiniMax thinking toggles; coder guidance (F107)"
   },
   "F108": {
     "status": "PASS",
-    "note": "critique loop wired + fail-soft + final-frame sampling; sampled 3 frames via PyAV (F108)"
+    "note": "critique loop wired + fail-soft + final-frame sampling; no render available for frame sampling (F108)"
   },
   "F109": {
     "status": "PASS",
@@ -569,7 +569,7 @@
   },
   "F143": {
     "status": "PASS",
-    "note": "lesson pipeline: 4 chapters \u2192 assembled mp4; partial-render narration aligned (F143)"
+    "note": "lesson pipeline: 5 chapters \u2192 assembled mp4; partial-render narration aligned (F143)"
   },
   "F144": {
     "status": "PASS",
@@ -585,7 +585,7 @@
   },
   "F147": {
     "status": "PASS",
-    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'recap'] (F147)"
+    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'math', 'recap'] (F147)"
   },
   "F148": {
     "status": "PASS",
@@ -617,7 +617,7 @@
   },
   "F155": {
     "status": "PASS",
-    "note": "cloud unavailable/timeout cancels remote run and falls back locally (BUG-37, F155)"
+    "note": "explicit Cloud mode stops on unavailable/timeout without local fallback (F155)"
   },
   "F156": {
     "status": "PASS",
@@ -653,11 +653,11 @@
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 69/69 current surfaces (F164)"
+    "note": "feature-surface audit covers 85/85 current surfaces (F164)"
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 195 features/195 stories/195 results/195 tests aligned (F165)"
+    "note": "tracker integrity: 221 features/221 stories/221 results/221 tests aligned (F165)"
   },
   "F166": {
     "status": "PASS",
@@ -761,7 +761,7 @@
   },
   "F191": {
     "status": "PASS",
-    "note": "trajectory component composes a compilable numeric-driven scene (3591 chars)"
+    "note": "trajectory component composes a compilable numeric-driven scene (6658 chars)"
   },
   "F192": {
     "status": "PASS",
@@ -778,5 +778,109 @@
   "F195": {
     "status": "PASS",
     "note": "verifier flags unphysical growth (1/3 physics checks passed.)"
+  },
+  "F196": {
+    "status": "PASS",
+    "note": "solver retries transient failures; persistent failure is reported loudly"
+  },
+  "F197": {
+    "status": "PASS",
+    "note": "planner unions with the heuristic floor and retries before conceding"
+  },
+  "F198": {
+    "status": "PASS",
+    "note": "fallback ODE only attached on-topic; off-topic verification stays honest"
+  },
+  "F199": {
+    "status": "PASS",
+    "note": "text-mode math promoted to MathTex (render-killer auto-repaired)"
+  },
+  "F200": {
+    "status": "PASS",
+    "note": "pendulum component staged from nonlinear solution (5183 chars); oscillator unaffected"
+  },
+  "F201": {
+    "status": "PASS",
+    "note": "phase portrait composed on request (7490 chars); default stays time-series"
+  },
+  "F202": {
+    "status": "PASS",
+    "note": "dipole field-line component composed (17249 chars); oscillator unaffected"
+  },
+  "F203": {
+    "status": "PASS",
+    "note": "Fourier epicycle component composed (2339 chars); harmonic-oscillator not stolen"
+  },
+  "F204": {
+    "status": "PASS",
+    "note": "quantum wavepacket component composed (4563 chars); classical oscillator unaffected"
+  },
+  "F205": {
+    "status": "PASS",
+    "note": "double-slit interference component composed (2793 chars); oscillator unaffected"
+  },
+  "F206": {
+    "status": "PASS",
+    "note": "kinetic-theory component composed + deterministic (5191 chars); oscillator unaffected"
+  },
+  "F207": {
+    "status": "PASS",
+    "note": "double-pendulum component integrates 4-state chaos (6283 chars); single pendulum unaffected"
+  },
+  "F208": {
+    "status": "PASS",
+    "note": "thin-lens ray-diagram component composed (4542 chars); oscillator unaffected"
+  },
+  "F209": {
+    "status": "PASS",
+    "note": "standing-wave component composed (2404 chars); oscillator unaffected"
+  },
+  "F210": {
+    "status": "PASS",
+    "note": "Kepler-orbit component integrates two-body + equal-area law (7297 chars)"
+  },
+  "F211": {
+    "status": "PASS",
+    "note": "surface3d picks the real field (1/r, dipole, saddle, p-orbital, Gaussian) \u2014 all render as ThreeDScene"
+  },
+  "F212": {
+    "status": "PASS",
+    "note": "7 curated components track solver variables; empty solver keeps canonical default"
+  },
+  "F213": {
+    "status": "PASS",
+    "note": "coupled-oscillator component integrates the two-mass ODE (11605 chars)"
+  },
+  "F214": {
+    "status": "PASS",
+    "note": "concave-mirror ray-diagram component composed (4782 chars); lens unaffected"
+  },
+  "F215": {
+    "status": "PASS",
+    "note": "gate fails loudly: exit code follows the run; F07 REGRESSED not FIXED; Phase-4 overridden to FAIL; audit rejects failing results (F215)"
+  },
+  "F216": {
+    "status": "PASS",
+    "note": "14 curated scenes explained with light cards, safe, valid, ~30s; glyphs verified; opt-in devices render correctly (F216)"
+  },
+  "F217": {
+    "status": "PASS",
+    "note": "7 topic scenarios composed (safe, valid, ~30 s); race \u221a2, equal areas, Gibbs 9.0%, bands vs hump, energy transfer 93% verified (F217)"
+  },
+  "F218": {
+    "status": "PASS",
+    "note": "3 problem videos (kicked ball 32.5 m, Moon clock 2.46 s, ISS 92.8 min) solve, self-check by simulation, use verified glyphs; plain topics keep scenarios (F218)"
+  },
+  "F219": {
+    "status": "PASS",
+    "note": "backup provider takes over a failed K3 call as MiniMax-M3 at the wanted temperature (F219)"
+  },
+  "F220": {
+    "status": "PASS",
+    "note": "topic/problem PDFs: parsed LaTeX JSON, theory + solution + answer + checks, broken equation healed (pdflatex), offline fallback, CLI --pdf (F220)"
+  },
+  "F221": {
+    "status": "PASS",
+    "note": "4 harder problem videos: muons (\u03b3 10.0, 10.1% arrive), quantum dot (659 nm), chaos (split 12.8 s, +7.9 s per 1000\u00d7), coupled pendulums (10.3 s); typeset math with fallback, verified glyphs, routing kept (F221)"
   }
 }
