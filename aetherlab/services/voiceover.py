@@ -367,15 +367,22 @@ async def add_timed_beat_voiceover(
         # the final code (measured by a dry run), whatever repairs and
         # revisions did to the length. Live 2026-10-02: a 13.3 s plan rendered
         # 16.0 s after a render repair and the stretched timing was declined.
-        for item in cues:
+        # Beats MiniMax animates together measure the same start (live
+        # 2026-10-02: segment 5 of 5). Their lines are then spoken back to
+        # back: each starts no earlier than the previous line has finished.
+        previous_end = 0.0
+        for item in cues:                           # timeline order
             start = measured_starts.get(item["beat_id"])
-            if start is not None and 0 <= start < video_duration:
-                item["start_s"] = round(float(start), 3)
-        cues.sort(key=lambda item: item["start_s"])
+            if start is None or not 0 <= start < video_duration:
+                start = item["start_s"]
+            start = max(float(start), previous_end)
+            item["start_s"] = round(start, 3)
+            spoken = _duration_sync(speech_cache_path(speech_cache_dir, item["text"], voice, rate))
+            previous_end = start + (spoken if spoken > 0 else 0.0) + 0.1
         for item, following in zip(cues, cues[1:] + [None]):
             item["end_s"] = round(following["start_s"] if following else video_duration, 3)
         if any(item["end_s"] - item["start_s"] <= 0.05 for item in cues):
-            log.info("Beat narration declined: measured beat starts collide.")
+            log.info("Beat narration declined: the lines do not fit before the video ends.")
             return None
     timeline_end = max(item["end_s"] for item in cues)
     scale = video_duration / timeline_end if timeline_end > 0 else 1.0

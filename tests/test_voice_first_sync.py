@@ -665,3 +665,36 @@ def test_lines_follow_measured_beat_starts_in_the_final_code(tmp_path, monkeypat
     assert starts == measured
     assert result["sync"]["max_boundary_overrun_s"] == 0.0
     assert result["sync"]["beats"][-1]["end_s"] == pytest.approx(14.4, abs=0.1)
+
+
+def test_beats_animated_together_get_their_lines_back_to_back(tmp_path, monkeypatch):
+    # Live cloud run 7: segments 1-4 narrated; segment 5 had two beats with the
+    # same measured start and beat timing was declined ("starts collide").
+    ffmpeg = _ffmpeg()
+    video = tmp_path / "seg5.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=black:s=320x180:d=12:r=15", "-pix_fmt", "yuv420p", str(video)],
+                   check=True)
+    cache = tmp_path / "speech_cache"
+    cues = ["Hot iron glows red.", "Now hotter.", "The peak moves to blue."]
+    lengths = {cues[0]: 1.4, cues[1]: 2.0, cues[2]: 2.6}
+
+    async def fake_synthesize(text, out_path, voice, rate):
+        _tone(Path(out_path), lengths[" ".join(text.split())])
+        return Path(out_path)
+
+    monkeypatch.setattr(voiceover, "synthesize", fake_synthesize)
+    monkeypatch.setattr(voiceover, "narration_available", lambda: True)
+    speech = asyncio.run(voiceover.measure_speech(cues, cache, "v", "+8%"))
+    board = fit_timeline_to_speech(_board(cues), speech, 12.0)
+    measured = {"A1.B1": 0.0, "A1.B2": 0.0, "A2.B1": 6.0}       # B1 and B2 together
+    result = asyncio.run(voiceover.add_timed_beat_voiceover(
+        video, board, tmp_path / "out", voice="v", rate="+8%", speech_cache_dir=cache,
+        measured_starts=measured,
+    ))
+    assert result is not None
+    beats = result["sync"]["beats"]
+    assert beats[0]["start_s"] == 0.0
+    assert beats[1]["start_s"] == pytest.approx(1.5, abs=0.12)    # right after line 1
+    assert beats[2]["start_s"] == 6.0
+    assert result["sync"]["max_boundary_overrun_s"] == 0.0
