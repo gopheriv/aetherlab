@@ -337,6 +337,7 @@ async def add_timed_beat_voiceover(
     rate: str = DEFAULT_RATE,
     max_rate_adjustment_pct: int = 20,
     speech_cache_dir: Path | None = None,
+    measured_starts: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     """Synthesize per-beat speech and place it on the storyboard's time windows.
 
@@ -361,9 +362,26 @@ async def add_timed_beat_voiceover(
     video_duration = await get_duration(video)
     if video_duration <= 0.5:
         return None
+    if measured_starts and speech_cache_dir is not None:
+        # Each line starts when its beat's first animation really starts in
+        # the final code (measured by a dry run), whatever repairs and
+        # revisions did to the length. Live 2026-10-02: a 13.3 s plan rendered
+        # 16.0 s after a render repair and the stretched timing was declined.
+        for item in cues:
+            start = measured_starts.get(item["beat_id"])
+            if start is not None and 0 <= start < video_duration:
+                item["start_s"] = round(float(start), 3)
+        cues.sort(key=lambda item: item["start_s"])
+        for item, following in zip(cues, cues[1:] + [None]):
+            item["end_s"] = round(following["start_s"] if following else video_duration, 3)
+        if any(item["end_s"] - item["start_s"] <= 0.05 for item in cues):
+            log.info("Beat narration declined: measured beat starts collide.")
+            return None
     timeline_end = max(item["end_s"] for item in cues)
     scale = video_duration / timeline_end if timeline_end > 0 else 1.0
-    if not 0.85 <= scale <= 1.15:
+    if measured_starts and speech_cache_dir is not None:
+        scale = 1.0                      # windows already come from the final code
+    elif not 0.85 <= scale <= 1.15:
         log.info("Beat narration declined: storyboard/video scale %.3f is too large.", scale)
         return None
     if speech_cache_dir is not None and video_duration >= timeline_end - 0.25:

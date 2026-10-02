@@ -632,3 +632,36 @@ def test_cached_clips_lose_their_edge_silence(tmp_path, monkeypatch):
     monkeypatch.setattr(voiceover, "synthesize", padded_synthesize)
     speech = asyncio.run(voiceover.measure_speech(["one line"], tmp_path / "cache", "v", "+0%"))
     assert speech[0] == pytest.approx(1.4, abs=0.12)        # was 1.9 with padding
+
+
+def test_lines_follow_measured_beat_starts_in_the_final_code(tmp_path, monkeypatch):
+    # Live cloud run 6: a 13.3 s plan rendered 16.0 s (+20%) after a render
+    # repair; the stretched timing was declined and sync fell back to a
+    # whole-clip fit. Lines now start at the final code's measured beats.
+    ffmpeg = _ffmpeg()
+    video = tmp_path / "long.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=black:s=320x180:d=14.4:r=15", "-pix_fmt", "yuv420p", str(video)],
+                   check=True)
+    cache = tmp_path / "speech_cache"
+    cues = ["Hot iron glows red.", "Now hotter.", "The peak moves to blue."]
+    lengths = {cues[0]: 1.4, cues[1]: 4.1, cues[2]: 2.6}
+
+    async def fake_synthesize(text, out_path, voice, rate):
+        _tone(Path(out_path), lengths[" ".join(text.split())])
+        return Path(out_path)
+
+    monkeypatch.setattr(voiceover, "synthesize", fake_synthesize)
+    monkeypatch.setattr(voiceover, "narration_available", lambda: True)
+    speech = asyncio.run(voiceover.measure_speech(cues, cache, "v", "+8%"))
+    board = fit_timeline_to_speech(_board(cues), speech, 12.0)
+    measured = {"A1.B1": 0.0, "A1.B2": 2.6, "A2.B1": 7.9}      # the final code ran later
+    result = asyncio.run(voiceover.add_timed_beat_voiceover(
+        video, board, tmp_path / "out", voice="v", rate="+8%", speech_cache_dir=cache,
+        measured_starts=measured,
+    ))
+    assert result is not None, "a 20%-long render must still get beat-timed narration"
+    starts = {b["beat_id"]: b["start_s"] for b in result["sync"]["beats"]}
+    assert starts == measured
+    assert result["sync"]["max_boundary_overrun_s"] == 0.0
+    assert result["sync"]["beats"][-1]["end_s"] == pytest.approx(14.4, abs=0.1)

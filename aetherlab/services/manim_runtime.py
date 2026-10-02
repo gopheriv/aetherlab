@@ -2321,6 +2321,25 @@ class ManimRuntime:
                     if isinstance(board, dict) and isinstance(board.get("speech"), dict):
                         speech = board["speech"]
                         break
+                measured_starts = None
+                if speech.get("cache_dir") and scene_bundle.code:
+                    # Measure the FINAL code's beat starts (repairs and
+                    # revisions change timing) and place each line there.
+                    from aetherlab.services.scene_preflight import (
+                        beat_timings,
+                        preflight_enabled,
+                        preflight_scene,
+                    )
+
+                    if preflight_enabled():
+                        report = await asyncio.to_thread(
+                            preflight_scene, scene_bundle.code, scene_bundle.class_name
+                        )
+                        if report.ran and report.ok:
+                            measured_starts = {
+                                t.beat_id: t.measured_s
+                                for t in beat_timings(scene_bundle.code, report)
+                            }
                 aligned = await voiceover.add_timed_beat_voiceover(
                     Path(scene_bundle.video_path),
                     narration_storyboard,
@@ -2328,7 +2347,10 @@ class ManimRuntime:
                     voice=str(speech.get("voice") or s.tts_voice),
                     rate=str(speech.get("rate") or s.tts_rate),
                     speech_cache_dir=Path(speech["cache_dir"]) if speech.get("cache_dir") else None,
+                    measured_starts=measured_starts or None,
                 )
+                if aligned and measured_starts:
+                    aligned["sync"]["timing_source"] = "measured beat starts (final code)"
                 if aligned:
                     scene_bundle.narration_text = beat_script
                     scene_bundle.silent_video_path = scene_bundle.video_path
