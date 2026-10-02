@@ -1,0 +1,5 @@
+{
+  "prompt": "Explain blackbody radiation: why hot objects change colour as they heat up, and how Planck's law fixed the ultraviolet catastrophe.",
+  "seconds": 60,
+  "solver": "live_run_solver.json"
+}
