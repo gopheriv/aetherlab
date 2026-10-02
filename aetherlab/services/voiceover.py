@@ -93,8 +93,31 @@ def speech_cache_path(cache_dir: Path, text: str, voice: str, rate: str) -> Path
     """Content-addressed location of one synthesized line (text + voice + rate)."""
     import hashlib
 
-    key = hashlib.sha256(f"{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")).hexdigest()[:24]
+    # "trim1": cached clips have their edge silence removed (see _trim_edges).
+    key = hashlib.sha256(
+        f"trim1\n{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")
+    ).hexdigest()[:24]
     return Path(cache_dir) / f"{key}.mp3"
+
+
+async def _trim_edges(source: Path, target: Path) -> bool:
+    """Copy ``source`` to ``target`` without its leading and trailing silence.
+
+    edge-tts pads every clip (about 0.15 s before and 0.3 s after the words;
+    22% of a short line, measured 2026-10-02). Over a 22-line plan that is
+    ~10 s of silence counted as speech, so a 128-word, ~45 s script measured
+    62.5 s and could not fit 60 s. The beat timing adds its own breath.
+    """
+    ffmpeg = _ffmpeg_exe()
+    if not ffmpeg:
+        return False
+    edge = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03"
+    ok = await _run_ffmpeg([
+        ffmpeg, "-y", "-i", str(source),
+        "-af", f"{edge},areverse,{edge},areverse",
+        "-c:a", "libmp3lame", "-q:a", "3", str(target),
+    ])
+    return ok and target.is_file() and target.stat().st_size > 0
 
 
 async def synthesize_cached(
@@ -114,8 +137,14 @@ async def synthesize_cached(
     audio = await synthesize(" ".join(text.split()), partial, voice, rate)
     if audio is None:
         return None
+    trimmed = path.with_suffix(".trim.mp3")
     try:
-        partial.replace(path)
+        if await _trim_edges(partial, trimmed) and _duration_sync(trimmed) > 0.05:
+            trimmed.replace(path)
+            partial.unlink(missing_ok=True)
+        else:
+            trimmed.unlink(missing_ok=True)
+            partial.replace(path)
     except OSError:
         return None
     return path

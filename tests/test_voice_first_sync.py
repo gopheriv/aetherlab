@@ -613,3 +613,22 @@ def test_a_somewhat_long_segment_is_accepted_with_a_note(tmp_path, monkeypatch):
     ))
     assert result.status == "rendered", result.diagnostics[-1:]
     assert any("past its 50.00s slot" in d for d in result.diagnostics)
+
+
+def test_cached_clips_lose_their_edge_silence(tmp_path, monkeypatch):
+    # Live cloud run 5: edge-tts pads each clip ~0.45 s (22% of a short line),
+    # so a 128-word script measured 62.5 s and could not fit 60 s.
+    ffmpeg = _ffmpeg()
+
+    async def padded_synthesize(text, out_path, voice, rate):
+        subprocess.run([ffmpeg, "-v", "error", "-y",
+                        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono:d=0.15",
+                        "-f", "lavfi", "-i", "sine=frequency=300:duration=1.4:sample_rate=24000",
+                        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono:d=0.35",
+                        "-filter_complex", "[0:a][1:a][2:a]concat=n=3:v=0:a=1",
+                        "-c:a", "libmp3lame", str(out_path)], check=True)
+        return Path(out_path)
+
+    monkeypatch.setattr(voiceover, "synthesize", padded_synthesize)
+    speech = asyncio.run(voiceover.measure_speech(["one line"], tmp_path / "cache", "v", "+0%"))
+    assert speech[0] == pytest.approx(1.4, abs=0.12)        # was 1.9 with padding
