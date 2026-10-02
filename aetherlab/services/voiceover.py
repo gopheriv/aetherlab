@@ -89,6 +89,60 @@ async def synthesize(text: str, out_path: Path, voice: str, rate: str) -> Path |
         return None
 
 
+def speech_cache_path(cache_dir: Path, text: str, voice: str, rate: str) -> Path:
+    """Content-addressed location of one synthesized line (text + voice + rate)."""
+    import hashlib
+
+    key = hashlib.sha256(f"{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")).hexdigest()[:24]
+    return Path(cache_dir) / f"{key}.mp3"
+
+
+async def synthesize_cached(
+    text: str, cache_dir: Path, voice: str, rate: str
+) -> Path | None:
+    """Synthesize once per (text, voice, rate); later calls reuse the same clip.
+
+    Voice-first timing measures these clips to set the beat windows, and the
+    final mux places the very same files, so the measured length is exactly the
+    length that plays.
+    """
+    path = speech_cache_path(cache_dir, text, voice, rate)
+    if path.is_file() and path.stat().st_size > 0:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_suffix(".part.mp3")
+    audio = await synthesize(" ".join(text.split()), partial, voice, rate)
+    if audio is None:
+        return None
+    try:
+        partial.replace(path)
+    except OSError:
+        return None
+    return path
+
+
+async def measure_speech(
+    lines: list[str], cache_dir: Path, voice: str, rate: str, *, concurrency: int = 4
+) -> list[float] | None:
+    """Spoken seconds for each line (0.0 for blank lines); None if any line fails."""
+    gate = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(text: str) -> float | None:
+        if not text.strip():
+            return 0.0
+        async with gate:
+            path = await synthesize_cached(text, cache_dir, voice, rate)
+        if path is None:
+            return None
+        seconds = await get_duration(path)
+        return seconds if seconds > 0.05 else None
+
+    durations = await asyncio.gather(*(one(line) for line in lines))
+    if any(value is None for value in durations):
+        return None
+    return [float(value) for value in durations]
+
+
 async def _run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -253,8 +307,12 @@ async def add_timed_beat_voiceover(
     voice: str = DEFAULT_VOICE,
     rate: str = DEFAULT_RATE,
     max_rate_adjustment_pct: int = 20,
+    speech_cache_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """Synthesize per-beat speech and place it on the storyboard's time windows.
+
+    With ``speech_cache_dir`` (voice-first timing), each line is taken from the
+    clip that was measured to build the windows, so it fits by construction.
 
     A segment is re-synthesized at most once and only within a bounded rate
     adjustment. If any sentence still overruns its beat, timed mode declines
@@ -297,7 +355,16 @@ async def add_timed_beat_voiceover(
         for index, cue in enumerate(cues):
             audio_path = work_dir / f"beat_{index:02d}.mp3"
             beat_window = cue["end_s"] - cue["start_s"]
-            audio = await synthesize(cue["text"], audio_path, voice, rate)
+            audio = None
+            if speech_cache_dir is not None:
+                cached = await synthesize_cached(cue["text"], speech_cache_dir, voice, rate)
+                if cached is not None:
+                    import shutil
+
+                    shutil.copyfile(cached, audio_path)
+                    audio = audio_path
+            if audio is None:
+                audio = await synthesize(cue["text"], audio_path, voice, rate)
             if audio is None:
                 return None
             duration = await get_duration(audio)

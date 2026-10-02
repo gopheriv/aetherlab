@@ -56,7 +56,8 @@ def _bounds(mob) -> tuple[float, float, float, float] | None:
 def main() -> int:
     scene_path, class_name, report_path, fps = sys.argv[1:5]
     tex_dir = sys.argv[5] if len(sys.argv) > 5 else ""
-    report: dict = {"ok": False, "error": "", "duration_s": 0.0, "plays": 0, "off_frame": []}
+    report: dict = {"ok": False, "error": "", "duration_s": 0.0, "plays": 0, "off_frame": [],
+                    "events": []}
 
     from manim import Scene, config
 
@@ -112,8 +113,25 @@ def main() -> int:
     depth = {"n": 0}
     exact = {"seconds": 0.0}
 
+    import os
+
+    scene_file = os.path.normcase(os.path.abspath(scene_path))
+
+    def _scene_line() -> int:
+        # The outermost frame in the scene file is the construct() line that
+        # led here, even when the play happens inside a helper method. Beat
+        # markers are construct() comments, so this line places the event.
+        line, frame = 0, sys._getframe(2)
+        while frame is not None:
+            if os.path.normcase(os.path.abspath(frame.f_code.co_filename)) == scene_file:
+                line = frame.f_lineno
+            frame = frame.f_back
+        return line
+
     def _timed(original, call):
         def wrapper(self, *args, **kwargs):
+            top_level = depth["n"] == 0
+            start_s, line = exact["seconds"], (_scene_line() if top_level else 0)
             depth["n"] += 1
             try:
                 result = original(self, *args, **kwargs)
@@ -124,6 +142,10 @@ def main() -> int:
                     exact["seconds"] += max(0.0, float(getattr(self, "duration", 0.0) or 0.0))
                 except (TypeError, ValueError):
                     pass
+                if top_level and len(report["events"]) < 4000:
+                    report["events"].append(
+                        [line, round(start_s, 3), round(exact["seconds"], 3)]
+                    )
                 inspect(self, call)
             return result
         return wrapper

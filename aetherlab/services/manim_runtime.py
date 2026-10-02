@@ -1935,7 +1935,12 @@ class ManimRuntime:
         run or a repair does not verifiably help. Curated and fallback scenes
         are deterministic and tested, so they skip it.
         """
-        from aetherlab.services.scene_preflight import preflight_enabled, preflight_scene
+        from aetherlab.services.scene_preflight import (
+            beat_drift_lines,
+            beat_timings,
+            preflight_enabled,
+            preflight_scene,
+        )
 
         curated = any("curated component library" in d.lower() for d in bundle.diagnostics)
         if (
@@ -1957,6 +1962,20 @@ class ManimRuntime:
         )
         for line in report.off_frame_lines(3):
             bundle.diagnostics.append(line)
+
+        def drift_summary(code: str, checked) -> tuple[float, list[str]]:
+            timings = beat_timings(code, checked)
+            worst = max((abs(t.drift_s) for t in timings), default=0.0)
+            return worst, beat_drift_lines(timings, BEAT_DRIFT_TOLERANCE_S)
+
+        if report.ok:
+            timings = beat_timings(bundle.code, report)
+            if timings:
+                worst, _ = drift_summary(bundle.code, report)
+                bundle.diagnostics.append(
+                    f"Preflight beat timing: {len(timings)} beats measured, "
+                    f"largest drift {worst:.2f}s."
+                )
         if not getattr(s, "openai_api_key", None):
             return bundle
 
@@ -2006,6 +2025,7 @@ class ManimRuntime:
             )
             return bundle
 
+        latest = report
         if report.off_frame:
             result, why = await try_repair(
                 "A dry run of this scene found objects outside the camera frame (x about "
@@ -2021,6 +2041,7 @@ class ManimRuntime:
             fixed, checked = result
             if checked.ran and checked.ok and len(checked.off_frame) < len(report.off_frame):
                 bundle.code = fixed
+                latest = checked
                 bundle.diagnostics.append(
                     f"Preflight layout repair kept: objects outside the frame "
                     f"{len(report.off_frame)} -> {len(checked.off_frame)}."
@@ -2028,6 +2049,37 @@ class ManimRuntime:
             else:
                 bundle.diagnostics.append(
                     "Preflight layout repair did not reduce off-frame objects; kept the original."
+                )
+
+        # Narration is placed at each beat's planned start, so a late or early
+        # beat is a sync bug the viewer hears. Fix it before paying for a render.
+        worst, drift_lines = drift_summary(bundle.code, latest)
+        if drift_lines and getattr(s, "narration_enabled", False):
+            result, why = await try_repair(
+                "A dry run measured when each beat's first animation starts. The narration "
+                "for every beat starts exactly at the time in its # BEAT marker, so these "
+                "beats would be out of sync with the voice. Adjust run_time and wait() "
+                "values (do not move or edit the # BEAT markers) so each beat starts at its "
+                "marker time and the total length stays the same. Keep the visual design "
+                "and physics:\n" + "\n".join(drift_lines),
+                full_scene=False,
+            )
+            if result is None:
+                bundle.diagnostics.append(f"Preflight timing repair: {why}")
+                return bundle
+            fixed, checked = result
+            new_worst = drift_summary(fixed, checked)[0] if checked.ran and checked.ok else worst
+            if (
+                checked.ran and checked.ok and new_worst < worst
+                and len(checked.off_frame) <= len(latest.off_frame)
+            ):
+                bundle.code = fixed
+                bundle.diagnostics.append(
+                    f"Preflight timing repair kept: largest beat drift {worst:.2f}s -> {new_worst:.2f}s."
+                )
+            else:
+                bundle.diagnostics.append(
+                    f"Preflight timing repair did not reduce beat drift ({worst:.2f}s); kept the original."
                 )
         return bundle
 
@@ -2237,12 +2289,20 @@ class ManimRuntime:
             )
             if timed_cues:
                 beat_script = "\n".join(item["text"] for item in timed_cues)
+                # Voice-first boards carry the voice, rate and clip cache their
+                # windows were measured with; reuse them so every line fits.
+                speech = {}
+                for board in (narration_storyboard, scene_bundle.storyboard):
+                    if isinstance(board, dict) and isinstance(board.get("speech"), dict):
+                        speech = board["speech"]
+                        break
                 aligned = await voiceover.add_timed_beat_voiceover(
                     Path(scene_bundle.video_path),
                     narration_storyboard,
                     Path(s.data_dir) / "narration",
-                    voice=s.tts_voice,
-                    rate=s.tts_rate,
+                    voice=str(speech.get("voice") or s.tts_voice),
+                    rate=str(speech.get("rate") or s.tts_rate),
+                    speech_cache_dir=Path(speech["cache_dir"]) if speech.get("cache_dir") else None,
                 )
                 if aligned:
                     scene_bundle.narration_text = beat_script
@@ -2617,6 +2677,9 @@ def _estimate_render_cost(code: str) -> float:
 
 
 # Layout findings that trigger a bounded layout repair before rendering.
+# Voice and picture drift apart audibly past about half a second.
+BEAT_DRIFT_TOLERANCE_S = 0.5
+
 _LAYOUT_BLOCKERS = ("[HYGIENE:OVERLAP]", "[HYGIENE:REDRAW_POSITION]")
 _ADVISORY_ISSUE_PREFIXES = ("[TIMING:", "[HYGIENE:", "[PERF:", "[MANIM:UPDATER_ANIMATE]")
 

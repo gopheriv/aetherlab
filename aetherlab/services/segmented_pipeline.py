@@ -108,6 +108,8 @@ def partition_storyboard(
     result: list[dict[str, Any]] = []
     shared_keys = (
         "concept", "staging", "palette", "hero_frame", "idle_loop", "narration",
+        # Voice-first boards: segments keep the measured windows and voice.
+        "timing_basis", "speech",
     )
     for index, group in enumerate(groups):
         start, end = group[0]["start_s"], group[-1]["end_s"]
@@ -296,9 +298,17 @@ async def render_segmented_scene(
     if not isinstance(manifest.get("storyboard"), dict):
         if progress:
             progress("Directing the full explanation before segment rendering.")
-        global_board = await SceneGenerator(settings).storyboard(
-            request, solver, rag, temperature=0.9,
-        )
+        # The whole lesson hangs on this one plan, and a single bad reply (cut
+        # short, or too few beats) is common enough to retry once.
+        global_board = None
+        for attempt in range(2):
+            global_board = await SceneGenerator(settings).storyboard(
+                request, solver, rag, temperature=0.9,
+            )
+            if isinstance(global_board, dict):
+                break
+            if progress and attempt == 0:
+                progress("The first plan was unusable; asking for the full plan again.")
         if not isinstance(global_board, dict):
             return _incomplete(
                 "Could not produce a sufficiently detailed global storyboard; long-form generation stopped without a template substitute.",

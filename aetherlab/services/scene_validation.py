@@ -1011,7 +1011,7 @@ def _is_transform_target_in_beat(
     following = lines[max(start_line - 1, 0):]
     next_beat = next(
         (index for index, line in enumerate(following[1:], 1)
-         if re.match(r"\s*#\s*BEAT\s+A\d+\.B\d+\b", line)),
+         if re.match(r"\s*#\s*BEAT\s+[AS]\d+\.B\d+\b", line)),
         len(following),
     )
     beat_source = "\n".join(following[:next_beat])
@@ -1340,7 +1340,8 @@ def scene_hygiene_warnings(code: str) -> list[str]:
 
 
 _TIMED_BEAT_MARKER_RE = re.compile(
-    r"(?m)^\s*#\s*BEAT\s+(A\d+\.B\d+)\s*\|\s*"
+    # A<act>.B<n> in single scenes; S<segment>.B<n> in long-video segments.
+    r"(?m)^\s*#\s*BEAT\s+([AS]\d+\.B\d+)\s*\|\s*"
     r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*s\s*$"
 )
 
