@@ -462,3 +462,51 @@ def test_a_failed_segment_gets_a_second_generation(tmp_path, monkeypatch):
     ))
     assert tries["n"] == 2
     assert any("generating it once more" in m for m in messages)
+
+
+def test_short_segment_holds_its_last_frame_to_fill_the_slot(tmp_path):
+    # Live cloud run 2026-10-02: a 13.17 s render in a 14.24 s slot stopped the lesson.
+    from aetherlab.services import segmented_pipeline as segmented
+
+    ffmpeg = _ffmpeg()
+    clip = tmp_path / "segment.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=navy:s=320x180:d=13.17:r=15", "-f", "lavfi", "-i",
+                    "sine=frequency=330:duration=13.17", "-shortest",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip)], check=True)
+    assert asyncio.run(segmented._hold_last_frame(clip, 14.24 - 13.17)) is True
+    measured = voiceover._duration_sync(clip)
+    assert measured == pytest.approx(14.24, abs=0.15)
+
+
+def test_wording_is_tightened_before_the_biggest_speed_up(tmp_path, monkeypatch):
+    import json as _json
+
+    board = _board(["a b c d e f", "g h i j k l", "m n o p q r"])
+    rates: list[str] = []
+
+    async def fake_measure(lines, cache_dir, voice, rate, **_kwargs):
+        rates.append(rate)
+        words = sum(len(line.split()) for line in lines)
+        per_word = {"+0%": 0.75, "+10%": 0.7, "+20%": 0.6}[rate]
+        return [per_word * len(line.split()) for line in lines] if words else [0.0] * len(lines)
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            reply = {"A1.B1": "a b c", "A1.B2": "g h i", "A2.B1": "m n o"}
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content=_json.dumps(reply)), finish_reason="stop")])
+
+    monkeypatch.setattr(voiceover, "measure_speech", fake_measure)
+    monkeypatch.setattr(voiceover, "narration_available", lambda: True)
+    settings = SimpleNamespace(narration_enabled=True, tts_voice="v", tts_rate="+0%",
+                               data_dir=tmp_path, openai_api_key="k", llm_model="MiniMax-M3",
+                               openai_base_url="https://api.minimax.io/v1")
+    generator = SceneGenerator(settings)
+    generator._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    # 18 words: 13.5 s at +0%, 12.6 s at +10%: too long for 12 s, so tighten
+    # (would have fitted at +20%, 10.8 s, but that voice is too fast).
+    fitted = asyncio.run(generator.fit_board_to_speech(board, 12.0))
+    assert rates[:2] == ["+0%", "+10%"] and "+20%" not in rates[:3]
+    assert fitted["speech"]["rate"] == "+0%"
+    assert fitted["timeline"][0]["narration_cue"] == "a b c"

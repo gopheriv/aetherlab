@@ -869,9 +869,11 @@ class SceneGenerator:
         base_rate = voiceover._parse_rate(getattr(settings, "tts_rate", "") or voiceover.DEFAULT_RATE)
         cache_dir = Path(settings.data_dir) / "narration" / "speech_cache"
 
-        async def fit(candidate: dict, spoken: list[str]) -> tuple[dict | None, list[float] | None]:
+        async def fit(
+            candidate: dict, spoken: list[str], extras: tuple[int, ...]
+        ) -> tuple[dict | None, list[float] | None]:
             first: list[float] | None = None
-            for extra in (0, 10, 20):
+            for extra in extras:
                 rate = voiceover._format_rate(base_rate + extra)
                 speech = await voiceover.measure_speech(spoken, cache_dir, voice, rate)
                 if speech is None:
@@ -890,14 +892,17 @@ class SceneGenerator:
                     return fitted, speech
             return None, first
 
-        fitted, speech = await fit(board, lines)
+        # Natural speed first, then a slightly faster voice. Tighter wording
+        # comes before the biggest speed-up: a live run fitted 50.5 s of
+        # speech into 60 s only by speaking 28% fast, which sounds rushed.
+        fitted, speech = await fit(board, lines, (0, 10))
         if fitted is not None:
             return fitted
         if speech is None:
             log.info("Voice-first timing unavailable (speech synthesis failed).")
             return board
         log.info(
-            "Narration runs %.1fs at the base rate; too long for %.1fs even at +20%%. "
+            "Narration runs %.1fs at the base rate; too long for %.1fs at +10%%. "
             "Asking for tighter lines.", sum(speech), duration_target_s,
         )
         shorter = await self._condense_lines(board, lines, speech, duration_target_s)
@@ -906,9 +911,12 @@ class SceneGenerator:
                 " ".join(str(beat.get("narration_cue") or "").split())
                 for beat in shorter["timeline"]
             ]
-            fitted, _ = await fit(shorter, short_lines)
+            fitted, _ = await fit(shorter, short_lines, (0, 10, 20))
             if fitted is not None:
                 return fitted
+        fitted, _ = await fit(board, lines, (20,))
+        if fitted is not None:
+            return fitted
         log.info(
             "Voice-first timing declined: narration still needs more than %.1fs.",
             duration_target_s,

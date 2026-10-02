@@ -164,6 +164,33 @@ def partition_storyboard(
     return result
 
 
+async def _hold_last_frame(video: Path, seconds: float) -> bool:
+    """Extend ``video`` in place by freezing its last frame for ``seconds``."""
+    from aetherlab.services.voiceover import _ffmpeg_exe, _run_ffmpeg
+
+    ffmpeg = _ffmpeg_exe()
+    if not ffmpeg or seconds <= 0:
+        return False
+    try:
+        import av
+
+        with av.open(str(video)) as container:
+            has_audio = bool(container.streams.audio)
+    except Exception:  # noqa: BLE001 - probe failure: treat as video-only
+        has_audio = False
+    held = video.with_name(video.stem + ".held.mp4")
+    cmd = [ffmpeg, "-y", "-i", str(video),
+           "-vf", f"tpad=stop_mode=clone:stop_duration={seconds:.3f}"]
+    if has_audio:
+        cmd += ["-af", f"apad=pad_dur={seconds:.3f}", "-c:a", "aac", "-b:a", "160k"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(held)]
+    if not await _run_ffmpeg(cmd) or not held.is_file():
+        held.unlink(missing_ok=True)
+        return False
+    held.replace(video)
+    return True
+
+
 def _segment_play_budget(segment: dict) -> int:
     """Top-level play calls a segment may use: two per beat plus an entry and exit."""
     return min(16, 2 * max(1, len(segment.get("beat_ids") or [])) + 2)
@@ -516,6 +543,17 @@ async def render_segmented_scene(
                     return _incomplete(f"Segment {index + 1} produced an unreadable MP4.", engine=engine)
                 shutil.copy2(source, video_path)
                 measured = await get_duration(video_path)
+                if 0 < measured < target - 0.05 and target - measured <= max(2.5, target * 0.2):
+                    # A slightly short segment holds its final frame (and
+                    # silence) to fill its slot: invisible, keeps every later
+                    # segment and the total length on time. Live 2026-10-02:
+                    # 13.17 s in a 14.24 s slot stopped the lesson.
+                    held = await _hold_last_frame(video_path, target - measured)
+                    if held:
+                        bundle.diagnostics.append(
+                            f"Held the final frame {target - measured:.2f}s to fill the {target:.2f}s slot."
+                        )
+                        measured = await get_duration(video_path)
                 segment_tolerance = max(1.0, target * 0.05)
                 if measured <= 0 or abs(measured - target) > segment_tolerance:
                     return _incomplete(
