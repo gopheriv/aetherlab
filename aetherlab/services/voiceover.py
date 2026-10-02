@@ -337,6 +337,14 @@ async def add_timed_beat_voiceover(
     if not 0.85 <= scale <= 1.15:
         log.info("Beat narration declined: storyboard/video scale %.3f is too large.", scale)
         return None
+    if speech_cache_dir is not None and video_duration >= timeline_end - 0.25:
+        # Voice-first scenes: the preflight verified each beat STARTS on time,
+        # and extra length sits in the final hold. Stretching every cue by the
+        # overall ratio would push early lines late (live 2026-10-02: 15.13 s
+        # for a 13.59 s plan would have moved them up to 1.3 s), so lines stay
+        # at their planned starts and the last window runs to the video's end.
+        scale = 1.0
+        cues[-1]["end_s"] = round(max(cues[-1]["end_s"], video_duration), 3)
     for item in cues:
         item["start_s"] = round(item["start_s"] * scale, 3)
         item["end_s"] = round(item["end_s"] * scale, 3)

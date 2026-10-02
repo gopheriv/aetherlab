@@ -554,11 +554,22 @@ async def render_segmented_scene(
                             f"Held the final frame {target - measured:.2f}s to fill the {target:.2f}s slot."
                         )
                         measured = await get_duration(video_path)
-                segment_tolerance = max(1.0, target * 0.05)
-                if measured <= 0 or abs(measured - target) > segment_tolerance:
+                # Short segments were just held to fill their slot. A long one
+                # keeps every beat start on time (preflight-verified) and only
+                # holds its last beat longer, so it is accepted within the
+                # scene gate's 20%; narration stays at the planned starts.
+                short_limit = max(1.0, target * 0.05)
+                long_limit = max(1.0, target * 0.20)
+                if measured <= 0 or measured < target - short_limit or measured > target + long_limit:
                     return _incomplete(
-                        f"Segment {index + 1} measures {measured:.2f}s; expected {target:.2f}s within ±{segment_tolerance:.2f}s.",
+                        f"Segment {index + 1} measures {measured:.2f}s; expected {target:.2f}s "
+                        f"(-{short_limit:.2f}s / +{long_limit:.2f}s).",
                         engine=engine, diagnostics=bundle.diagnostics,
+                    )
+                if measured > target + short_limit:
+                    bundle.diagnostics.append(
+                        f"Segment runs {measured - target:.2f}s past its {target:.2f}s slot "
+                        "(longer final hold; beat starts unchanged)."
                     )
                 bundle.video_path = str(video_path)
                 code_path.write_text(bundle.code, encoding="utf-8")
@@ -597,10 +608,18 @@ async def render_segmented_scene(
             final_path = Path(assembled)
         final_duration = await get_duration(final_path)
         target_duration = float(request.duration_target_s)
-        final_tolerance = 1.0 if target_duration <= 60.0 else 2.0
-        if final_duration <= 0 or abs(final_duration - target_duration) > final_tolerance:
+        # Segments never end short (they are held to fill), but each may run
+        # up to 20% long, so the lesson may end up to 20% past its target.
+        final_short = 1.0 if target_duration <= 60.0 else 2.0
+        final_long = max(final_short, target_duration * 0.20)
+        if (
+            final_duration <= 0
+            or final_duration < target_duration - final_short
+            or final_duration > target_duration + final_long
+        ):
             return _incomplete(
-                f"Assembled lesson measures {final_duration:.2f}s; expected {target_duration:.2f}s within ±{final_tolerance:.2f}s.",
+                f"Assembled lesson measures {final_duration:.2f}s; expected {target_duration:.2f}s "
+                f"(-{final_short:.2f}s / +{final_long:.2f}s).",
                 engine=engine,
             )
         subtitle_path = cache_dir / "lesson.srt"

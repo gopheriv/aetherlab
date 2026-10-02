@@ -536,3 +536,80 @@ def test_a_scene_that_misses_its_scheduled_length_is_repaired(tmp_path, monkeypa
     assert len(repairs) == 1 and "[PREFLIGHT:DURATION] the scene runs 8.50s" in repairs[0]
     assert "BEAT_DRIFT" not in repairs[0]          # narration off: length only
     assert out.code == _MARKED
+
+
+def test_lines_stay_at_planned_starts_when_the_video_runs_long(tmp_path, monkeypatch):
+    # Live cloud run 4: a 15.13 s render of a 13.59 s plan. Stretching every
+    # cue by the overall ratio would have moved early lines up to 1.3 s late.
+    ffmpeg = _ffmpeg()
+    video = tmp_path / "long.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=black:s=320x180:d=13.3:r=15", "-pix_fmt", "yuv420p", str(video)],
+                   check=True)
+    cache = tmp_path / "speech_cache"
+    cues = ["Hot iron glows red.", "Now hotter.", "The peak moves to blue."]
+    lengths = {cues[0]: 1.4, cues[1]: 4.1, cues[2]: 2.6}
+
+    async def fake_synthesize(text, out_path, voice, rate):
+        _tone(Path(out_path), lengths[" ".join(text.split())])
+        return Path(out_path)
+
+    monkeypatch.setattr(voiceover, "synthesize", fake_synthesize)
+    monkeypatch.setattr(voiceover, "narration_available", lambda: True)
+    speech = asyncio.run(voiceover.measure_speech(cues, cache, "v", "+8%"))
+    board = fit_timeline_to_speech(_board(cues), speech, 12.0)
+    planned = [b["start_s"] for b in board["timeline"]]
+    result = asyncio.run(voiceover.add_timed_beat_voiceover(
+        video, board, tmp_path / "out", voice="v", rate="+8%", speech_cache_dir=cache,
+    ))
+    assert result is not None
+    assert result["sync"]["timeline_scale"] == 1.0
+    assert [b["start_s"] for b in result["sync"]["beats"]] == planned
+    assert result["sync"]["beats"][-1]["end_s"] == pytest.approx(13.3, abs=0.1)
+
+
+def test_a_somewhat_long_segment_is_accepted_with_a_note(tmp_path, monkeypatch):
+    from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
+    from aetherlab.services import segmented_pipeline as segmented
+
+    board = schedule_storyboard_timeline({"acts": [{"name": "A", "duration_s": 13.59, "beats": [
+        {"detail": str(i), "narration_cue": "", "duration_s": 1} for i in range(4)
+    ]}]}, 50.0)
+
+    async def fake_storyboard(*_args, **_kwargs):
+        return board
+
+    monkeypatch.setattr(SceneGenerator, "storyboard", fake_storyboard)
+
+    class Runtime:
+        async def generate_scene_async(self, *_args, **kwargs):
+            return SceneBundle("AetherLabScene", "class AetherLabScene: pass", "manim-community",
+                               "compiled", storyboard=kwargs["locked_storyboard"])
+
+        async def render_scene_with_repair(self, bundle, *_args, **_kwargs):
+            source = tmp_path / "rendered.mp4"
+            source.write_bytes(b"x" * 2048)
+            bundle.video_path, bundle.status = str(source), "rendered"
+            return bundle
+
+    async def fake_duration(path):
+        return 57.0 if Path(path).name == "lesson.mp4" else 57.0   # 50 s plan, +14%
+
+    async def fake_assemble(clips, out_path, **_kwargs):
+        Path(out_path).write_bytes(b"y" * 4096)
+        return Path(out_path)
+
+    monkeypatch.setattr(segmented, "_valid_video", lambda path, expected_hash="": Path(path).is_file())
+    monkeypatch.setattr("aetherlab.services.voiceover.get_duration", fake_duration)
+    monkeypatch.setattr("aetherlab.services.assembly.assemble_lesson", fake_assemble)
+    monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 57.0)
+    settings = SimpleNamespace(data_dir=tmp_path, openai_api_key="k", llm_model="m",
+                               render_mode="local", narration_enabled=False,
+                               tts_voice="v", tts_rate="+0%")
+    result = asyncio.run(segmented.render_segmented_scene(
+        ProblemRequest("Explain", duration_target_s=50.0),
+        SolverResult("summary", [], [], {}, "test"), RagResult([], [], "test"), settings,
+        runtime=Runtime(), max_segment_seconds=60.0,
+    ))
+    assert result.status == "rendered", result.diagnostics[-1:]
+    assert any("past its 50.00s slot" in d for d in result.diagnostics)
