@@ -448,10 +448,21 @@ async def render_segmented_scene(
                         progress(f"Generating segment {index + 1}/{len(segments)} ({target:.1f}s).")
                     record["state"] = "generating"
                     atomic_write_json(manifest_path, manifest)
-                    bundle = await runtime.generate_scene_async(
-                        segment_request, solver, rag, settings,
-                        locked_storyboard=item["storyboard"], force_ai=True,
-                    )
+                    # One segment failing stops the whole lesson, so each gets a
+                    # second full generation before that happens.
+                    first_try: list[str] = []
+                    for segment_try in range(2):
+                        bundle = await runtime.generate_scene_async(
+                            segment_request, solver, rag, settings,
+                            locked_storyboard=item["storyboard"], force_ai=True,
+                        )
+                        if not bundle.used_fallback and bundle.status == "compiled":
+                            break
+                        if segment_try == 0:
+                            first_try = [f"First try: {d}" for d in bundle.diagnostics]
+                            if progress:
+                                progress(f"Segment {index + 1} failed its checks; generating it once more.")
+                    bundle.diagnostics = first_try + bundle.diagnostics
                     if bundle.used_fallback:
                         return _incomplete(
                             f"Segment {index + 1} fell back to a template; the long explanation is incomplete.",

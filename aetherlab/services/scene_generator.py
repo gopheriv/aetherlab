@@ -1417,11 +1417,13 @@ class SceneGenerator:
         if choice.finish_reason == "length":
             raise ValueError("Repair reply was truncated at the max_tokens limit.")
         content = choice.message.content or ""
+        from aetherlab.services.scene_validation import restore_beat_markers
+
         if function_name:
             merged = _merge_repaired_function(code, content, function_name)
             if merged:
-                return self._extract_code(merged, class_name)
-        return self._extract_code(content, class_name)
+                return restore_beat_markers(code, self._extract_code(merged, class_name))
+        return restore_beat_markers(code, self._extract_code(content, class_name))
 
     async def revise(self, code: str, critique: str, class_name: str) -> str:
         """Aesthetic revision: rework a *rendering* scene per visual critique.
@@ -1453,7 +1455,9 @@ class SceneGenerator:
         choice = response.choices[0]
         if choice.finish_reason == "length":
             raise ValueError("Revise reply was truncated at the max_tokens limit.")
-        return self._extract_code(choice.message.content or "", class_name)
+        from aetherlab.services.scene_validation import restore_beat_markers
+
+        return restore_beat_markers(code, self._extract_code(choice.message.content or "", class_name))
 
     async def narrate(
         self,

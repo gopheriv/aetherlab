@@ -362,3 +362,103 @@ def test_api_key_byte_order_mark_is_stripped(monkeypatch):
 
     monkeypatch.setenv("AETHERLAB_OPENAI_API_KEY", "﻿sk-cp-example-key \n")
     assert settings_module.load_settings().openai_api_key == "sk-cp-example-key"
+
+
+# ── repairs keep the beat markers (live cloud run 2026-10-02) ─────────────
+
+_ORIGINAL_WITH_MARKERS = """from manim import *
+class AetherLabScene(Scene):
+    def construct(self):
+        glow = Circle(color=ORANGE)
+        # BEAT S2.B1 | 0.00-3.00 s
+        self.play(FadeIn(glow), run_time=1.5)
+        self.wait(1.5)
+        # BEAT S2.B2 | 3.00-6.00 s
+        self.play(glow.animate.scale(1.5), run_time=1.5)
+        self.wait(1.5)
+        # BEAT S2.B3 | 6.00-8.00 s
+        # BEAT S2.B4 | 8.00-10.00 s
+        self.play(glow.animate.set_color(YELLOW), run_time=2.0)
+        self.wait(1.5)
+"""
+
+
+def test_markers_a_repair_dropped_are_restored_in_place():
+    from aetherlab.services.scene_validation import check_timeline_markers, restore_beat_markers
+
+    repaired = "\n".join(
+        line for line in _ORIGINAL_WITH_MARKERS.splitlines() if "# BEAT" not in line
+    ).replace("Circle(color=ORANGE)", "Circle(color=ORANGE, radius=1.2)") + "\n"
+    restored = restore_beat_markers(_ORIGINAL_WITH_MARKERS, repaired)
+    timeline = [
+        {"id": "S2.B1", "start_s": 0.0, "end_s": 3.0},
+        {"id": "S2.B2", "start_s": 3.0, "end_s": 6.0},
+        {"id": "S2.B3", "start_s": 6.0, "end_s": 8.0},
+        {"id": "S2.B4", "start_s": 8.0, "end_s": 10.0},
+    ]
+    assert check_timeline_markers(restored, timeline) == []
+    lines = restored.splitlines()
+    # Each marker sits right before the line it preceded; the two adjacent
+    # markers stay together in order, and the second self.wait(1.5) keeps its own.
+    assert lines[lines.index("        # BEAT S2.B2 | 3.00-6.00 s") + 1].strip().startswith(
+        "self.play(glow.animate.scale")
+    b3 = lines.index("        # BEAT S2.B3 | 6.00-8.00 s")
+    assert lines[b3 + 1] == "        # BEAT S2.B4 | 8.00-10.00 s"
+    assert "radius=1.2" in restored
+
+
+def test_restore_leaves_code_alone_when_markers_survive_or_anchors_vanish():
+    from aetherlab.services.scene_validation import restore_beat_markers
+
+    assert restore_beat_markers(_ORIGINAL_WITH_MARKERS, _ORIGINAL_WITH_MARKERS) == _ORIGINAL_WITH_MARKERS
+    rewritten = "from manim import *\nclass AetherLabScene(Scene):\n    def construct(self):\n        self.wait(10)\n"
+    assert restore_beat_markers(_ORIGINAL_WITH_MARKERS, rewritten) == rewritten
+
+
+def test_colorsys_is_an_allowed_import():
+    from aetherlab.services.code_safety import validate_code_safety
+
+    safe, issues = validate_code_safety("import colorsys\nfrom manim import *\nr, g, b = colorsys.hsv_to_rgb(0.1, 1, 1)\n")
+    assert safe, issues
+
+
+def test_a_failed_segment_gets_a_second_generation(tmp_path, monkeypatch):
+    # Live cloud run 2026-10-02: segment 2 of 5 failed its checks once and the
+    # whole lesson stopped.
+    from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
+    from aetherlab.services import segmented_pipeline as segmented
+
+    board = schedule_storyboard_timeline({"acts": [{"name": "A", "duration_s": 30, "beats": [
+        {"detail": str(i), "narration_cue": f"line {i}", "duration_s": 1} for i in range(4)
+    ]}]}, 50.0)
+
+    async def fake_storyboard(*_args, **_kwargs):
+        return board
+
+    monkeypatch.setattr(SceneGenerator, "storyboard", fake_storyboard)
+    tries = {"n": 0}
+
+    class Runtime:
+        async def generate_scene_async(self, *_args, **kwargs):
+            tries["n"] += 1
+            if tries["n"] == 1:
+                return SceneBundle("AetherLabScene", "", "manim-community", "compiled",
+                                   used_fallback=True, diagnostics=["validation failed"])
+            return SceneBundle("AetherLabScene", "class AetherLabScene: pass", "manim-community",
+                               "compiled", storyboard=kwargs["locked_storyboard"])
+
+        async def render_scene_with_repair(self, bundle, *_args, **_kwargs):
+            bundle.status = "render-error"            # stop after generation
+            return bundle
+
+    settings = SimpleNamespace(data_dir=tmp_path, openai_api_key="k", llm_model="m",
+                               render_mode="local", narration_enabled=False,
+                               tts_voice="v", tts_rate="+0%")
+    messages: list[str] = []
+    asyncio.run(segmented.render_segmented_scene(
+        ProblemRequest("Explain", duration_target_s=50.0),
+        SolverResult("summary", [], [], {}, "test"), RagResult([], [], "test"), settings,
+        runtime=Runtime(), progress=messages.append, max_segment_seconds=60.0,
+    ))
+    assert tries["n"] == 2
+    assert any("generating it once more" in m for m in messages)

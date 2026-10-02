@@ -1346,6 +1346,51 @@ _TIMED_BEAT_MARKER_RE = re.compile(
 )
 
 
+def restore_beat_markers(original: str, repaired: str) -> str:
+    """Put back ``# BEAT`` markers that a repair or revision dropped.
+
+    Each marker returns in front of the first code line that followed it in
+    the original, matched in order in the repaired code. Live 2026-10-02: two
+    repairs of one segment fixed the real error but deleted every marker, so
+    both failed validation. If any anchor line cannot be found the repaired
+    code is returned unchanged and the marker check reports it as before.
+    """
+    original_markers = list(_TIMED_BEAT_MARKER_RE.finditer(original))
+    if not original_markers or _TIMED_BEAT_MARKER_RE.search(repaired):
+        return repaired
+    original_lines = original.splitlines()
+    repaired_lines = repaired.splitlines()
+    insertions: list[tuple[int, str]] = []
+    previous_anchor_line, previous_position = -1, -1
+    for marker in original_markers:
+        marker_line = original.count("\n", 0, marker.start())
+        anchor_line = next(
+            (index for index in range(marker_line + 1, len(original_lines))
+             if original_lines[index].strip()
+             and not original_lines[index].strip().startswith("#")),
+            None,
+        )
+        if anchor_line is None:
+            return repaired
+        if anchor_line == previous_anchor_line:
+            position = previous_position          # adjacent markers share a line
+        else:
+            anchor = original_lines[anchor_line].strip()
+            position = next(
+                (index for index in range(previous_position + 1, len(repaired_lines))
+                 if repaired_lines[index].strip() == anchor),
+                None,
+            )
+            if position is None:
+                return repaired
+        line = repaired_lines[position]
+        insertions.append((position, line[: len(line) - len(line.lstrip())] + marker.group(0).strip()))
+        previous_anchor_line, previous_position = anchor_line, position
+    for position, text in reversed(insertions):
+        repaired_lines.insert(position, text)
+    return "\n".join(repaired_lines) + ("\n" if repaired.endswith("\n") else "")
+
+
 def check_timeline_markers(code: str, timeline: list[dict] | None) -> list[str]:
     """Require one ordered source marker for each scheduled visual beat."""
     if not isinstance(timeline, list) or not timeline:
