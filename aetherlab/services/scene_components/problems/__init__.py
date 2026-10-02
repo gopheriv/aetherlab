@@ -22,19 +22,28 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-PROBLEMS: tuple[str, ...] = ("muon_paradox", "quantum_dot", "chaos_horizon", "coupled_swing", "projectile_landing", "moon_clock", "orbit_period")
+PROBLEMS: tuple[str, ...] = (
+    "three_body", "muon_paradox", "quantum_dot", "chaos_horizon",
+    "coupled_swing", "projectile_landing", "moon_clock", "orbit_period",
+)
 
 
 def _module(name: str) -> Any:
     return importlib.import_module(f"aetherlab.services.scene_components.problems.{name}")
 
 
-def compose_problem(class_name: str, solver: Any) -> tuple[str, str] | None:
+def compose_problem(
+    class_name: str, solver: Any, *, prompt_context: str = "",
+) -> tuple[str, str] | None:
     """Return (problem name, scene source) when a problem video fits, else None."""
     for name in PROBLEMS:
         try:
             module = _module(name)
-            if not module.matches(solver):
+            if name == "three_body":
+                matched = module.matches(solver, prompt_context=prompt_context)
+            else:
+                matched = module.matches(solver)
+            if not matched:
                 continue
             code = module.build(class_name, solver)
         except Exception as exc:  # noqa: BLE001 — fall through to scenarios/components
@@ -45,13 +54,17 @@ def compose_problem(class_name: str, solver: Any) -> tuple[str, str] | None:
     return None
 
 
-def check_lines(solver: Any) -> list[str]:
+def check_lines(solver: Any, *, prompt_context: str = "") -> list[str]:
     """Independent simulation results for every problem type this request matches."""
     lines: list[str] = []
     for name in PROBLEMS:
         try:
             module = _module(name)
-            if module.matches(solver):
+            if name == "three_body":
+                matched = module.matches(solver, prompt_context=prompt_context)
+            else:
+                matched = module.matches(solver)
+            if matched:
                 lines += module.check_lines(solver)
         except Exception as exc:  # noqa: BLE001 — checks are advisory
             log.info("No independent check from %s (%s).", name, exc)

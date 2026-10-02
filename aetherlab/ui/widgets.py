@@ -652,6 +652,7 @@ class CommandBar(QtWidgets.QWidget):
     learn_requested = QtCore.pyqtSignal(str)  # topic → build a full lesson
 
     _QUALITIES = {"Draft": "l", "Standard": "m", "High": "h"}
+    _DURATIONS = {"30 sec": 30.0, "60 sec": 60.0, "2 min": 120.0, "3 min": 180.0}
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -713,6 +714,17 @@ class CommandBar(QtWidgets.QWidget):
             "Render quality — Draft 480p / Standard 720p / High 1080p"
         )
         action_row.addWidget(self._quality)
+
+        self._duration = QtWidgets.QComboBox()
+        self._duration.setObjectName("DurationCombo")
+        self._duration.addItems(list(self._DURATIONS))
+        self._duration.setCurrentText("30 sec")
+        self._duration.setFixedWidth(92)
+        self._duration.setToolTip(
+            "Target animation length. Durations over 45 seconds use resumable, "
+            "independently reviewed segments."
+        )
+        action_row.addWidget(self._duration)
 
         # Learn button (topic explainer): build a full narrated lesson.
         self.learn_button = QtWidgets.QPushButton("Learn")
@@ -786,6 +798,10 @@ class CommandBar(QtWidgets.QWidget):
             if value == flag:
                 self._quality.setCurrentText(label)
                 return
+
+    def get_duration_target(self) -> float:
+        """Return the requested animation duration in seconds."""
+        return self._DURATIONS.get(self._duration.currentText(), 30.0)
 
     def set_busy(self, busy: bool) -> None:
         self.run_button.setVisible(not busy)

@@ -39,16 +39,22 @@ def build(class_name: str, solver: Any) -> str | None:
     n, speed_scale = p["particles"], p["speed_scale"]
 
     rng = _Rng(20260724)
+    sigma = 1.1 * speed_scale
+    speed_max = max(4.0, 3.2 * sigma)
     xmax, ymax = 3.1, 2.1
     particles = []
     for _ in range(n):
         px = (rng.random() * 2 - 1) * (xmax - 0.2)
         py = (rng.random() * 2 - 1) * (ymax - 0.2)
-        speed = (1.4 + rng.random() * 1.8) * speed_scale
-        ang = rng.random() * 2 * math.pi
+        # Independent Gaussian velocity components produce the 2D Maxwell
+        # (Rayleigh) speed density shown in the reference plot.
+        u1 = max(rng.random(), 1e-12)
+        u2 = rng.random()
+        magnitude = math.sqrt(-2.0 * math.log(u1))
+        vx = sigma * magnitude * math.cos(2 * math.pi * u2)
+        vy = sigma * magnitude * math.sin(2 * math.pi * u2)
         particles.append([
-            round(px, 4), round(py, 4),
-            round(speed * math.cos(ang), 4), round(speed * math.sin(ang), 4),
+            round(px, 4), round(py, 4), round(vx, 4), round(vy, 4),
         ])
 
     title = _shorten(getattr(solver, "summary", "") or "Kinetic theory of an ideal gas", 60)
@@ -57,6 +63,8 @@ def build(class_name: str, solver: Any) -> str | None:
         particles=repr(particles),
         xmax=repr(xmax),
         ymax=repr(ymax),
+        sigma=repr(sigma),
+        speed_max=repr(speed_max),
         title=repr(title),
     )
 
@@ -128,21 +136,24 @@ class {class_name}(Scene):
                     d.velocity[1] *= -1
                     d.shift(np.array([0, np.sign(local[1]) * (ymax - abs(local[1])), 0]))
 
-        # Maxwell-Boltzmann speed distribution reference on the right.
+        # The 2D Maxwell (Rayleigh) speed density matches Gaussian vx and vy.
+        sigma = {sigma}
+        speed_max = {speed_max}
         axes = Axes(
-            x_range=[0, 4, 1], y_range=[0, 1.1, 0.5],
+            x_range=[0, speed_max, speed_max / 4], y_range=[0, 1.1, 0.5],
             x_length=3.6, y_length=2.6,
             axis_config={{"include_tip": False, "stroke_opacity": 0.5}},
         ).to_corner(DR, buff=0.6)
-        a = 1.1
-        mb = axes.plot(lambda v: (v * v) * np.exp(-(v * v) / (2 * a * a)) / (a ** 3) * 1.0,
-                       x_range=[0.01, 4.0], color=GOLD)
-        mb_label = Text("speed distribution").scale(0.3).next_to(axes, UP, buff=0.12)
+        density = axes.plot(
+            lambda v: (v / (sigma * sigma)) * np.exp(-(v * v) / (2 * sigma * sigma)),
+            x_range=[0.01, speed_max], color=GOLD,
+        )
+        mb_label = Text("2D Maxwell speed density").scale(0.3).next_to(axes, UP, buff=0.12)
 
         self.play(FadeIn(title), Create(box), run_time=0.9)
         self.play(LaggedStart(*[GrowFromCenter(d) for d in particles], lag_ratio=0.02),
                   run_time=1.2)
-        self.play(Create(axes), Create(mb), FadeIn(mb_label), run_time=1.0)
+        self.play(Create(axes), Create(density), FadeIn(mb_label), run_time=1.0)
         particles.add_updater(step)
         self.wait(5.5)
         particles.remove_updater(step)

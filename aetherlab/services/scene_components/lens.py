@@ -30,6 +30,22 @@ def params(solver: Any) -> dict[str, float]:
 
 def build(class_name: str, solver: Any) -> str | None:
     """Return a thin-lens ray-diagram scene. Never needs solver data."""
+    variables = {str(k): float(v) for k, v in dict(getattr(solver, "variables", {}) or {}).items()}
+    focal = variables.get("focal_length", variables.get("f"))
+    object_distance = variables.get("object_distance", variables.get("distance"))
+    object_height = variables.get("height", variables.get("object_height"))
+    # This component depicts a converging lens with a real, inverted image.
+    # Reject known input that would require a diverging lens, a virtual image,
+    # or geometry outside the scene's supported scale instead of clamping it
+    # into a physically different example.
+    if focal is not None and not 1.0 <= focal <= 2.6:
+        return None
+    if object_distance is not None and not 1.8 <= object_distance <= 5.2:
+        return None
+    if focal is not None and object_distance is not None and object_distance <= focal + 0.8:
+        return None
+    if object_height is not None and not 0.6 <= object_height <= 1.8:
+        return None
     p = params(solver)
     f, do, ho, di, hi = p["f"], p["do"], p["ho"], p["di"], p["hi"]
 

@@ -53,9 +53,28 @@ class AetherLabPipeline:
             scene = _skipped_scene(current_engine)
         else:
             scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
+            if (
+                float(request.duration_target_s) > 45.0
+                and scene is not None
+                and (
+                    scene.class_name != "AetherLabSegmentedScene"
+                    # Its `code` joins every segment's AetherLabScene; re-rendering
+                    # it would silently produce only the last segment. Resume from
+                    # the segment manifest instead.
+                    or not _video_exists(scene.video_path)
+                )
+            ):
+                # A legacy monolithic/curated cache is not a valid long-form
+                # result. Let the segmented manifest resume each verified unit.
+                scene = None
             if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
-                tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
-                if tournament_enabled(self.settings):
+                if float(request.duration_target_s) > 45.0:
+                    from aetherlab.services.segmented_pipeline import render_segmented_scene
+
+                    scene = await render_segmented_scene(
+                        request, solver, rag, self.settings, runtime=manim,
+                    )
+                elif getattr(manim, "scene_tournament_enabled", lambda _settings: False)(self.settings):
                     scene = await manim.generate_render_tournament(
                         request, solver, rag, self.settings, brief=request.prompt
                     )

@@ -1697,7 +1697,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.deleteLater()
             self.worker = None
 
-        request = ProblemRequest(prompt=prompt)
+        request = ProblemRequest(
+            prompt=prompt,
+            duration_target_s=self.command_bar.get_duration_target(),
+        )
         render_quality = self.command_bar.get_render_quality()
         self.worker = PipelineWorker(
             request=request, settings=self.settings, render_quality=render_quality
