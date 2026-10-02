@@ -164,11 +164,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
 
@@ -219,7 +219,7 @@ jobs:
 
       - name: Upload rendered MP4
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.job_id }}.mp4
           path: ${{ inputs.job_id }}.mp4
@@ -227,7 +227,7 @@ jobs:
 
       - name: Upload render log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.job_id }}.log
           path: ${{ inputs.job_id }}.log
