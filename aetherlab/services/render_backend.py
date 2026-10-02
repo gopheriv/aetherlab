@@ -531,6 +531,11 @@ class CloudRenderBackend:
                         if log_text else f"GitHub Actions concluded {conclusion or 'failure'}."
                     )
                     kind = _classify_failure(stderr)
+                    if _note_missing_latex(log_text or ""):
+                        scene.diagnostics.append(
+                            "The cloud runner had no LaTeX for this scene; later cloud "
+                            "renders will install it."
+                        )
                     dump = _dump_render_failure(settings.data_dir, scene.code, stderr, kind)
                     note = f"Cloud render failed [{kind}]: {stderr[-8000:]}"
                     if dump:
@@ -825,8 +830,37 @@ def validate_mp4(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 128 and b"ftyp" in data[:64]
 
 
+# Manim objects that typeset with LaTeX internally. A render that uses one
+# without LaTeX installed dies with FileNotFoundError: 'latex' (live
+# 2026-10-02: a DecimalNumber readout failed three cloud renders in a row).
+_LATEX_CONSTRUCTORS = re.compile(
+    r"\b(?:MathTex|Tex|SingleStringMathTex|TexTemplate|DecimalNumber|Integer|Variable"
+    r"|Matrix|IntegerMatrix|DecimalMatrix|MobjectMatrix|MathTable|DecimalTable"
+    r"|IntegerTable|BarChart|BraceLabel|BraceText|Title|BulletedList)\s*\("
+)
+_LATEX_HELPERS = re.compile(
+    r"\b(?:include_numbers|numbers_to_include|add_coordinates|get_axis_labels"
+    r"|get_x_axis_label|get_y_axis_label|get_axis_label|get_graph_label|get_tex"
+    r"|decimal_number_config)\b|\.get_text\("
+)
+# Set once a cloud render fails for lack of LaTeX; later renders in this
+# process (render repairs, other segments) then always install it.
+_latex_missing_seen = False
+
+
 def _needs_latex(code: str) -> bool:
-    return any(token in code for token in ("MathTex", "Tex(", "TexTemplate"))
+    if _latex_missing_seen:
+        return True
+    return bool(_LATEX_CONSTRUCTORS.search(code) or _LATEX_HELPERS.search(code))
+
+
+def _note_missing_latex(log_text: str) -> bool:
+    """Remember a render that failed because the runner had no LaTeX."""
+    global _latex_missing_seen
+    if re.search(r"No such file or directory: '(?:latex|dvisvgm)'", log_text or ""):
+        _latex_missing_seen = True
+        return True
+    return False
 
 
 def _github_token(settings: "AppSettings") -> str:

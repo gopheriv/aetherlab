@@ -213,7 +213,7 @@ def test_segmented_run_resumes_valid_segments_without_regenerating(tmp_path, mon
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
     first = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert first.status == "rendered"
     assert calls == {"generated": 3, "rendered": 3, "assembled": 1}
@@ -223,7 +223,7 @@ def test_segmented_run_resumes_valid_segments_without_regenerating(tmp_path, mon
     assert all(segment["state"] == "rendered" for segment in manifest["segments"])
 
     second = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert second.status == "rendered"
     assert calls == {"generated": 3, "rendered": 3, "assembled": 1}
@@ -299,7 +299,7 @@ def test_long_form_assembly_requires_every_requested_segment(
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
     result = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert result.status == "rendered"
     assert counters == {
@@ -382,9 +382,11 @@ def test_resumed_narrated_lesson_keeps_every_segment_subtitle(tmp_path, monkeypa
     monkeypatch.setattr("aetherlab.services.assembly.assemble_lesson", fake_assemble)
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
-    first = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime()))
+    first = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime(),
+        max_segment_seconds=28.0))
     assert first.status == "rendered", first.diagnostics[-1:]
-    second = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime()))
+    second = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime(),
+        max_segment_seconds=28.0))
     assert rendered["n"] == 3                                  # all three reused
     assert second.status == "rendered", second.diagnostics[-1:]
     merged = Path(second.subtitle_path).read_text(encoding="utf-8")

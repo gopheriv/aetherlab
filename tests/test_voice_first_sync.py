@@ -308,3 +308,48 @@ def test_over_long_narration_is_tightened_then_fitted(tmp_path, monkeypatch):
     assert is_speech_timed(fitted)
     assert [b["narration_cue"] for b in fitted["timeline"]] == ["one two three", "nine ten eleven", "a b c"]
     assert "(max " in seen["request"] and "A1.B2" in seen["request"]
+
+
+def test_default_segments_are_short_enough_for_the_cloud_budget():
+    # Live 2026-10-02: 27 s segments carried ~9 beats / 24 plays (cloud limit 16).
+    from aetherlab.services import segmented_pipeline as segmented
+
+    board = schedule_storyboard_timeline({"acts": [{"name": "A", "duration_s": 60, "beats": [
+        {"detail": str(i), "narration_cue": f"line {i}", "duration_s": 1} for i in range(22)
+    ]}]}, 60.0)
+    segments = segmented.partition_storyboard(board, 60.0)
+    assert all(item["duration_s"] <= segmented.DEFAULT_SEGMENT_MAX_S + 1e-6 for item in segments)
+    assert all(len(item["beat_ids"]) <= 6 for item in segments)
+    assert segmented._segment_play_budget(segments[0]) <= 14
+
+
+# ── cloud LaTeX detection (live 2026-10-02) ───────────────────────────────
+
+@pytest.mark.parametrize("code, needs", [
+    ("value = DecimalNumber(5800, num_decimal_places=0)", True),
+    ("ax = Axes(x_range=[0, 3], axis_config={'include_numbers': True})", True),
+    ("labels = ax.get_axis_labels(x_label='x', y_label='y')", True),
+    ("eq = MathTex(r'E = h\\nu')", True),
+    ("n = Integer(3)", True),
+    ("t = Text('Planck')", False),
+    ("dot = Dot(); ring = Circle()", False),
+    ("myTitle(3)", False),
+])
+def test_cloud_render_installs_latex_for_every_latex_object(code, needs, monkeypatch):
+    # A DecimalNumber readout failed three cloud renders with
+    # FileNotFoundError: 'latex', because only MathTex/Tex were detected.
+    from aetherlab.services import render_backend
+
+    monkeypatch.setattr(render_backend, "_latex_missing_seen", False)
+    assert render_backend._needs_latex(code) is needs
+
+
+def test_one_missing_latex_failure_makes_later_renders_install_it(monkeypatch):
+    from aetherlab.services import render_backend
+
+    monkeypatch.setattr(render_backend, "_latex_missing_seen", False)
+    assert render_backend._needs_latex("dot = Dot()") is False
+    log = "FileNotFoundError: [Errno 2] No such file or directory: 'latex'"
+    assert render_backend._note_missing_latex(log) is True
+    assert render_backend._needs_latex("dot = Dot()") is True
+    assert render_backend._note_missing_latex("ValueError: something else") is False

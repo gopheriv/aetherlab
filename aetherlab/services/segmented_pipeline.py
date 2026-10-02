@@ -26,7 +26,9 @@ from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, Solver
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-DEFAULT_SEGMENT_MAX_S = 28.0
+# About 5 beats per segment. Live 2026-10-02: 27 s segments carried ~9 beats and
+# 24 animations, past the 16-play / 3.5-cost cloud limits, on every attempt.
+DEFAULT_SEGMENT_MAX_S = 15.0
 LONG_SCENE_THRESHOLD_S = 45.0
 
 
@@ -160,6 +162,11 @@ def partition_storyboard(
     if abs(sum(item["duration_s"] for item in result) - target_seconds) > 0.05:
         raise SegmentPlanError("Partition changed the total requested duration.")
     return result
+
+
+def _segment_play_budget(segment: dict) -> int:
+    """Top-level play calls a segment may use: two per beat plus an entry and exit."""
+    return min(16, 2 * max(1, len(segment.get("beat_ids") or [])) + 2)
 
 
 def _stable_hash(value: Any) -> str:
@@ -431,7 +438,9 @@ async def render_segmented_scene(
                             f"Overall story: {global_board.get('creative_direction', global_board.get('title', ''))}. "
                             f"Cover only its assigned local beats and preserve the same equations, values, units, "
                             f"colors, objects, and visual style. Entry: {item['storyboard']['continuity']['entry_beat']}. "
-                            f"Exit: {item['storyboard']['continuity']['exit_beat']}. Do not introduce a new scenario."
+                            f"Exit: {item['storyboard']['continuity']['exit_beat']}. Do not introduce a new scenario. "
+                            f"Budget: at most {_segment_play_budget(item)} top-level self.play calls; "
+                            f"animate simultaneous changes in one play call."
                         ),
                         duration_target_s=target,
                     )
