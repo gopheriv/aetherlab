@@ -215,7 +215,7 @@ def test_pipeline_repairs_drift_only_when_it_helps(tmp_path, monkeypatch):
     out = asyncio.run(ManimRuntime(settings)._preflight_and_repair(bundle, settings, None))
     assert len(repairs) == 1 and "[PREFLIGHT:BEAT_DRIFT] A1.B2" in repairs[0]
     assert out.code == _MARKED
-    assert any("timing repair kept: largest beat drift 1.20s -> 0.00s" in d for d in out.diagnostics)
+    assert any("timing repair kept: worst timing error 1.20s -> 0.00s" in d for d in out.diagnostics)
 
     # Narration off: drift is reported but no repair call is spent on it.
     repairs.clear()
@@ -510,3 +510,29 @@ def test_wording_is_tightened_before_the_biggest_speed_up(tmp_path, monkeypatch)
     assert rates[:2] == ["+0%", "+10%"] and "+20%" not in rates[:3]
     assert fitted["speech"]["rate"] == "+0%"
     assert fitted["timeline"][0]["narration_cue"] == "a b c"
+
+
+def test_a_scene_that_misses_its_scheduled_length_is_repaired(tmp_path, monkeypatch):
+    # Live cloud runs 2026-10-02: segments ran 15.40 s for a 13.76 s slot.
+    from aetherlab.services import manim_runtime
+    from aetherlab.services.manim_runtime import ManimRuntime
+
+    long_version = _MARKED.replace("run_time=2.0)", "run_time=4.5)")   # 6.0 s -> 8.5 s
+    repairs: list[str] = []
+
+    async def fake_repair(self, code, instruction, class_name, full_scene=False):
+        repairs.append(instruction)
+        return _MARKED
+
+    monkeypatch.setattr(SceneGenerator, "repair", fake_repair)
+    monkeypatch.setattr(manim_runtime, "_blocking_scene_issues", lambda code, timeline: (True, []))
+    settings = SimpleNamespace(openai_api_key="k", narration_enabled=False, llm_model="m",
+                               data_dir=tmp_path)
+    timeline = [{"id": "A1.B1", "start_s": 0.0, "end_s": 2.0},
+                {"id": "A1.B2", "start_s": 2.0, "end_s": 4.0},
+                {"id": "A2.B1", "start_s": 4.0, "end_s": 6.0}]
+    bundle = SceneBundle("S", long_version, "manim-community", "compiled")
+    out = asyncio.run(ManimRuntime(settings)._preflight_and_repair(bundle, settings, timeline))
+    assert len(repairs) == 1 and "[PREFLIGHT:DURATION] the scene runs 8.50s" in repairs[0]
+    assert "BEAT_DRIFT" not in repairs[0]          # narration off: length only
+    assert out.code == _MARKED

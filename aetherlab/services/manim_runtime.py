@@ -2053,33 +2053,58 @@ class ManimRuntime:
 
         # Narration is placed at each beat's planned start, so a late or early
         # beat is a sync bug the viewer hears. Fix it before paying for a render.
-        worst, drift_lines = drift_summary(bundle.code, latest)
-        if drift_lines and getattr(s, "narration_enabled", False):
+        # The total length matters too: a long-video segment must fill its slot
+        # (live 2026-10-02: 15.40 s for 13.76 s, then 13.17 s for 14.24 s,
+        # each stopping the lesson), and the dry run measures it exactly.
+        planned_end = 0.0
+        if isinstance(timeline, list) and timeline and isinstance(timeline[-1], dict):
+            try:
+                planned_end = float(timeline[-1].get("end_s") or 0.0)
+            except (TypeError, ValueError):
+                planned_end = 0.0
+        length_tolerance = max(1.0, planned_end * 0.05)
+        narrated = bool(getattr(s, "narration_enabled", False))
+
+        def timing_score(code: str, checked) -> tuple[float, list[str]]:
+            worst, lines = drift_summary(code, checked)
+            score = worst if narrated else 0.0
+            if planned_end > 0:
+                off = checked.duration_s - planned_end
+                if abs(off) > length_tolerance:
+                    lines = lines + [
+                        f"[PREFLIGHT:DURATION] the scene runs {checked.duration_s:.2f}s but its "
+                        f"schedule ends at {planned_end:.2f}s ({off:+.2f}s)."
+                    ]
+                score = max(score, abs(off) if abs(off) > length_tolerance else 0.0)
+            return score, (lines if narrated else [line for line in lines if "DURATION" in line])
+
+        score, timing_lines = timing_score(bundle.code, latest)
+        if timing_lines:
             result, why = await try_repair(
-                "A dry run measured when each beat's first animation starts. The narration "
-                "for every beat starts exactly at the time in its # BEAT marker, so these "
-                "beats would be out of sync with the voice. Adjust run_time and wait() "
-                "values (do not move or edit the # BEAT markers) so each beat starts at its "
-                "marker time and the total length stays the same. Keep the visual design "
-                "and physics:\n" + "\n".join(drift_lines),
+                "A dry run measured this scene's timing. The narration for every beat starts "
+                "exactly at the time in its # BEAT marker, and the scene must end when its "
+                "schedule ends. Adjust run_time and wait() values (do not move or edit the "
+                "# BEAT markers) so each beat starts at its marker time and the total length "
+                "matches the schedule. Keep the visual design and physics:\n"
+                + "\n".join(timing_lines),
                 full_scene=False,
             )
             if result is None:
                 bundle.diagnostics.append(f"Preflight timing repair: {why}")
                 return bundle
             fixed, checked = result
-            new_worst = drift_summary(fixed, checked)[0] if checked.ran and checked.ok else worst
+            new_score = timing_score(fixed, checked)[0] if checked.ran and checked.ok else score
             if (
-                checked.ran and checked.ok and new_worst < worst
+                checked.ran and checked.ok and new_score < score
                 and len(checked.off_frame) <= len(latest.off_frame)
             ):
                 bundle.code = fixed
                 bundle.diagnostics.append(
-                    f"Preflight timing repair kept: largest beat drift {worst:.2f}s -> {new_worst:.2f}s."
+                    f"Preflight timing repair kept: worst timing error {score:.2f}s -> {new_score:.2f}s."
                 )
             else:
                 bundle.diagnostics.append(
-                    f"Preflight timing repair did not reduce beat drift ({worst:.2f}s); kept the original."
+                    f"Preflight timing repair did not reduce the timing error ({score:.2f}s); kept the original."
                 )
         return bundle
 
