@@ -6,6 +6,7 @@ import ast
 import logging
 import re
 import textwrap
+from pathlib import Path
 
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import AppSettings
@@ -638,6 +639,87 @@ def schedule_storyboard_timeline(storyboard: dict, duration_target_s: float) -> 
     return timed
 
 
+SPEECH_TAIL_S = 0.35     # breath after each line, inside its own beat
+SILENT_BEAT_MIN_S = 0.8  # a beat without a line still needs time to read
+
+
+def fit_timeline_to_speech(
+    board: dict, speech_s: list[float], duration_target_s: float
+) -> dict | None:
+    """Voice-first timing: rebuild beat windows from measured speech.
+
+    ``speech_s`` holds the synthesized length of each timeline beat's line, in
+    timeline order (0.0 for a beat without one). Every beat gets at least its
+    spoken length plus a breath; the remaining time goes to the beats the
+    director made longer, so the total stays exactly the requested duration.
+    Returns None when the lines need more time than the target allows; the
+    caller can then try a uniformly faster voice.
+    """
+    timeline = board.get("timeline")
+    if not isinstance(timeline, list) or not timeline or len(speech_s) != len(timeline):
+        return None
+    target = float(duration_target_s)
+    base = [max(0.0, float(beat.get("duration_s", 0.0) or 0.0)) for beat in timeline]
+    need = [
+        (seconds + SPEECH_TAIL_S) if seconds > 0 else SILENT_BEAT_MIN_S
+        for seconds in speech_s
+    ]
+    spare = target - sum(need)
+    if spare < 0:
+        return None
+    weights = [max(0.0, b - n) for b, n in zip(base, need)]
+    if sum(weights) <= 1e-9:
+        weights = base if sum(base) > 1e-9 else [1.0] * len(need)
+    weight_total = sum(weights)
+    windows = [n + spare * w / weight_total for n, w in zip(need, weights)]
+
+    fitted = dict(board)
+    new_timeline: list[dict] = []
+    cursor = 0.0
+    for index, (beat, window, seconds) in enumerate(zip(timeline, windows, speech_s)):
+        end = target if index == len(timeline) - 1 else cursor + window
+        duration = max(0.0, end - cursor)
+        enter_s = min(0.35, duration * 0.2)
+        exit_s = min(0.30, duration * 0.2)
+        item = dict(beat)
+        item.update({
+            "start_s": round(cursor, 3),
+            "end_s": round(end, 3),
+            "duration_s": round(duration, 3),
+            "enter_s": round(enter_s, 3),
+            "hold_s": round(max(0.0, duration - enter_s - exit_s), 3),
+            "exit_s": round(exit_s, 3),
+            "speech_s": round(seconds, 3),
+            "narration_target_s": round(seconds, 3),
+            "narration_fits": True,
+            "narration_overflow_s": 0.0,
+        })
+        new_timeline.append(item)
+        cursor = end
+    # Act windows follow their beats (beat ids are A<act>.B<n>).
+    acts = list(fitted.get("acts") or [])
+    for act_index, act in enumerate(acts):
+        if not isinstance(act, dict):
+            continue
+        members = [b for b in new_timeline if str(b.get("id", "")).startswith(f"A{act_index + 1}.")]
+        if members:
+            act = dict(act)
+            act["start_s"] = members[0]["start_s"]
+            act["end_s"] = members[-1]["end_s"]
+            act["duration_s"] = round(members[-1]["end_s"] - members[0]["start_s"], 3)
+            acts[act_index] = act
+    fitted["acts"] = acts
+    fitted["timeline"] = new_timeline
+    fitted["timeline_duration_s"] = round(target, 3)
+    fitted["timing_basis"] = "speech"
+    return fitted
+
+
+def is_speech_timed(board: dict | None) -> bool:
+    """True when the beat windows came from measured narration (keep them as is)."""
+    return isinstance(board, dict) and board.get("timing_basis") == "speech"
+
+
 class SceneGenerator:
     """Generate dynamic Manim scene code via LLM."""
 
@@ -758,6 +840,138 @@ class SceneGenerator:
             self._client = make_client(self.settings, purpose="scene")
         return self._client
 
+    async def fit_board_to_speech(self, board: dict, duration_target_s: float) -> dict:
+        """With narration on, time every beat from its measured spoken line.
+
+        Tries the configured voice rate first, then a uniformly faster voice
+        (+10, +20 points) when the lines need more room than the target allows.
+        One rate for the whole video sounds natural; per-line squeezing did not.
+        Any failure (no TTS, offline) keeps the estimated windows unchanged.
+        """
+        settings = self.settings
+        if not getattr(settings, "narration_enabled", False) or is_speech_timed(board):
+            return board
+        timeline = board.get("timeline")
+        if not isinstance(timeline, list) or not timeline:
+            return board
+        from aetherlab.services import voiceover
+
+        if not voiceover.narration_available():
+            return board
+        lines = [
+            " ".join(str(beat.get("narration_cue") or "").split())
+            if isinstance(beat, dict) else ""
+            for beat in timeline
+        ]
+        if not any(lines):
+            return board
+        voice = str(getattr(settings, "tts_voice", "") or voiceover.DEFAULT_VOICE)
+        base_rate = voiceover._parse_rate(getattr(settings, "tts_rate", "") or voiceover.DEFAULT_RATE)
+        cache_dir = Path(settings.data_dir) / "narration" / "speech_cache"
+
+        async def fit(candidate: dict, spoken: list[str]) -> tuple[dict | None, list[float] | None]:
+            first: list[float] | None = None
+            for extra in (0, 10, 20):
+                rate = voiceover._format_rate(base_rate + extra)
+                speech = await voiceover.measure_speech(spoken, cache_dir, voice, rate)
+                if speech is None:
+                    return None, None
+                first = first or speech
+                fitted = fit_timeline_to_speech(candidate, speech, duration_target_s)
+                if fitted is not None:
+                    fitted["speech"] = {
+                        "voice": voice, "rate": rate, "cache_dir": str(cache_dir),
+                        "spoken_s": round(sum(speech), 2),
+                    }
+                    log.info(
+                        "Voice-first timing: %d lines, %.1fs of speech in %.1fs at %s.",
+                        sum(1 for line in spoken if line), sum(speech), duration_target_s, rate,
+                    )
+                    return fitted, speech
+            return None, first
+
+        fitted, speech = await fit(board, lines)
+        if fitted is not None:
+            return fitted
+        if speech is None:
+            log.info("Voice-first timing unavailable (speech synthesis failed).")
+            return board
+        log.info(
+            "Narration runs %.1fs at the base rate; too long for %.1fs even at +20%%. "
+            "Asking for tighter lines.", sum(speech), duration_target_s,
+        )
+        shorter = await self._condense_lines(board, lines, speech, duration_target_s)
+        if shorter is not None:
+            short_lines = [
+                " ".join(str(beat.get("narration_cue") or "").split())
+                for beat in shorter["timeline"]
+            ]
+            fitted, _ = await fit(shorter, short_lines)
+            if fitted is not None:
+                return fitted
+        log.info(
+            "Voice-first timing declined: narration still needs more than %.1fs.",
+            duration_target_s,
+        )
+        return board
+
+    async def _condense_lines(
+        self, board: dict, lines: list[str], speech: list[float], duration_target_s: float
+    ) -> dict | None:
+        """One rewrite that fits each beat's line into a measured word budget."""
+        if not getattr(self.settings, "openai_api_key", None):
+            return None
+        spoken = [i for i, line in enumerate(lines) if line]
+        silent = len(lines) - len(spoken)
+        room = duration_target_s - SPEECH_TAIL_S * len(spoken) - SILENT_BEAT_MIN_S * silent
+        total = sum(speech)
+        if room <= 0 or total <= 0:
+            return None
+        scale = 0.9 * room / total            # 10% margin for a slightly slower read
+        timeline = board["timeline"]
+        budgets = {
+            str(timeline[i].get("id")): max(3, int(len(lines[i].split()) * scale))
+            for i in spoken
+        }
+        request = "\n".join(
+            f'{timeline[i].get("id")} (max {budgets[str(timeline[i].get("id"))]} words): {lines[i]}'
+            for i in spoken
+        )
+        system = (
+            "You tighten physics narration so it fits its animation. Rewrite each line "
+            "within its word limit, keeping its meaning, numbers and units, and the same "
+            "order and tone. Reply with one JSON object mapping each beat id to its new "
+            "line, nothing else."
+        )
+        try:
+            from aetherlab.services.model_json import load_model_json
+
+            response = await self._ensure_client().chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": request}],
+                temperature=request_temperature(self.settings, 0.3),
+                max_tokens=2048,
+                **codegen_request_kwargs(self.settings, minimax_thinking=False),
+            )
+            rewritten = load_model_json(response.choices[0].message.content or "")
+        except Exception as exc:  # noqa: BLE001 - tightening is best-effort
+            log.info("Narration tightening failed (%s).", exc)
+            return None
+        if not isinstance(rewritten, dict):
+            return None
+        shorter = dict(board)
+        new_timeline = []
+        for beat in timeline:
+            item = dict(beat)
+            line = " ".join(str(rewritten.get(str(beat.get("id")), "")).split())
+            budget = budgets.get(str(beat.get("id")))
+            if line and budget and len(line.split()) <= budget + 2:
+                item["narration_cue"] = item["subtitle_cue"] = line
+            new_timeline.append(item)
+        shorter["timeline"] = new_timeline
+        return shorter
+
     async def storyboard(
         self,
         request: ProblemRequest,
@@ -844,6 +1058,11 @@ class SceneGenerator:
             content = response.choices[0].message.content or ""
             board = load_model_json(content)
             if not isinstance(board, dict) or "acts" not in board:
+                finish = getattr(response.choices[0], "finish_reason", "")
+                log.info(
+                    "Storyboard reply had no acts (%d chars, finish_reason=%s): %r",
+                    len(content), finish, content[:160],
+                )
                 return None
             beat_count = sum(
                 len(act.get("beats", []))
@@ -857,6 +1076,7 @@ class SceneGenerator:
                 )
                 return None
             board = schedule_storyboard_timeline(board, duration_target_s)
+            board = await self.fit_board_to_speech(board, duration_target_s)
             self._last_storyboard = board
             return board
         except Exception as exc:  # noqa: BLE001 — storyboard is best-effort
@@ -910,7 +1130,10 @@ class SceneGenerator:
 
         board = locked_storyboard if locked_storyboard is not None else await self.storyboard(request, solver, rag)
         if board is not None:
-            board = schedule_storyboard_timeline(board, duration_target_s)
+            if not is_speech_timed(board):
+                # Speech-timed windows are final: re-weighting them by word
+                # count would undo the measured fit.
+                board = schedule_storyboard_timeline(board, duration_target_s)
             self._last_storyboard = board
             self._last_scene_spec = None
             try:

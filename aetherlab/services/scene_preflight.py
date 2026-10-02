@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import subprocess
 import sys
@@ -43,6 +44,8 @@ class PreflightReport:
     off_frame: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     note: str = ""
+    # [source line, start s, end s] for every top-level play/wait.
+    events: list[list[float]] = field(default_factory=list)
 
     @property
     def crashed(self) -> bool:
@@ -136,4 +139,56 @@ def preflight_scene(code: str, class_name: str, timeout: int = PREFLIGHT_TIMEOUT
     report.error = str(data.get("error", ""))
     report.duration_s = float(data.get("duration_s", 0.0) or 0.0)
     report.off_frame = [item for item in data.get("off_frame", []) if isinstance(item, dict)]
+    report.events = [
+        [int(e[0]), float(e[1]), float(e[2])] for e in data.get("events", [])
+        if isinstance(e, list) and len(e) == 3
+    ]
     return report
+
+
+_BEAT_MARKER_LINE = re.compile(
+    r"^\s*#\s*BEAT\s+([AS]\d+\.B\d+)\s*\|\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*s\s*$"
+)
+
+
+@dataclass
+class BeatTiming:
+    beat_id: str
+    planned_s: float
+    measured_s: float
+
+    @property
+    def drift_s(self) -> float:
+        return self.measured_s - self.planned_s
+
+
+def beat_timings(code: str, report: PreflightReport) -> list[BeatTiming]:
+    """When each marked beat really starts, measured by the dry run.
+
+    A beat starts with the first top-level animation written after its
+    ``# BEAT`` marker (and before the next one). Beats with no animation of
+    their own are skipped. Narration is placed at the planned start, so the
+    drift is exactly how far picture and voice come apart.
+    """
+    markers = []
+    for number, text in enumerate(code.splitlines(), start=1):
+        match = _BEAT_MARKER_LINE.match(text)
+        if match:
+            markers.append((number, match.group(1), float(match.group(2))))
+    timings: list[BeatTiming] = []
+    for index, (line, beat_id, planned) in enumerate(markers):
+        next_line = markers[index + 1][0] if index + 1 < len(markers) else 10**9
+        starts = [start for event_line, start, _end in report.events
+                  if line < event_line < next_line]
+        if starts:
+            timings.append(BeatTiming(beat_id, planned, min(starts)))
+    return timings
+
+
+def beat_drift_lines(timings: list[BeatTiming], tolerance_s: float, limit: int = 10) -> list[str]:
+    late = [t for t in timings if abs(t.drift_s) > tolerance_s]
+    return [
+        f"[PREFLIGHT:BEAT_DRIFT] {t.beat_id} is planned at {t.planned_s:.2f}s but its first "
+        f"animation starts at {t.measured_s:.2f}s ({t.drift_s:+.2f}s)."
+        for t in late[:limit]
+    ]
