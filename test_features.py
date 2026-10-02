@@ -1441,9 +1441,16 @@ def t_f107():
         async def create(self, **kw):
             calls.append(kw)
             if len(calls) == 1:
-                return _Resp('{"concept":"c","staging":"s","palette":{},'
-                             '"acts":[{"name":"ESTABLISH","duration_s":5,"beats":["b"]}],'
-                             '"hero_frame":"h","idle_loop":"i","narration":["n"]}')
+                beats = [{
+                    "detail": f"beat {index + 1}", "duration_s": 5,
+                    "narration_cue": "Show the next physical state.",
+                    "anchor_cell": "C3",
+                } for index in range(9)]
+                return _Resp(json.dumps({
+                    "concept": "c", "staging": "s", "palette": {},
+                    "acts": [{"name": "ESTABLISH", "duration_s": 45, "beats": beats}],
+                    "hero_frame": "h", "idle_loop": "i", "narration": ["n"],
+                }))
             return _Resp("from manim import *\nclass AetherLabScene(Scene):\n"
                          "    def construct(self):\n        self.wait(1)\n")
     class _Chat:
@@ -1479,9 +1486,9 @@ def t_f107():
     assert "Canonical scene specification (aetherlab.scene_spec.v1)" in codegen_user
     assert '"concept": "c"' in codegen_user and '"name": "ESTABLISH"' in codegen_user
     assert "Mandatory beat-boundary comments" in codegen_user
-    assert "# BEAT A1.B1 | 0.00-45.00 s" in codegen_user
+    assert "# BEAT A1.B1 | 0.00-5.00 s" in codegen_user
     assert sg._last_storyboard and "acts" in sg._last_storyboard
-    assert sg._last_storyboard["timeline"][0]["end_s"] == 45.0
+    assert sg._last_storyboard["timeline"][0]["end_s"] == 5.0
     assert "TIMED DETAIL + CLEAN FRAME CONTRACT" in calls[1]["messages"][0]["content"]
     assert "A1.B1" in codegen_user
     assert "class AetherLabScene" in code
@@ -6317,13 +6324,14 @@ def t_f210():
     compile(code, "<scene>", "exec")
     assert "class AetherLabScene(Scene)" in code and "from manim import *" in code
     assert "Kepler orbit" in code and "equal areas in equal times" in code and "TracedPath" in code
-    # "hydrogen orbital" must NOT become a planetary orbit (the "orbit" substring
-    # trap) — it falls through to the 3-D field surface instead.
+    # "hydrogen orbital" must not become a planetary orbit or an inaccurate
+    # signed-heightfield probability density; no verified 3-D orbital component
+    # is available yet.
     from aetherlab.core.models import OutputPlan
     ho = compose_component_code("AetherLabScene",
                             _solver(keywords=["orbital", "hydrogen", "3d"]),
                             OutputPlan(needs_3d=True))
-    assert ho and "Kepler orbit" not in ho
+    assert ho is None
     # Regression: a plain oscillator stays a trajectory.
     osc = compose_component_code("AetherLabScene", _solver(numeric_spec=fallback_numeric_spec()))
     assert osc and "Kepler orbit" not in osc and "point_at_time" in osc
@@ -6332,8 +6340,8 @@ def t_f210():
 
 def t_f211():
     # surface3d renders the problem's ACTUAL field, not one generic bump: a
-    # point-charge 1/r peak, a dipole, a saddle, a p-orbital, or the Gaussian
-    # default — each a real ThreeDScene that compiles.
+    # point-charge 1/r peak, a dipole, a saddle, or the Gaussian default — each
+    # a real ThreeDScene that compiles. A quantum orbital is explicitly declined.
     from aetherlab.services.scene_components import surface3d
     from aetherlab.core.models import SolverResult
     cases = {
@@ -6348,11 +6356,14 @@ def t_f211():
         sv = SolverResult(summary="3D field", derivation_steps=[], keywords=kws,
                           variables={}, model_name="t")
         code = surface3d.build("AetherLabScene", sv)
+        if marker == "p-orbital":
+            assert code is None
+            continue
         assert code and "ThreeDScene" in code and marker in code, (marker, kws)
         compile(code, "<scene>", "exec")
         seen.add(marker)
-    assert len(seen) == 5
-    return "surface3d picks the real field (1/r, dipole, saddle, p-orbital, Gaussian) — all render as ThreeDScene"
+    assert len(seen) == 4
+    return "surface3d builds four supported scalar fields and declines a fake orbital density"
 
 
 def t_f212():

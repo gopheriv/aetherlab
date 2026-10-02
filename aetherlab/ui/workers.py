@@ -153,9 +153,32 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 and _scene_cache_usable(cached.scene, self.settings)
                 and cached.scene.engine == current_engine
                 and cached.scene.status in {"compiled", "rendered"}
+                and (
+                    float(self.request.duration_target_s) <= 45.0
+                    or cached.scene.class_name == "AetherLabSegmentedScene"
+                )
             ):
                 self.status.emit("Loaded generated Manim scene from SQLite cache.")
                 return cached.scene
+            if float(self.request.duration_target_s) > 45.0:
+                from aetherlab.services.segmented_pipeline import render_segmented_scene
+
+                self.status.emit(
+                    f"Worker C: planning and rendering a {self.request.duration_target_s:.0f}s "
+                    "explanation as resumable segments."
+                )
+                scene = await render_segmented_scene(
+                    self.request,
+                    solver,
+                    rag,
+                    self.settings,
+                    runtime=manim,
+                    quality=self.render_quality,
+                    progress=lambda msg: self.status.emit(str(msg)),
+                    cancel_check=lambda: self._cancelled,
+                )
+                cache.store_scene(key, scene)
+                return scene
             self.status.emit("Worker C: composing Manim scene (curated components / LLM).")
             if manim.scene_tournament_enabled(self.settings):
                 self.status.emit("Worker C: running scene candidate tournament.")
@@ -204,17 +227,40 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         _refresh_spec(scene, self.request, solver, rag)
         self._check_cancelled()
         self.scene_ready.emit(scene)
-        self.progress.emit(70, "Scene compiled")
+        if scene.class_name == "AetherLabSegmentedScene" and scene.status == "rendered":
+            self.progress.emit(92, "All lesson segments validated and assembled")
+        elif scene.status == "incomplete":
+            self.progress.emit(70, "Long explanation is incomplete; no video was published")
+        else:
+            self.progress.emit(70, "Scene compiled")
 
         # ── Worker D: render Manim scene to video ──
         quality_label = {"l": "480p", "m": "720p", "h": "1080p"}.get(self.render_quality, "480p")
-        self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
-        self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
+        segmented_ready = (
+            scene.class_name == "AetherLabSegmentedScene" and scene.status == "rendered"
+        )
+        if not segmented_ready:
+            self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
+            self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
         from aetherlab.services.pipeline import _video_exists
 
         needs_render = scene.status == "compiled" or (
             scene.status == "rendered" and not _video_exists(scene.video_path)
         )
+        if needs_render and scene.class_name == "AetherLabSegmentedScene":
+            # Never re-render the joined segment code (only the last segment
+            # would come out); resume and re-assemble from the manifest.
+            from aetherlab.services.segmented_pipeline import render_segmented_scene
+
+            self.status.emit("Lesson video missing; resuming from the segment manifest.")
+            scene = await render_segmented_scene(
+                self.request, solver, rag, self.settings, runtime=manim,
+                quality=self.render_quality,
+                progress=lambda msg: self.status.emit(str(msg)),
+                cancel_check=lambda: self._cancelled,
+            )
+            cache.store_scene(key, scene)
+            needs_render = False
         if scene.status == "rendered" and needs_render:
             scene.diagnostics.append("Cached rendered video missing; re-rendering.")
             scene.status = "compiled"
@@ -232,7 +278,14 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 self.status.emit("Visual critic requested a revision; re-rendered.")
             cache.store_scene(key, rendered_scene)
         else:
-            self.status.emit("Reusing cached rendered video.")
+            if scene.status == "incomplete":
+                self.status.emit(
+                    scene.diagnostics[-1] if scene.diagnostics else "Long explanation incomplete."
+                )
+            elif scene.class_name == "AetherLabSegmentedScene":
+                self.status.emit("Segmented lesson assembled and validated.")
+            else:
+                self.status.emit("Reusing cached rendered video.")
             rendered_scene = scene
         self._check_cancelled()
         _refresh_spec(rendered_scene, self.request, solver, rag)

@@ -28,10 +28,6 @@ _SURFACES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
      "0.55 * (u * u - v * v)",
      "saddle: unstable equilibrium",
      ("saddle", "hyperbolic", "unstable equilibrium", "monkey saddle")),
-    ("orbital",
-     "1.7 * u * np.exp(-r2 / 2.2)",
-     "p-orbital: two lobes",
-     ("orbital", "hydrogen", "wavefunction", "probability density", "p-orbital", "atomic")),
     ("gaussian",
      "1.6 * np.exp(-r2 / 2.5)",
      "Gaussian field",
@@ -44,6 +40,12 @@ def build(class_name: str, solver: Any) -> str | None:
         " ".join(getattr(solver, "keywords", []) or []),
         getattr(solver, "summary", "") or "",
     ]).lower()
+    if any(term in text for term in (
+        "orbital", "hydrogen", "wavefunction", "wave function",
+        "probability density", "p-orbital", "atomic",
+    )):
+        # A signed heightfield is not a 3D quantum probability-density isosurface.
+        return None
     chosen = _SURFACES[-1]
     for surface in _SURFACES[:-1]:
         if any(stem in text for stem in surface[3]):

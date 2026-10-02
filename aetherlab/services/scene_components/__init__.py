@@ -85,8 +85,8 @@ _COUPLED_PENDULUM_STEMS = (
 # Geometric optics — thin lens / refraction / image formation. "mirror" is
 # excluded here so a curved-mirror prompt reaches the mirror component instead.
 _LENS_STEMS = (
-    "lens", "refraction", "refract", "focal length", "thin lens", "thin-lens",
-    "converging lens", "convex lens", "image formation", "ray diagram", "snell",
+    "lens", "focal length", "thin lens", "thin-lens", "converging lens",
+    "convex lens", "image formation", "ray diagram",
 )
 # Curved-mirror optics (reflective image formation). No bare "mirror": a
 # summary saying "mirror image" or "mirror symmetry" is not an optics problem.
@@ -108,6 +108,24 @@ _COUPLED_STEMS = (
 _ATOMIC_STEMS = (
     "orbital", "atomic", "hydrogen", "electron cloud", "wavefunction", "quantum",
 )
+# Explicit N-body prompts must never fall through to the visually similar but
+# physically different two-body Kepler component.
+_THREE_BODY_STEMS = ("three body", "three-body", "3 body", "3-body")
+_HARMONIC_QUANTUM_STEMS = (
+    "quantum harmonic oscillator", "harmonic quantum oscillator",
+    "coherent state in a harmonic", "harmonic coherent state",
+)
+_KINETIC_GAS_STEMS = ("kinetic theory", "gas particles", "molecular motion")
+_UNSUPPORTED_THERMO_STEMS = (
+    "heat engine", "carnot", "entropy", "thermodynamic cycle", "p-v diagram",
+    "pv diagram", "heat and work", "internal energy change", "first law of thermodynamics",
+)
+_UNSUPPORTED_OPTICS_STEMS = (
+    "diverging lens", "diverging-lens", "concave lens", "virtual image",
+    "convex mirror",
+    "total internal reflection", "critical angle", "diffraction grating",
+    "single slit", "single-slit", "magnetic field", "charged particle",
+)
 # Standing wave / normal mode on a string.
 _STANDING_WAVE_STEMS = (
     "standing wave", "standing-wave", "normal mode", "vibrating string",
@@ -118,6 +136,7 @@ _STANDING_WAVE_STEMS = (
 
 def compose_scene_code(
     class_name: str, solver: Any, plan: Any = None, duration_target_s: float = 30.0,
+    *, problem_prompt: str = "",
 ) -> str | None:
     """Compose a curated scene (or its creative scenario), then add explanation cards.
 
@@ -129,12 +148,12 @@ def compose_scene_code(
     try:
         from aetherlab.services.scene_components.problems import compose_problem
 
-        solved = compose_problem(class_name, solver)
+        solved = compose_problem(class_name, solver, prompt_context=problem_prompt)
     except Exception:  # noqa: BLE001 — problem videos are additive, never fatal
         solved = None
     if solved is not None:
         return solved[1]
-    composed = _compose_component(class_name, solver, plan)
+    composed = _compose_component(class_name, solver, plan, problem_prompt=problem_prompt)
     if composed is None:
         return None
     name, code = composed
@@ -169,7 +188,13 @@ def compose_component_code(class_name: str, solver: Any, plan: Any = None) -> st
     return composed[1] if composed else None
 
 
-def _compose_component(class_name: str, solver: Any, plan: Any = None) -> tuple[str, str] | None:
+def _compose_component(
+    class_name: str,
+    solver: Any,
+    plan: Any = None,
+    *,
+    problem_prompt: str = "",
+) -> tuple[str, str] | None:
     """Return (component name, Manim scene source) from the curated components.
 
     Priority (most specific physical staging first):
@@ -192,6 +217,46 @@ def _compose_component(class_name: str, solver: Any, plan: Any = None) -> tuple[
     Returns None when no curated component fits — the caller then falls back to
     LLM generation or the static template.
     """
+    topic_text = " ".join([
+        problem_prompt,
+        getattr(solver, "summary", "") or "",
+        " ".join(getattr(solver, "keywords", []) or []),
+    ]).lower().replace("-", " ")
+    def has(*terms: str) -> bool:
+        return any(term.replace("-", " ") in topic_text for term in terms)
+    if any(stem.replace("-", " ") in topic_text for stem in _THREE_BODY_STEMS):
+        # A verified specific route owns this topic. If it declines the supplied
+        # data or numerical convergence, do not silently show a two-body orbit.
+        return None
+    if (
+        has(*_QUANTUM_STEMS)
+        and not has(*_SLIT_EXPERIMENT_STEMS)
+        and not has(*_HARMONIC_QUANTUM_STEMS)
+    ):
+        # The existing Gaussian scene is only a coherent state in a harmonic
+        # well. It is not a barrier-scattering, spin, atomic-orbital, or generic
+        # Schrödinger solution.
+        return None
+    if has("hydrogen", "atomic orbital", "p orbital", "s orbital", "electron cloud"):
+        return None
+    if has("relativity", "relativistic", "lorentz transform", "spacetime") and not has("muon"):
+        return None
+    if has(*_UNSUPPORTED_THERMO_STEMS):
+        return None
+    if has(*_THERMO_STEMS) and not has(*_KINETIC_GAS_STEMS):
+        return None
+    if has("magnetic field", "charged particle", "magnet", "lorentz force"):
+        return None
+    if has(*_UNSUPPORTED_OPTICS_STEMS):
+        return None
+    if has("electric field", "electrostatic", "dipole"):
+        charge_values = getattr(solver, "variables", {}) or {}
+        custom_charge = any(
+            str(key).lower().replace("_", "") in {"q1", "q2", "charge1", "charge2"}
+            for key in charge_values
+        )
+        if not has("dipole") or custom_charge:
+            return None
     # 1. The chaotic double pendulum — must precede the single pendulum, whose
     #    domain detector also matches the word "pendulum".
     if _mentions(solver, _DOUBLE_PENDULUM_STEMS):
@@ -237,7 +302,7 @@ def _compose_component(class_name: str, solver: Any, plan: Any = None) -> tuple[
             return "quantum", code
 
     # 6. Interference / diffraction: Young's two-source experiment.
-    if _mentions(solver, _INTERFERENCE_STEMS):
+    if _mentions(solver, _SLIT_EXPERIMENT_STEMS):
         code = double_slit.build(class_name, solver)
         if code is not None:
             return "double_slit", code

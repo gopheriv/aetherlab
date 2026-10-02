@@ -203,6 +203,8 @@ class ManimRuntime:
         plan: object | None = None,
         aspect: str = "full",
         minimax_thinking: bool | None = None,
+        locked_storyboard: dict | None = None,
+        force_ai: bool = False,
     ) -> SceneBundle:
         """Generate a dynamic Manim scene, preferring curated components.
 
@@ -225,8 +227,9 @@ class ManimRuntime:
         except Exception:  # noqa: BLE001 — critique context must never block generation
             expected_physics = []
 
-        composed = self._compose_curated(
-            class_name, solver, plan, diagnostics, float(request.duration_target_s)
+        composed = None if force_ai else self._compose_curated(
+            class_name, solver, plan, diagnostics, float(request.duration_target_s),
+            problem_prompt=request.prompt,
         )
         if composed is not None:
             composed.storyboard = {"physics_expectations": expected_physics}
@@ -411,7 +414,13 @@ class ManimRuntime:
                     )
 
             for attempt in range(max_retries + 1):
-                code = await generator.generate(request, solver, rag, class_name)
+                if locked_storyboard is None:
+                    code = await generator.generate(request, solver, rag, class_name)
+                else:
+                    code = await generator.generate(
+                        request, solver, rag, class_name,
+                        locked_storyboard=locked_storyboard,
+                    )
                 # A fallback scene compiles and renders perfectly, so without an
                 # explicit signal it is indistinguishable from a real AI answer.
                 # Surface it loudly — generate() already exhausted its own
@@ -833,13 +842,16 @@ class ManimRuntime:
 
     def _compose_curated(
         self, class_name: str, solver: SolverResult, plan: object | None, diagnostics: list[str],
-        duration_target_s: float = 30.0,
+        duration_target_s: float = 30.0, *, problem_prompt: str = "",
     ) -> SceneBundle | None:
         """Build a scene from the curated component library, if one fits."""
         try:
             from aetherlab.services.scene_components import compose_scene_code
 
-            code = compose_scene_code(class_name, solver, plan, duration_target_s)
+            code = compose_scene_code(
+                class_name, solver, plan, duration_target_s,
+                problem_prompt=problem_prompt,
+            )
         except Exception as exc:  # noqa: BLE001 — composition must never crash
             diagnostics.append(f"Curated composition unavailable: {exc}")
             return None
@@ -1277,7 +1289,8 @@ class ManimRuntime:
         engine, diagnostics = self.detect_engine()
         class_name = "AetherLabScene"
         composed = self._compose_curated(
-            class_name, solver, plan, diagnostics, float(request.duration_target_s)
+            class_name, solver, plan, diagnostics, float(request.duration_target_s),
+            problem_prompt=request.prompt,
         )
         if composed is not None:
             return composed
@@ -1677,6 +1690,20 @@ class ManimRuntime:
                     if isinstance(scene_bundle.storyboard, dict) else []
                 )
             ]
+            timeline = (
+                scene_bundle.storyboard.get("timeline", [])
+                if isinstance(scene_bundle.storyboard, dict) else []
+            )
+            beat_centers = [
+                (float(event["start_s"]) + float(event["end_s"])) / 2.0
+                for event in timeline if isinstance(event, dict)
+                and "start_s" in event and "end_s" in event
+            ]
+            if len(beat_centers) > frame_count:
+                beat_centers = [
+                    beat_centers[round(i * (len(beat_centers) - 1) / (frame_count - 1))]
+                    for i in range(frame_count)
+                ] if frame_count > 1 else [beat_centers[len(beat_centers) // 2]]
             # Best critiqued cut so far. A revision is kept only if the critic
             # scores it higher; otherwise the loop stops and ships the better
             # cut. (Live 2026-09-30: two rounds cost ~6 min and scored 4.0 ->
@@ -1689,6 +1716,7 @@ class ManimRuntime:
                     s,
                     frame_count=frame_count,
                     expected_physics=expected_physics,
+                    event_times_s=beat_centers or None,
                 )
                 scene_bundle.quality_score = float(crit.score or 0.0)
                 scene_bundle.critique_verdict = str(crit.verdict or "")

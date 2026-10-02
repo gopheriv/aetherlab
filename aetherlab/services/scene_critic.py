@@ -130,8 +130,12 @@ def _coerce_breakdown(raw: object, score: float) -> tuple[dict[str, float], str]
     return {a: round(per_axis, 3) for a in CRITIC_AXES}, "vision-approx"
 
 
-def extract_frames(video_path: str | Path, count: int = 6) -> list[Path]:
-    """Sample ``count`` frames uniformly across the video.
+def extract_frames(
+    video_path: str | Path,
+    count: int = 6,
+    sample_times_s: list[float] | None = None,
+) -> list[Path]:
+    """Sample frames uniformly or at declared beat/event times.
 
     Prefers PyAV (bundled with Manim ≥0.19 — always present when renders work,
     no subprocess); falls back to the ffmpeg CLI. Returns [] when neither is
@@ -147,13 +151,32 @@ def extract_frames(video_path: str | Path, count: int = 6) -> list[Path]:
             old.unlink(missing_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    frames = _extract_with_pyav(video, out_dir, count)
+    duration = _probe_duration(video)
+    times = _normalize_sample_times(duration, count, sample_times_s)
+    frames = _extract_with_pyav(video, out_dir, count, times)
     if frames:
         return frames
-    return _extract_with_ffmpeg(video, out_dir, count)
+    return _extract_with_ffmpeg(video, out_dir, count, times)
 
 
-def _extract_with_pyav(video: Path, out_dir: Path, count: int) -> list[Path]:
+def _normalize_sample_times(
+    duration: float, count: int, requested: list[float] | None,
+) -> list[float]:
+    if count <= 0:
+        return []
+    if requested:
+        values = sorted({round(max(0.0, min(duration - 0.05, float(value))), 3)
+                         for value in requested})
+        if len(values) > count:
+            values = [values[round(i * (len(values) - 1) / (count - 1))]
+                      for i in range(count)] if count > 1 else [values[len(values) // 2]]
+        return values
+    return _sample_times(duration, count)
+
+
+def _extract_with_pyav(
+    video: Path, out_dir: Path, count: int, sample_times_s: list[float] | None = None,
+) -> list[Path]:
     """Decode uniformly-spaced frames with PyAV (Manim's own video backend)."""
     try:
         import av
@@ -169,7 +192,12 @@ def _extract_with_pyav(video: Path, out_dir: Path, count: int) -> list[Path]:
                 container.seek(0)
             if total <= 0:
                 return []
-            wanted = _sample_indices(total, count)
+            if sample_times_s and stream.average_rate:
+                fps = float(stream.average_rate)
+                wanted = {max(0, min(total - 1, round(time_s * fps)))
+                          for time_s in sample_times_s}
+            else:
+                wanted = set(_sample_indices(total, count))
             for index, frame in enumerate(container.decode(stream)):
                 if index in wanted:
                     image = frame.to_image()
@@ -208,13 +236,16 @@ def _sample_times(duration: float, count: int) -> list[float]:
     return [i * end / (count - 1) for i in range(count)]
 
 
-def _extract_with_ffmpeg(video: Path, out_dir: Path, count: int) -> list[Path]:
+def _extract_with_ffmpeg(
+    video: Path, out_dir: Path, count: int, sample_times_s: list[float] | None = None,
+) -> list[Path]:
     """CLI fallback: exact timestamps, including the end frame."""
     try:
         from aetherlab.core.proc import subprocess_kwargs
 
         duration = _probe_duration(video)
-        for i, t in enumerate(_sample_times(duration, count)):
+        times = sample_times_s or _sample_times(duration, count)
+        for i, t in enumerate(times[:count]):
             subprocess.run(
                 [
                     "ffmpeg", "-y", "-i", str(video), "-ss", f"{t:.3f}",
@@ -251,6 +282,7 @@ async def critique_video(
     settings: "AppSettings",
     frame_count: int = 6,
     expected_physics: list[str] | None = None,
+    event_times_s: list[float] | None = None,
 ) -> Critique:
     """Sample frames and ask the vision model for a verdict.
 
@@ -260,11 +292,15 @@ async def critique_video(
     """
     if not settings.vision_model or not settings.openai_api_key:
         return Critique(verdict="skipped")
-    frames = extract_frames(video_path, frame_count)
+    duration = _probe_duration(Path(video_path))
+    sample_times = _normalize_sample_times(duration, frame_count, event_times_s)
+    frames = (
+        extract_frames(video_path, frame_count, sample_times)
+        if event_times_s else extract_frames(video_path, frame_count)
+    )
     if not frames:
         return Critique(verdict="skipped")
-    duration = _probe_duration(Path(video_path))
-    sample_times = _sample_times(duration, len(frames))
+    sample_times = sample_times[:len(frames)]
 
     content: list[dict] = [
         {
@@ -279,7 +315,8 @@ async def critique_video(
                 + ("\n".join(f"- {fact}" for fact in expected_physics[:8])
                    if expected_physics else "No numerical expectations were available.")
                 + "\n\n"
-                f"## {len(frames)} frames sampled uniformly, in order:\n"
+                f"## {len(frames)} frames sampled "
+                f"{'at storyboard beat anchors' if event_times_s else 'uniformly'}, in order:\n"
                 + "\n".join(
                     f"Frame {index + 1}: approximately {time_s:.2f} seconds."
                     for index, time_s in enumerate(sample_times)

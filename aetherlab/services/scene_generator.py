@@ -668,6 +668,8 @@ class SceneGenerator:
         solver: SolverResult,
         rag: RagResult,
         class_name: str = "AetherLabScene",
+        *,
+        locked_storyboard: dict | None = None,
     ) -> str:
         """Generate Manim scene code using the LLM.
 
@@ -705,7 +707,13 @@ class SceneGenerator:
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
-                code = await self._generate_remote(request, solver, rag, class_name)
+                if locked_storyboard is None:
+                    code = await self._generate_remote(request, solver, rag, class_name)
+                else:
+                    code = await self._generate_remote(
+                        request, solver, rag, class_name,
+                        locked_storyboard=locked_storyboard,
+                    )
                 self._last_fallback_reason = ""
                 return code
             except APITimeoutError as exc:
@@ -771,13 +779,31 @@ class SceneGenerator:
             f"  {name} = {value}" for name, value in sorted(solver.variables.items())
         ) or "  (no variables)"
         duration_target_s = float(request.duration_target_s)
+        beat_min = max(6, int(duration_target_s / 5.0 + 0.999))
+        beat_max = max(beat_min, int(duration_target_s / 3.75 + 0.999))
+        storyboard_system = STORYBOARD_SYSTEM_PROMPT
+        if beat_max > 8:
+            storyboard_system = storyboard_system.replace(
+                "Give every act 1-2 implementable beats; each beat is",
+                "Give every act enough implementable beats to meet the requested "
+                "global beat count; each beat is",
+            ).replace(
+                "For a 30-second scene,\nuse 6-8 beats total (never more than 8) so each timed detail has room to read\n"
+                "and the Cloud render stays within budget.",
+                "For a long-form scene, follow the duration-scaled global beat count "
+                "in the user brief. Those beats will be rendered in separate bounded "
+                "scenes; do not compress the explanation to the 30-second beat count.",
+            )
         user = (
             f"## Problem\n{request.prompt}\n\n"
             f"## Analytical summary\n{solver.summary}\n\n"
             f"## Variables (become live on-screen numbers)\n{vars_text}\n\n"
             f"## Total scene duration target\n{duration_target_s:g} seconds; "
             "make all act durations sum to this target and give every visual beat "
-            "its own duration, narration cue, and 6x6 anchor cell.\n\n"
+            f"its own duration, narration cue, and 6x6 anchor cell. Include {beat_min}–"
+            f"{beat_max} meaningful visual beats (not cosmetic holds) so the full "
+            "explanation has enough detail for this duration. Preserve all derivation "
+            "steps, assumptions, and units from the analytical summary.\n\n"
             "Design the storyboard JSON now."
         )
         if variation_seed:
@@ -794,7 +820,7 @@ class SceneGenerator:
             response = await client.chat.completions.create(
                 model=self.settings.llm_model,
                 messages=[
-                    system_prompt_message(self.settings, STORYBOARD_SYSTEM_PROMPT),
+                    system_prompt_message(self.settings, storyboard_system),
                     {"role": "user", "content": user},
                 ],
                 # Ideation runs hot; the codegen pass runs cold. This split is
@@ -802,10 +828,14 @@ class SceneGenerator:
                 temperature=request_temperature(self.settings, temperature),
                 # A reasoning model whose thinking cannot be switched off spends
                 # part of this budget thinking; 4096 cut the JSON mid-string.
-                max_tokens=(
-                    16384
-                    if settings_pathway(self.settings).name in {"reasoning", "kimi-reasoning"}
-                    else 4096
+                max_tokens=min(
+                    32768,
+                    max(
+                        16384 if settings_pathway(self.settings).name in {
+                            "reasoning", "kimi-reasoning",
+                        } else 4096,
+                        2048 + beat_max * 256,
+                    ),
                 ),
                 **codegen_request_kwargs(
                     self.settings, minimax_thinking=self._minimax_thinking
@@ -814,6 +844,17 @@ class SceneGenerator:
             content = response.choices[0].message.content or ""
             board = load_model_json(content)
             if not isinstance(board, dict) or "acts" not in board:
+                return None
+            beat_count = sum(
+                len(act.get("beats", []))
+                for act in board.get("acts", []) if isinstance(act, dict)
+                and isinstance(act.get("beats", []), list)
+            )
+            if duration_target_s > 45.0 and beat_count < beat_min:
+                log.info(
+                    "Storyboard returned %d beats for a %.1fs explanation; need at least %d.",
+                    beat_count, duration_target_s, beat_min,
+                )
                 return None
             board = schedule_storyboard_timeline(board, duration_target_s)
             self._last_storyboard = board
@@ -833,7 +874,7 @@ class SceneGenerator:
         self._ensure_client()
 
         steps_text = "\n".join(
-            f"{i}. {step}" for i, step in enumerate(solver.derivation_steps[:6], 1)
+            f"{i}. {step}" for i, step in enumerate(solver.derivation_steps, 1)
         ) or "No derivation steps available."
 
         vars_text = "\n".join(
@@ -890,6 +931,23 @@ class SceneGenerator:
                 "citations, timed beats, narration, and visual bindings. Implement its "
                 "timeline without changing those facts or their order."
             )
+            try:
+                is_segmented = int(board.get("segment_count", 1) or 1) > 1
+            except (TypeError, ValueError):
+                is_segmented = False
+            if is_segmented:
+                system += (
+                    "\n\n## Bounded segment contract\n"
+                    "This scene is one independently rendered part of a longer "
+                    "explanation. Implement only the supplied local beat schedule; "
+                    "do not replay earlier beats, add a new opening scenario, or "
+                    "replace the segment with a generic recap. Keep physical values, "
+                    "equation notation, palette, and apparatus identity consistent "
+                    "with the shared creative direction. Reconstruct persistent-looking "
+                    "objects from the supplied entry state because Python mobjects do "
+                    "not persist between segment processes. End at the supplied exit "
+                    "state and preserve the full assigned segment duration."
+                )
             system_additions = preventive_pitfalls_block(_aesthetic)
             spec_timeline = board.get("timeline", [])
             spec_context = ""

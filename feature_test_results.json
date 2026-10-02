@@ -821,7 +821,7 @@
   },
   "F206": {
     "status": "PASS",
-    "note": "kinetic-theory component composed + deterministic (5191 chars); oscillator unaffected"
+    "note": "kinetic-theory component composed + deterministic (5281 chars); oscillator unaffected"
   },
   "F207": {
     "status": "PASS",
@@ -841,7 +841,7 @@
   },
   "F211": {
     "status": "PASS",
-    "note": "surface3d picks the real field (1/r, dipole, saddle, p-orbital, Gaussian) \u2014 all render as ThreeDScene"
+    "note": "surface3d builds four supported scalar fields and declines a fake orbital density"
   },
   "F212": {
     "status": "PASS",

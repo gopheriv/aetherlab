@@ -156,13 +156,30 @@ def test_bug70_generic_phrases_do_not_route_to_unrelated_components():
     right = {
         "coupled_oscillators": _solver("Two coupled oscillators exchange energy.",
                                        ["coupled oscillators"], {}),
-        "quantum": _solver("Quantum tunneling through a barrier.", ["tunneling"], {}),
         "mirror": _solver("An object 30 cm from a mirror of focal length 10 cm.",
                           ["optics", "mirror"], {}),
     }
     for expected, solver in right.items():
         routed = _compose_component("S", solver)
         assert routed is not None and routed[0] == expected
+    # The Gaussian harmonic-well visualization cannot explain tunneling through
+    # a barrier; that prompt must reach the AI/capability path instead.
+    tunneling = _compose_component(
+        "S", _solver("Quantum tunneling through a barrier.", ["tunneling"], {})
+    )
+    assert tunneling is None
+
+
+def test_bug70_complex_science_does_not_get_wrong_curated_apparatus():
+    cases = [
+        _solver("Carnot heat engine efficiency and entropy change.", ["thermodynamics", "entropy"], {}),
+        _solver("Total internal reflection at a glass interface.", ["optics", "refraction"], {}),
+        _solver("Magnetic field bends a charged particle into a helix.", ["magnetic field"], {}),
+        _solver("Hydrogen p-orbital probability density.", ["hydrogen", "orbital"], {}),
+        _solver("Lorentz transformations and simultaneity.", ["relativity", "Lorentz transform"], {}),
+    ]
+    for solver in cases:
+        assert _compose_component("S", solver) is None
 
 
 def test_bug70_coupled_pendulums_are_not_a_chaotic_double_pendulum():
@@ -407,6 +424,30 @@ def test_beat_timing_judges_beat_length_not_a_constant_intro_offset():
     assert check_timeline_runtime(code, timeline) == []
     short = check_timeline_runtime(code.replace("run_time=2.27", "run_time=0.5"), timeline)
     assert short and short[0].startswith("[TIMING:BEAT_RUNTIME] A1.B2")
+
+
+def test_thin_lens_component_declines_virtual_image_inputs():
+    from types import SimpleNamespace
+
+    from aetherlab.services.scene_components import lens
+
+    converging = SimpleNamespace(
+        variables={"focal_length": 2.0, "object_distance": 4.5, "height": 1.0},
+        summary="Converging lens real image",
+    )
+    assert lens.build("AetherLabScene", converging) is not None
+    virtual = SimpleNamespace(
+        variables={"focal_length": 2.0, "object_distance": 1.5, "height": 1.0},
+        summary="Object inside focal length",
+    )
+    assert lens.build("AetherLabScene", virtual) is None
+
+
+def test_critic_event_sampling_keeps_declared_beat_anchors():
+    from aetherlab.services.scene_critic import _normalize_sample_times
+
+    assert _normalize_sample_times(30.0, 3, [3.0, 11.0, 27.0]) == [3.0, 11.0, 27.0]
+    assert _normalize_sample_times(30.0, 2, [3.0, 11.0, 27.0]) == [3.0, 27.0]
 
 
 def _revision_loop(monkeypatch, scores, passes, tmp_path):
