@@ -159,7 +159,7 @@ def load_settings() -> AppSettings:
     legacy_api_key, legacy_api_key_name = _first_mapping_named(
         legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"
     )
-    api_key = (
+    api_key = _clean_secret(
         env_api_key
         or app_cfg.get("api_key")
         or legacy_api_key
@@ -397,6 +397,19 @@ def _first_env(*names: str) -> str | None:
         if value is not None and value.strip():
             return value.strip()
     return None
+
+
+def _clean_secret(value: object) -> str | None:
+    """Drop whitespace and byte-order marks around a pasted key.
+
+    Windows tools (PowerShell pipes, Notepad) can prefix a UTF-8 BOM that
+    str.strip() keeps; in an Authorization header it fails every request
+    with "'ascii' codec can't encode character '\\ufeff'" (live 2026-10-02).
+    """
+    if not isinstance(value, str):
+        return value if value is None else str(value)
+    cleaned = value.strip().strip("﻿​").strip()
+    return cleaned or None
 
 
 def _first_env_named(*names: str) -> tuple[str | None, str | None]:

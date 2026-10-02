@@ -353,3 +353,12 @@ def test_one_missing_latex_failure_makes_later_renders_install_it(monkeypatch):
     assert render_backend._note_missing_latex(log) is True
     assert render_backend._needs_latex("dot = Dot()") is True
     assert render_backend._note_missing_latex("ValueError: something else") is False
+
+
+def test_api_key_byte_order_mark_is_stripped(monkeypatch):
+    # Live 2026-10-02: a key piped through PowerShell carried a UTF-8 BOM and
+    # every MiniMax request failed with "'ascii' codec can't encode '﻿'".
+    from aetherlab.core import settings as settings_module
+
+    monkeypatch.setenv("AETHERLAB_OPENAI_API_KEY", "﻿sk-cp-example-key \n")
+    assert settings_module.load_settings().openai_api_key == "sk-cp-example-key"
