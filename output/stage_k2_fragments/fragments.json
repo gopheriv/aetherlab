@@ -1,0 +1,317 @@
+{
+ "B00af1": {
+  "block": "B0",
+  "shot": "j0a",
+  "ru": "Машина едет со скоростью два метра в секунду и плавно разгоняется.",
+  "kk": "Мәшине секундына екі метр жылдамдықпен келе жатыр және бірқалыпты үдейді.",
+  "en": "A car travels at two metres per second and accelerates smoothly."
+ },
+ "B00bf1": {
+  "block": "B0",
+  "shot": "j0b",
+  "ru": "Через четыре секунды — уже четырнадцать.",
+  "kk": "Төрт секундтан кейін жылдамдық он төрт метр секундқа жетеді.",
+  "en": "After four seconds it already does fourteen."
+ },
+ "B00cf1": {
+  "block": "B0",
+  "shot": "j0c",
+  "ru": "Сколько метров она прошла?",
+  "kk": "Ол қанша метр жүрді?",
+  "en": "How many metres did it cover?"
+ },
+ "B00cf2": {
+  "block": "B0",
+  "shot": "j0c",
+  "ru": "К концу урока ты найдёшь ответ двумя способами.",
+  "kk": "Сабақ соңында жауапты екі тәсілмен табасың.",
+  "en": "By the end of the lesson you will find the answer two ways."
+ },
+ "B11af1": {
+  "block": "B1",
+  "shot": "j1a",
+  "ru": "Если скорость не меняется — движение равномерное: вэ равно эс делить на тэ.",
+  "kk": "Егер жылдамдық өзгермесе — қозғалыс бірқалыпты: вэ тең эс бөлінген тэ.",
+  "en": "If speed never changes, motion is uniform: v equals s over t."
+ },
+ "B11bf1": {
+  "block": "B1",
+  "shot": "j1b",
+  "ru": "У нас скорость растёт — но растёт одинаково за каждую секунду.",
+  "kk": "Бізде жылдамдық өседі — бірақ әр секундта бірдей шамаға өседі.",
+  "en": "Here speed grows — but grows by the same amount each second."
+ },
+ "B11bf2": {
+  "block": "B1",
+  "shot": "j1b",
+  "ru": "Каждую секунду прибавка три метра в секунду — это и значит, что ускорение равно трём.",
+  "kk": "Әр секундта жылдамдық секундына үш метрге артады — бұл үдеудің үшке тең екенін білдіреді.",
+  "en": "Every second adds three metres per second — that is what an acceleration of three means."
+ },
+ "B11bf3": {
+  "block": "B1",
+  "shot": "j1b",
+  "ru": "Такое движение называется равноускоренным.",
+  "kk": "Мұндай қозғалыс теңүдемелі деп аталады.",
+  "en": "Such motion is called uniformly accelerated."
+ },
+ "B11cf1": {
+  "block": "B1",
+  "shot": "j1c",
+  "ru": "Быстроту роста скорости показывает ускорение: а равно изменение скорости, делённое на время.",
+  "kk": "Жылдамдықтың өсу шапшаңдығын үдеу көрсетеді: а тең жылдамдық өзгерісін уақытқа бөлгенге.",
+  "en": "Acceleration measures how fast velocity grows: a equals the change in velocity divided by time."
+ },
+ "B11cf2": {
+  "block": "B1",
+  "shot": "j1c",
+  "ru": "Единица — метр на секунду в квадрате.",
+  "kk": "Өлшем бірлігі — метр секундына квадрат.",
+  "en": "Its unit is the metre per second squared."
+ },
+ "B11df1": {
+  "block": "B1",
+  "shot": "j1d",
+  "ru": "Направим ось икс по движению: всё, что вперёд, — со знаком плюс.",
+  "kk": "Икс осін қозғалыс бағытымен бағыттаймыз: алға бағытталғанның бәрі плюс таңбасымен.",
+  "en": "We point the x axis along the motion: everything forward takes the plus sign."
+ },
+ "B22af1": {
+  "block": "B2",
+  "shot": "j2a",
+  "ru": "Скорость в любой момент — это стартовая скорость плюс прибавка.",
+  "kk": "Кез келген сәттегі жылдамдық — бастапқы жылдамдық пен өсімшенің қосындысы.",
+  "en": "Velocity at any moment is the starting velocity plus the gain."
+ },
+ "B22af2": {
+  "block": "B2",
+  "shot": "j2a",
+  "ru": "Прибавка — ускорение умножить на время: вэ равно вэ нулевое плюс а тэ.",
+  "kk": "Өсімше — үдеу мен уақыттың көбейтіндісі: вэ тең вэ нөл плюс а тэ.",
+  "en": "The gain is acceleration times time: v equals v naught plus a t."
+ },
+ "B22bf1": {
+  "block": "B2",
+  "shot": "j2b",
+  "ru": "Подставим наши числа: два плюс три умножить на четыре — четырнадцать метров в секунду.",
+  "kk": "Сандарды қоямыз: екі плюс үш көбейту төрт — секундына он төрт метр.",
+  "en": "Plug in our numbers: two plus three times four — fourteen metres per second."
+ },
+ "B22cf1": {
+  "block": "B2",
+  "shot": "j2c",
+  "ru": "Проверь единицы: метр на секунду в квадрате умножить на секунду даёт метр на секунду.",
+  "kk": "Бірліктерді тексер: метр секундына квадратты секундқа көбейткенде метр секунд шығады.",
+  "en": "Check the units: metres per second squared times seconds gives metres per second."
+ },
+ "B22cf2": {
+  "block": "B2",
+  "shot": "j2c",
+  "ru": "Всё сходится.",
+  "kk": "Бәрі сәйкес.",
+  "en": "It all fits."
+ },
+ "B33af1": {
+  "block": "B3",
+  "shot": "j3a",
+  "ru": "Перемещение — это насколько тело сдвинулось от старта.",
+  "kk": "Орын ауыстыру — дененің старттан қанша ығысқаны.",
+  "en": "Displacement is how far the body shifted from the start."
+ },
+ "B33af2": {
+  "block": "B3",
+  "shot": "j3a",
+  "ru": "Пока направление не меняется, оно равно пройденному пути.",
+  "kk": "Бағыт өзгермесе, ол жүрілген жолға тең.",
+  "en": "While direction stays the same, it equals the distance travelled."
+ },
+ "B33bf1": {
+  "block": "B3",
+  "shot": "j3b",
+  "ru": "Формула: эс равно вэ нулевое тэ плюс а тэ квадрат пополам.",
+  "kk": "Формула: эс тең вэ нөл тэ плюс а тэ квадраттың жартысы.",
+  "en": "The formula: s equals v naught t plus a t squared over two."
+ },
+ "B33bf2": {
+  "block": "B3",
+  "shot": "j3b",
+  "ru": "Первое слагаемое — что прошли бы без разгона, второе — добавка от разгона.",
+  "kk": "Бірінші қосылғыш — үдемей жүрген жол, екіншісі — үдеуден қосылғаны.",
+  "en": "The first term is what we would cover without accelerating; the second is the boost from acceleration."
+ },
+ "B33cf1": {
+  "block": "B3",
+  "shot": "j3c",
+  "ru": "Считаем: два умножить на четыре — восемь,",
+  "kk": "Есептейміз: екі көбейту төрт — сегіз,",
+  "en": "Let's compute: two times four is eight,"
+ },
+ "B33cf2": {
+  "block": "B3",
+  "shot": "j3c",
+  "ru": "плюс три умножить на шестнадцать пополам — двадцать четыре.",
+  "kk": "плюс үш көбейту он алтының жартысы — жиырма төрт.",
+  "en": "plus three times sixteen over two — twenty-four."
+ },
+ "B33cf3": {
+  "block": "B3",
+  "shot": "j3c",
+  "ru": "Итого тридцать два метра.",
+  "kk": "Барлығы отыз екі метр.",
+  "en": "Thirty-two metres in total."
+ },
+ "B44af1": {
+  "block": "B4",
+  "shot": "j4a",
+  "ru": "Построим график скорости от времени: вэ равно два плюс три тэ.",
+  "kk": "Жылдамдықтың уақытқа тәуелділік графигін саламыз: вэ тең екі плюс үш тэ.",
+  "en": "Let's plot velocity against time: v equals two plus three t."
+ },
+ "B44af2": {
+  "block": "B4",
+  "shot": "j4a",
+  "ru": "Это прямая: в нуле — два,",
+  "kk": "Бұл түзу: нөлде — екі,",
+  "en": "It is a straight line: two at zero,"
+ },
+ "B44af3": {
+  "block": "B4",
+  "shot": "j4a",
+  "ru": "через четыре секунды — четырнадцать.",
+  "kk": "төрт секундтан кейін — он төрт.",
+  "en": "fourteen after four seconds."
+ },
+ "B44bf1": {
+  "block": "B4",
+  "shot": "j4b",
+  "ru": "Наклон прямой — это ускорение: чем круче, тем больше а.",
+  "kk": "Түзудің көлбеуі — бұл үдеу: неғұрлым тік болса, а соғұрлым үлкен.",
+  "en": "The slope of the line is the acceleration: the steeper, the larger the a."
+ },
+ "B44cf1": {
+  "block": "B4",
+  "shot": "j4c",
+  "ru": "Запомни: наклон графика вэ от тэ равен ускорению.",
+  "kk": "Есте сақта: вэ-ның тэ-ға тәуелділік графигінің көлбеуі үдеуге тең.",
+  "en": "Remember: the slope of the v–t graph equals the acceleration."
+ },
+ "B55af1": {
+  "block": "B5",
+  "shot": "j5a",
+  "ru": "А теперь проверка.",
+  "kk": "Енді тексереміз.",
+  "en": "Now the check."
+ },
+ "B55af2": {
+  "block": "B5",
+  "shot": "j5a",
+  "ru": "Площадь под графиком скорости численно равна перемещению.",
+  "kk": "Жылдамдық графигі астындағы аудан сан жағынан орын ауыстыруға тең.",
+  "en": "The area under the velocity graph numerically equals the displacement."
+ },
+ "B55af3": {
+  "block": "B5",
+  "shot": "j5a",
+  "ru": "У нас трапеция с основаниями два и четырнадцать и высотой четыре: полусумма оснований на высоту — восемь умножить на четыре — тридцать два метра.",
+  "kk": "Бізде табандары екі мен он төрт, биіктігі төрт трапеция: табандардың жарты қосындысын биіктікке көбейтеміз — сегіз көбейту төрт — отыз екі метр.",
+  "en": "We have a trapezoid with bases two and fourteen and height four: half the sum of the bases times the height — eight times four — thirty-two metres."
+ },
+ "B55bf1": {
+  "block": "B5",
+  "shot": "j5b",
+  "ru": "Сошлось с формулой.",
+  "kk": "Формуламен сәйкес келді.",
+  "en": "It matches the formula."
+ },
+ "B55bf2": {
+  "block": "B5",
+  "shot": "j5b",
+  "ru": "Два способа — один ответ.",
+  "kk": "Екі тәсіл — бір жауап.",
+  "en": "Two ways, one answer."
+ },
+ "B66af1": {
+  "block": "B6",
+  "shot": "j6a",
+  "ru": "А теперь ты.",
+  "kk": "Енді өзің.",
+  "en": "Now you."
+ },
+ "B66af2": {
+  "block": "B6",
+  "shot": "j6a",
+  "ru": "Машина стартует с места с ускорением два метра на секунду в квадрате.",
+  "kk": "Мәшине орнынан секундына квадрат екі метр үдеумен қозғалды.",
+  "en": "A car starts from rest with an acceleration of two metres per second squared."
+ },
+ "B66af3": {
+  "block": "B6",
+  "shot": "j6a",
+  "ru": "Сколько она пройдёт за пять секунд?",
+  "kk": "Бес секундта қанша жол жүреді?",
+  "en": "How far does it go in five seconds?"
+ },
+ "B66bf1": {
+  "block": "B6",
+  "shot": "j6b",
+  "ru": "Поставь видео на паузу и реши.",
+  "kk": "Видеоны кідірте тұр да, өзің шығар.",
+  "en": "Pause the video and solve it."
+ },
+ "B66cf1": {
+  "block": "B6",
+  "shot": "j6c",
+  "ru": "Ответ: ноль умножить на пять плюс два умножить на двадцать пять пополам — двадцать пять метров.",
+  "kk": "Жауабы: нөл көбейту бес плюс екі көбейту жиырма бестің жартысы — жиырма бес метр.",
+  "en": "Answer: zero times five plus two times twenty-five over two — twenty-five metres."
+ },
+ "B77af1": {
+  "block": "B7",
+  "shot": "j7a",
+  "ru": "Две ловушки.",
+  "kk": "Екі қақпан.",
+  "en": "Two traps."
+ },
+ "B77af2": {
+  "block": "B7",
+  "shot": "j7a",
+  "ru": "Первая: подставить конечную скорость в формулу равномерного движения: четырнадцать умножить на четыре — пятьдесят шесть.",
+  "kk": "Біріншісі: соңғы жылдамдықты бірқалыпты қозғалыс формуласына қою: он төрт көбейту төрт — елу алты.",
+  "en": "First: plugging the final speed into the uniform-motion formula: fourteen times four is fifty-six."
+ },
+ "B77af3": {
+  "block": "B7",
+  "shot": "j7a",
+  "ru": "Неверно: скорость-то росла, брать надо среднюю.",
+  "kk": "Қате: жылдамдық өсіп отыр, орташасын алу керек.",
+  "en": "Wrong: the speed was growing, you must take the average."
+ },
+ "B77bf1": {
+  "block": "B7",
+  "shot": "j7b",
+  "ru": "Вторая: перепутать наклон и площадь.",
+  "kk": "Екіншісі: көлбеу мен ауданды шатастыру.",
+  "en": "Second: mixing up slope and area."
+ },
+ "B77bf2": {
+  "block": "B7",
+  "shot": "j7b",
+  "ru": "Наклон — это ускорение, площадь — перемещение.",
+  "kk": "Көлбеу — бұл үдеу, аудан — орын ауыстыру.",
+  "en": "Slope is acceleration; area is displacement."
+ },
+ "B77cf1": {
+  "block": "B7",
+  "shot": "j7c",
+  "ru": "Итог: вэ равно вэ нулевое плюс а тэ; эс равно вэ нулевое тэ плюс а тэ квадрат пополам; площадь под вэ от тэ — перемещение.",
+  "kk": "Қорытынды: вэ тең вэ нөл плюс а тэ; эс тең вэ нөл тэ плюс а тэ квадраттың жартысы; вэ-ның тэ-ға графигі астындағы аудан — орын ауыстыру.",
+  "en": "To sum up: v equals v naught plus a t; s equals v naught t plus a t squared over two; the area under the v–t graph is the displacement."
+ },
+ "B77cf2": {
+  "block": "B7",
+  "shot": "j7c",
+  "ru": "Задачи на площадь графика встречаются в пробниках ЕНТ — теперь ты их узнаешь.",
+  "kk": "График ауданына есептер ҰБТ байқау сынақтарында кездеседі — енді оларды танисың.",
+  "en": "Graph-area problems appear in UNT mocks — now you will recognise them."
+ }
+}

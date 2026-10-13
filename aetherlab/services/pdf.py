@@ -180,6 +180,32 @@ def export_lesson_study_guide(plan, output_path: Path) -> Path:
     does). key_equations are emitted verbatim in display math (already LaTeX).
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    from aetherlab.core.language import normalize_language
+
+    language = normalize_language(getattr(plan, "language", "en"))
+    labels = {
+        "kk": {
+            "date": "Оқу нұсқаулығы · AetherLab",
+            "objectives": "Оқу мақсаттары", "prerequisites": "Алдын ала білу керек",
+            "watch": "Есте сақтаңыз", "terms": "Қазақша физика терминдері",
+            "chapters": "Сабақ бөлімдері", "check": "Өзіңізді тексеріңіз",
+            "meaning": "Түсіндірме", "translation": "Аудармасы",
+        },
+        "ru": {
+            "date": "Учебный конспект · AetherLab",
+            "objectives": "Цели обучения", "prerequisites": "Что нужно знать заранее",
+            "watch": "Важно помнить", "terms": "Казахские термины по физике",
+            "chapters": "Разделы урока", "check": "Проверьте себя",
+            "meaning": "Простое объяснение", "translation": "Перевод",
+        },
+        "en": {
+            "date": "Study guide · AetherLab",
+            "objectives": "Learning objectives", "prerequisites": "Prerequisites",
+            "watch": "Keep in mind", "terms": "Kazakh physics terms",
+            "chapters": "Lesson chapters", "check": "Check yourself",
+            "meaning": "Plain-language meaning", "translation": "Translation",
+        },
+    }[language]
 
     def items(xs: list[str]) -> str:
         return "\n".join(f"  \\item {_latex_escape(str(x))}" for x in xs) or r"  \item —"
@@ -214,33 +240,53 @@ def export_lesson_study_guide(plan, output_path: Path) -> Path:
         )
     questions = "\n".join(q_blocks) or r"\item —"
 
+    term_blocks = []
+    for item in getattr(plan, "kazakh_terms", []) or []:
+        if not isinstance(item, dict):
+            continue
+        term = _latex_escape(str(item.get("term_kk", "")).strip())
+        translation = _latex_escape(str(item.get("translation", "")).strip())
+        meaning = _latex_escape(str(item.get("meaning", "")).strip())
+        if term:
+            term_blocks.append(
+                f"\\item \\textbf{{{term}}} — {translation}. {meaning}"
+            )
+    terms = "\n".join(term_blocks)
+    terms_section = (
+        f"\\section*{{{labels['terms']}}}\n\\begin{{itemize}}\n{terms}\n\\end{{itemize}}"
+        if terms else ""
+    )
+
     latex = rf"""\documentclass[11pt]{{article}}
 \usepackage[margin=2.3cm]{{geometry}}
+\usepackage[utf8]{{inputenc}}
 \usepackage{{amsmath,amssymb}}
 
 \title{{{_latex_escape(plan.title)}}}
-\date{{Study guide · AetherLab}}
+\date{{{labels['date']}}}
 
 \begin{{document}}
 \maketitle
 
-\section*{{Learning objectives}}
+\section*{{{labels['objectives']}}}
 \begin{{itemize}}
 {objectives}
 \end{{itemize}}
 
-\section*{{Prerequisites}}
+\section*{{{labels['prerequisites']}}}
 \begin{{itemize}}
 {prereqs}
 \end{{itemize}}
 
-\section*{{Watch out for}}
+\section*{{{labels['watch']}}}
 {_latex_escape(plan.misconception) or "—"}
 
-\section*{{Chapters}}
+{terms_section}
+
+\section*{{{labels['chapters']}}}
 {chapters}
 
-\section*{{Check yourself}}
+\section*{{{labels['check']}}}
 \begin{{enumerate}}
 {questions}
 \end{{enumerate}}

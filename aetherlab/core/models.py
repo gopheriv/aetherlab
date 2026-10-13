@@ -414,15 +414,19 @@ class LessonPlan:
     questions: list[LessonQuestion] = field(default_factory=list)
     model_name: str = ""
     cached: bool = False
+    language: str = "en"  # kk | ru | en
+    kazakh_terms: list[dict[str, str]] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return {
             "title": self.title,
             "topic": self.topic,
             "audience": self.audience,
+            "language": self.language,
             "prerequisites": self.prerequisites,
             "objectives": self.objectives,
             "misconception": self.misconception,
+            "kazakh_terms": self.kazakh_terms,
             "chapters": [c.to_json() for c in self.chapters],
             "questions": [q.to_json() for q in self.questions],
             "model_name": self.model_name,
@@ -435,13 +439,22 @@ class LessonPlan:
         audience = str(data.get("audience", "undergrad")).lower().replace(" ", "_")
         if audience not in {"high_school", "ap", "undergrad"}:
             audience = "undergrad"
+        from aetherlab.core.language import normalize_language
+
+        kazakh_terms = data.get("kazakh_terms", [])
         return cls(
             title=str(data.get("title", "")) or "Untitled lesson",
             topic=str(data.get("topic", "")),
             audience=audience,
+            language=normalize_language(data.get("language", "en")),
             prerequisites=[str(p) for p in data.get("prerequisites", [])],
             objectives=[str(o) for o in data.get("objectives", [])],
             misconception=str(data.get("misconception", "")),
+            kazakh_terms=[
+                {str(k): str(v) for k, v in item.items() if isinstance(k, str)}
+                for item in kazakh_terms
+                if isinstance(item, dict)
+            ] if isinstance(kazakh_terms, list) else [],
             chapters=[
                 LessonChapter.from_json(c)
                 for c in data.get("chapters", [])
@@ -467,7 +480,7 @@ class LessonBundle:
     plan: LessonPlan
     chapter_scenes: list[SceneBundle] = field(default_factory=list)
     video_path: str = ""
-    status: str = "planned"  # planned | rendering | assembled | error
+    status: str = "planned"  # planned | rendering | assembled | error | offline_practice_available
     cached: bool = False
     # Start time (seconds) of each rendered chapter clip WITHIN the assembled
     # video, accounting for intro/chapter title cards + crossfades. Used to seek

@@ -38,8 +38,14 @@ def test_spaced_review_due_dates_and_review_rescheduling(tmp_path):
     assert store.due_reviews(now=start) == []
     due = store.due_reviews(now=start + timedelta(days=1))
     assert len(due) == 1 and due[0]["answer"] == "Between kinetic and potential."
-    interval = store.record_review_result(due[0], True, now=start + timedelta(days=1))
+    interval = store.record_review_result(
+        due[0], False, correct=False, now=start + timedelta(days=1)
+    )
     assert interval == 1
+    review_event = store.evaluation_events()[1]
+    assert review_event["recall_mode"] == "objective_mcq"
+    assert review_event["correct"] is False
+    assert review_event["recalled"] is False
     assert store.due_reviews(now=start + timedelta(days=1)) == []
     assert len(store.due_reviews(now=start + timedelta(days=2))) == 1
 
@@ -80,8 +86,116 @@ def test_spaced_review_uses_custom_schedule_confidence_and_records_events(tmp_pa
     assert events[0]["confidence_level"] == "low"
     assert events[0]["scheduled_interval_days"] == 2
     assert events[1]["days_since_first_attempt"] == 2.0
+    assert events[1]["recall_mode"] == "self_reported"
+    assert events[1]["correct"] is None
     assert events[2]["confidence_level"] == "high"
     assert events[2]["scheduled_interval_days"] == 5
+
+
+def test_learner_study_analysis_separates_objective_and_self_reported_recall():
+    from tools.learner_study_analysis import analyze_participants
+
+    p1 = [
+        {"kind": "quiz", "lesson_key": "l1", "question_index": "0",
+         "at": "2026-01-01T00:00:00+00:00", "scheduled_interval_days": 1,
+         "correct": True},
+        {"kind": "spaced_review", "lesson_key": "l1", "question_index": "0",
+         "at": "2026-01-02T04:48:00+00:00", "days_since_first_attempt": 1.2,
+         "correct": False, "recalled": False, "recall_mode": "objective_mcq"},
+        {"kind": "spaced_review", "lesson_key": "l1", "question_index": "0",
+         "at": "2026-01-08T04:48:00+00:00", "days_since_first_attempt": 7.2,
+         "correct": True, "recalled": True, "recall_mode": "objective_mcq"},
+        {"kind": "quiz", "lesson_key": "l1", "question_index": "1",
+         "at": "2026-01-01T00:00:00+00:00", "scheduled_interval_days": 1,
+         "correct": False},
+        {"kind": "spaced_review", "lesson_key": "l1", "question_index": "1",
+         "at": "2026-01-02T02:24:00+00:00", "days_since_first_attempt": 1.1,
+         "correct": None, "recalled": True, "recall_mode": "self_reported"},
+    ]
+    p2 = [
+        {"kind": "quiz", "lesson_key": "l2", "question_index": "0",
+         "at": "2026-01-01T00:00:00+00:00", "scheduled_interval_days": 1,
+         "correct": True},
+        {"kind": "spaced_review", "lesson_key": "l2", "question_index": "0",
+         "at": "2026-01-07T12:00:00+00:00", "days_since_first_attempt": 6.5,
+         "correct": True, "recalled": True, "recall_mode": "objective_mcq"},
+    ]
+
+    report = analyze_participants(
+        [p1, p2],
+        as_of=datetime(2026, 1, 15, tzinfo=timezone.utc),
+        tolerance_days=1.0,
+        transfer_rows=[
+            {"participant_slot": 1, "item_id": "transfer-a", "days_since_first_attempt": 7.0,
+             "correct": True, "novel": True},
+            {"participant_slot": 2, "item_id": "transfer-b", "days_since_first_attempt": 6.5,
+             "correct": False, "novel": True},
+            {"participant_slot": 1, "item_id": "non-novel", "days_since_first_attempt": 7.0,
+             "correct": True, "novel": False},
+        ],
+    )
+
+    assert report["participant_count"] == 2
+    assert report["due_return"] == {
+        "eligible_items": 3, "returned_items": 3, "return_rate": 1.0,
+    }
+    day1 = report["delayed_recall"]["day_1"]
+    assert day1["objective_mcq"] == {"n": 1, "correct": 0, "accuracy": 0.0}
+    assert day1["self_reported_open_response"] == {
+        "n": 1, "recalled": 1, "recall_rate": 1.0,
+    }
+    day7 = report["delayed_recall"]["day_7"]
+    assert day7["objective_mcq"] == {"n": 2, "correct": 2, "accuracy": 1.0}
+    assert day7["self_reported_open_response"]["n"] == 0
+    assert report["transfer"]["status"] == "scored"
+    assert report["transfer"]["measures"]["day_7"] == {
+        "window_days": [6.0, 8.0], "n": 2, "correct": 1, "accuracy": 0.5,
+    }
+    assert report["transfer"]["non_novel_rows_excluded"] == 1
+    serialized = str(report).lower()
+    assert all(value not in serialized for value in ("p1", "l1", "transfer-a", "transfer-b"))
+
+
+def test_learner_study_cli_writes_aggregate_without_progress_content(tmp_path, monkeypatch):
+    import sys
+
+    from tools.learner_study_analysis import main
+
+    plan = SimpleNamespace(
+        title="Private lesson title", topic="Private topic", audience="undergrad",
+        objectives=["Private objective"],
+        questions=[SimpleNamespace(
+            q="Private prompt?", answer="Private answer", why="Private explanation",
+            choices=["Private choice A", "Private choice B"],
+        )],
+    )
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = CourseProgressStore(tmp_path / "learner.json")
+    store.record_quiz_answer(plan, 0, False, "Private choice A", now=start)
+    due = store.due_reviews(now=start + timedelta(days=1))[0]
+    store.record_review_result(
+        due, True, correct=True, now=start + timedelta(days=1)
+    )
+    output = tmp_path / "aggregate.json"
+    transfer_csv = tmp_path / "transfer.csv"
+    transfer_csv.write_text(
+        "participant_slot,item_id,days_since_first_attempt,correct,novel\n"
+        "1,private-transfer-item,7,true,true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "learner_study_analysis.py", str(store.path), "--output", str(output),
+        "--as-of", "2026-01-03T00:00:00+00:00",
+        "--transfer-csv", str(transfer_csv),
+    ])
+
+    assert main() == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    serialized = json.dumps(report).lower()
+    assert "private" not in serialized
+    assert report["due_return"]["return_rate"] == 1.0
+    assert report["delayed_recall"]["day_1"]["objective_mcq"]["accuracy"] == 1.0
+    assert report["transfer"]["measures"]["day_7"]["accuracy"] == 1.0
 
 
 def test_review_schedule_parser_is_bounded_and_falls_back_safely():
@@ -124,6 +238,45 @@ def test_lesson_quiz_captures_self_rated_confidence(monkeypatch):
         view.close()
         # Keep the Qt application referenced through the test lifetime.
         assert app is QtWidgets.QApplication.instance()
+
+
+def test_spaced_review_dialog_scores_multiple_choice_and_labels_open_response(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from aetherlab.ui.qt_compat import QtWidgets
+    from aetherlab.ui.widgets import _LessonCheckDialog
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    correct = _LessonCheckDialog({
+        "q": "Which answer is correct?", "choices": ["A", "B"],
+        "answer": "B", "why": "The force points in the positive direction.",
+    }, "spaced_review")
+    correct._radios[1].setChecked(True)
+    correct._submit_answer()
+    assert correct.answer_submitted is True
+    assert correct.answer_correct is True
+    assert correct._continue.isEnabled()
+
+    wrong = _LessonCheckDialog({
+        "q": "Which answer is correct?", "choices": ["A", "B"],
+        "answer": "B",
+    }, "spaced_review")
+    wrong._radios[0].setChecked(True)
+    wrong._submit_answer()
+    assert wrong.answer_submitted is True
+    assert wrong.answer_correct is False
+
+    open_response = _LessonCheckDialog({
+        "q": "Explain the mechanism.", "answer": "Energy is transferred.",
+    }, "spaced_review")
+    open_response._answer_edit.setText("The answer typed from memory")
+    open_response._submit_answer()
+    assert open_response.answer_submitted is True
+    assert open_response.answer_correct is None
+
+    correct.close()
+    wrong.close()
+    open_response.close()
+    assert app is QtWidgets.QApplication.instance()
 
 
 def test_algebra_checks_are_safe_and_conservative():
@@ -173,6 +326,29 @@ def test_algebra_checks_are_safe_and_conservative():
     assert coincidental_check["substitution_status"] == "passed"
 
 
+def test_mixed_derivation_records_cannot_aggregate_to_passed():
+    solver = _solver(derivation_records=[
+        {"from_expression": "v = u + a*t", "to_expression": "v-u = a*t"},
+        {"claim": "Missing equation forms"},
+        {
+            "from_expression": "__import__('os').system('whoami')",
+            "to_expression": "1",
+        },
+        None,
+    ])
+
+    report = verify_derivation_records(solver)
+
+    assert report["status"] == "not_checked"
+    assert report["checked"] == 1
+    assert report["failed"] == 0
+    assert report["not_checked"] == 3
+    assert report["total"] == len(report["items"]) == 4
+    assert [item["status"] for item in report["items"]] == [
+        "passed", "not_checked", "not_checked", "not_checked",
+    ]
+
+
 def test_scene_hygiene_flags_explicitly_tiny_text_without_blocking():
     from aetherlab.services.scene_validation import scene_hygiene_warnings, validate_scene
 
@@ -191,14 +367,48 @@ class Demo(Scene):
     assert validate_scene(code)[0] is True
 
 
+def test_constructor_kwargs_checks_forwarded_manim_kwargs_chain():
+    from aetherlab.services.scene_validation import lint_constructor_kwargs, validate_scene
+
+    invalid = "trail = TracedPath(lambda: ORIGIN, time_traced=1.2)"
+    valid = (
+        "trail = TracedPath(lambda: ORIGIN, dissipating_time=1.2, "
+        "stroke_opacity=0.7, color=AMBER)"
+    )
+
+    issues = lint_constructor_kwargs(invalid)
+
+    assert any("invalid keyword 'time_traced'" in issue for issue in issues)
+    assert lint_constructor_kwargs(valid) == []
+    create_issues = lint_constructor_kwargs(
+        "animation = Create(Dot(), stroke_opacity=0.7)"
+    )
+    assert any("Create() got an invalid keyword 'stroke_opacity'" in issue
+               for issue in create_issues)
+    assert lint_constructor_kwargs("animation = Create(Dot(), run_time=1.5)") == []
+    scene = """from manim import *
+class Demo(Scene):
+    def construct(self):
+        trail = TracedPath(lambda: ORIGIN, time_traced=1.2)
+        self.add(trail)
+"""
+    ok, validation_issues = validate_scene(scene)
+    assert not ok
+    assert any("invalid keyword 'time_traced'" in issue for issue in validation_issues)
+
+
 def test_human_review_analysis_requires_paired_data_and_never_sets_a_gate(tmp_path):
+    import hashlib
+
     from tools.human_review_analysis import analyze_reviews
 
     cases = []
     machine_cases = {}
     for index in range(3):
         case_id = f"scene-{index}"
-        (tmp_path / f"{case_id}.mp4").write_bytes(b"fixture")
+        video_bytes = f"fixture-{index}".encode()
+        video_path = tmp_path / f"{case_id}.mp4"
+        video_path.write_bytes(video_bytes)
         human_score = index + 2
         cases.append({
             "id": case_id,
@@ -212,6 +422,7 @@ def test_human_review_analysis_requires_paired_data_and_never_sets_a_gate(tmp_pa
         })
         machine_cases[case_id] = {
             "score": human_score * 2,
+            "video_sha256": hashlib.sha256(video_bytes).hexdigest(),
             "breakdown": {
                 "legibility": index / 2,
                 "substance": index / 2,
@@ -228,6 +439,18 @@ def test_human_review_analysis_requires_paired_data_and_never_sets_a_gate(tmp_pa
     assert report["axis_correlations"]["physics"]["spearman_rho"] == 1.0
     assert report["axis_correlations"]["physics"]["mapping_kind"] == "proxy"
     assert report["release_gate_calibrated"] is False
+
+    mismatched = {"cases": {key: dict(value) for key, value in machine_cases.items()}}
+    mismatched["cases"]["scene-1"]["video_sha256"] = "0" * 64
+    mismatched_report = analyze_reviews(
+        {"human_ratings_required": 3, "cases": cases},
+        mismatched,
+        review_path=tmp_path / "review.json",
+    )
+    assert mismatched_report["status"] == "incomplete"
+    assert mismatched_report["critic_scored_cases"] == 2
+    assert mismatched_report["unpaired_critic_case_ids"] == ["scene-1"]
+    assert mismatched_report["paired_human_critic_cases"] == 2
 
     missing_scores = analyze_reviews(
         {"human_ratings_required": 3, "cases": cases},
@@ -425,6 +648,94 @@ def test_invalid_request_parameters_are_skipped_not_raised():
 
     only_bad = ProblemRequest("Spring", parameters={"stiffness": float("inf")})
     assert apply_request_parameters(only_bad, solver) is solver
+
+
+def test_equation_change_from_fresh_solve_propagates_to_scene_canvas_and_study_doc(
+    monkeypatch,
+):
+    import asyncio
+    import json
+
+    import openai
+
+    from aetherlab.core.models import ProblemRequest, RagResult
+    from aetherlab.services.llm import AsyncLLMCoordinator
+    from aetherlab.services.numeric import solve_numeric
+    from aetherlab.services.scene_specification import (
+        build_scene_spec,
+        canvas_inputs_from_scene_spec,
+    )
+    from aetherlab.services.study_document import deterministic_document
+
+    soft = {
+        "summary": "A unit-frequency oscillator.",
+        "derivation_steps": ["Apply Newton's second law."],
+        "keywords": ["oscillator"],
+        "variables": {"mass": 1.0, "stiffness": 1.0, "damping": 0.0},
+        "key_equations": [r"\ddot{x} + x = 0"],
+        "ode": {
+            "state": ["x", "v"], "rhs": ["v", "-stiffness/mass*x"],
+            "initial": [1.0, 0.0], "t_range": [0.0, 1.0], "observe": "x",
+        },
+    }
+    stiff = {
+        **soft,
+        "summary": "A doubled-frequency oscillator.",
+        "variables": {"mass": 1.0, "stiffness": 4.0, "damping": 0.0},
+        "key_equations": [r"\ddot{x} + 4x = 0"],
+    }
+
+    class FakeCompletions:
+        async def create(self, *, messages, **_kwargs):
+            prompt = messages[-1]["content"].lower()
+            content = stiff if "stiff" in prompt else soft
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                content=json.dumps(content),
+            ))])
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(
+        "aetherlab.services.model_policy.openai_client_kwargs", lambda _settings: {}
+    )
+    settings = SimpleNamespace(
+        openai_api_key="test-key", llm_model="test-model", solver_attempts=1,
+    )
+    coordinator = AsyncLLMCoordinator(settings)
+    rag = RagResult(keywords=["oscillator"], hits=[], backend="test")
+
+    async def solve_pair():
+        soft_request = ProblemRequest("Explain a soft spring oscillator.")
+        stiff_request = ProblemRequest("Explain a stiff spring oscillator.")
+        return (
+            soft_request, await coordinator.solve(soft_request),
+            stiff_request, await coordinator.solve(stiff_request),
+        )
+
+    soft_request, soft_solver, stiff_request, stiff_solver = asyncio.run(solve_pair())
+    assert soft_solver.key_equations == soft["key_equations"]
+    assert stiff_solver.key_equations == stiff["key_equations"]
+
+    soft_spec = build_scene_spec(soft_request, soft_solver, rag)
+    stiff_spec = build_scene_spec(stiff_request, stiff_solver, rag)
+    assert soft_spec["physics"]["key_equations"] == soft["key_equations"]
+    assert stiff_spec["physics"]["key_equations"] == stiff["key_equations"]
+
+    soft_canvas = canvas_inputs_from_scene_spec(soft_spec)
+    stiff_canvas = canvas_inputs_from_scene_spec(stiff_spec)
+    assert soft_canvas is not None and stiff_canvas is not None
+    soft_numeric = solve_numeric(soft_canvas["numeric_spec"], soft_canvas["params"])
+    stiff_numeric = solve_numeric(stiff_canvas["numeric_spec"], stiff_canvas["params"])
+    assert soft_numeric.ok and stiff_numeric.ok
+    assert abs(soft_numeric.series()[-1] - stiff_numeric.series()[-1]) > 0.5
+
+    soft_doc = deterministic_document(soft_request, soft_solver, "topic")
+    stiff_doc = deterministic_document(stiff_request, stiff_solver, "topic")
+    assert soft_doc["sections"][0]["equations"][0]["latex"] == soft["key_equations"][0]
+    assert stiff_doc["sections"][0]["equations"][0]["latex"] == stiff["key_equations"][0]
 
 
 def test_numeric_trajectory_scene_preserves_solver_samples_and_time_order():
@@ -790,6 +1101,86 @@ def test_minimax_thinking_override_is_request_local():
     }
 
 
+def test_minimax_thinking_ab_persists_video_with_relative_path_and_hash(tmp_path):
+    import hashlib
+
+    from tools.minimax_thinking_ab import _persist_video_artifact
+
+    source = tmp_path / "rendered.mp4"
+    source.write_bytes(b"fixture-video")
+    output_dir = tmp_path / "experiment"
+
+    artifact = _persist_video_artifact(source, output_dir, "enabled")
+
+    saved = output_dir / "videos" / "thinking-enabled.mp4"
+    assert saved.read_bytes() == source.read_bytes()
+    assert artifact == {
+        "video_path": "videos/thinking-enabled.mp4",
+        "video_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }
+
+
+def test_minimax_thinking_ab_persists_redacted_scene_and_diagnostics(tmp_path):
+    import hashlib
+    from types import SimpleNamespace
+
+    from tools.minimax_thinking_ab import _persist_scene_artifacts
+
+    scene = SimpleNamespace(
+        code="from manim import *\n# sk-EXAMPLESECRET1234",
+        diagnostics=["Request failed: Bearer topsecret-token"],
+    )
+    artifact = _persist_scene_artifacts(scene, tmp_path / "experiment", "disabled", stage="generated")
+    source = tmp_path / "experiment" / "scenes" / "thinking-disabled-generated.py"
+    diagnostics = tmp_path / "experiment" / "diagnostics" / "thinking-disabled-generated.txt"
+
+    assert source.is_file()
+    assert "EXAMPLESECRET1234" not in source.read_text(encoding="utf-8")
+    assert diagnostics.read_text(encoding="utf-8").strip() == "Request failed: [redacted]"
+    assert artifact["scene_path"] == "scenes/thinking-disabled-generated.py"
+    assert artifact["diagnostics_path"] == "diagnostics/thinking-disabled-generated.txt"
+    assert artifact["scene_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+def test_minimax_thinking_ab_records_interrupted_arm(tmp_path):
+    import json
+
+    from tools.minimax_thinking_ab import _record_interruption
+
+    report_path = tmp_path / "report.json"
+    report = {
+        "run_status": "in_progress",
+        "current_arm_started_at": "2026-10-02T11:27:43+00:00",
+        "variants": [{"thinking": "disabled", "render_status": "render-error"}],
+    }
+
+    _record_interruption(report_path, report, "enabled")
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert saved["run_status"] == "interrupted"
+    assert saved["interruption"]["arm"] == "enabled"
+    assert saved["interruption"]["started_at"] == report["current_arm_started_at"]
+    assert saved["interruption"]["stopped_at"]
+    assert saved["interruption"]["elapsed_seconds"] > 0
+    assert saved["variants"] == report["variants"]
+
+
+def test_minimax_thinking_ab_help_does_not_start_a_run(monkeypatch, capsys):
+    import pytest
+
+    from tools import minimax_thinking_ab
+
+    def unexpected_run():
+        raise AssertionError("--help must exit before starting provider or Cloud work")
+
+    monkeypatch.setattr(minimax_thinking_ab, "run", unexpected_run)
+    with pytest.raises(SystemExit) as exit_info:
+        minimax_thinking_ab.main(["--help"])
+
+    assert exit_info.value.code == 0
+    assert "usage:" in capsys.readouterr().out.lower()
+
+
 def test_visual_critic_retries_unknown_configured_model_with_in_memory_llm(tmp_path, monkeypatch):
     import asyncio
     import json as json_module
@@ -879,7 +1270,10 @@ class AetherLabScene(Scene):
         self.play(Write(Text('one')), run_time=3)
         self.wait(5)
 """
+    # The 4s sample lies in the second event; the final-event sample verifies
+    # the exclusive end reaches one past the last animation.
     assert _animation_range_for_times(code, [0.5, 4.0]) == (0, 2)
+    assert _animation_range_for_times(code, [9.9]) == (1, 3)
     ambiguous = code.replace("self.wait(2)", "for _ in range(2):\n            self.wait(2)")
     assert _animation_range_for_times(ambiguous, [1.0]) is None
 
@@ -920,13 +1314,77 @@ class AetherLabScene(Scene):
     assert check_updater_animation_conflicts(cleared_first) == []
 
 
+def test_linter_separates_live_numeric_fade_from_tracker_animation():
+    from aetherlab.services.scene_validation import (
+        check_dynamic_numeric_fade_conflicts,
+        validate_scene,
+    )
+
+    scene = """from manim import *
+class AetherLabScene(Scene):
+    def construct(self):
+        temperature = ValueTracker(0)
+        readout = DecimalNumber(0, num_decimal_places=0)
+        readout.add_updater(lambda mob: mob.set_value(temperature.get_value()))
+        self.play(FadeIn(readout), temperature.animate.set_value(5800), run_time=3)
+"""
+    conflicts = check_dynamic_numeric_fade_conflicts(scene)
+    assert len(conflicts) == 1
+    assert conflicts[0].startswith("[MANIM:DYNAMIC_NUMBER_FADE] readout")
+    assert any(
+        issue.startswith("[MANIM:DYNAMIC_NUMBER_FADE]")
+        for issue in validate_scene(scene)[1]
+    )
+
+    safe_sequence = scene.replace(
+        "self.play(FadeIn(readout), temperature.animate.set_value(5800), run_time=3)",
+        "self.play(FadeIn(readout))\n"
+        "        self.play(temperature.animate.set_value(5800), run_time=3)",
+    )
+    assert check_dynamic_numeric_fade_conflicts(safe_sequence) == []
+
+    grouped = scene.replace(
+        "self.play(FadeIn(readout), temperature.animate.set_value(5800), run_time=3)",
+        "group = VGroup(readout)\n"
+        "        self.play(FadeIn(group), temperature.animate.set_value(5800), run_time=3)",
+    )
+    assert check_dynamic_numeric_fade_conflicts(grouped)[0].startswith(
+        "[MANIM:DYNAMIC_NUMBER_FADE] readout"
+    )
+
+    added_group = scene.replace(
+        "self.play(FadeIn(readout), temperature.animate.set_value(5800), run_time=3)",
+        "group = VGroup()\n"
+        "        group.add(readout)\n"
+        "        self.play(FadeIn(group), temperature.animate.set_value(5800), run_time=3)",
+    )
+    assert check_dynamic_numeric_fade_conflicts(added_group)[0].startswith(
+        "[MANIM:DYNAMIC_NUMBER_FADE] readout"
+    )
+
+
 def test_cloud_poll_retries_a_transient_read_timeout(tmp_path, monkeypatch):
     import asyncio
     import io
+    import subprocess
     import zipfile
 
+    import imageio_ffmpeg
+
     import aetherlab.services.manim_runtime as runtime
+    from aetherlab.core.proc import subprocess_kwargs
     from aetherlab.services.render_backend import CloudRenderBackend
+
+    # Poll recovery must be tested with a real downloadable video. An ftyp
+    # marker followed by junk is correctly rejected by the newer media gate.
+    fixture_video = tmp_path / "poll-recovery.mp4"
+    subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
+         "-y", "-f", "lavfi", "-i", "color=c=blue:s=854x480:r=30:d=0.2",
+         "-pix_fmt", "yuv420p", str(fixture_video)],
+        check=True, capture_output=True, timeout=20, **subprocess_kwargs(),
+    )
+    video_bytes = fixture_video.read_bytes()
 
     class CloudClient:
         def __init__(self):
@@ -973,7 +1431,7 @@ def test_cloud_poll_retries_a_transient_read_timeout(tmp_path, monkeypatch):
             with zipfile.ZipFile(archive, "w") as zipped:
                 zipped.writestr(
                     self.artifact_name,
-                    b"\x00\x00\x00\x18ftypmp42" + b"0" * 256,
+                    video_bytes,
                 )
             return archive.getvalue()
 

@@ -1,0 +1,171 @@
+﻿1
+00:00:00,100 --> 00:00:02,425
+When a cyclist pedals harder the bicycle
+
+2
+00:00:02,438 --> 00:00:06,488
+travels faster each second Acceleration tells us
+
+3
+00:00:06,638 --> 00:00:09,587
+how much velocity changes in one second
+
+4
+00:00:10,000 --> 00:00:11,650
+We will use a simple example to
+
+5
+00:00:11,650 --> 00:00:13,663
+find the change in velocity and the
+
+6
+00:00:13,662 --> 00:00:14,600
+distance travelled
+
+7
+00:00:15,040 --> 00:00:17,927
+Consider an object moving along a straight
+
+8
+00:00:17,927 --> 00:00:20,340
+line We call its starting velocity v
+
+9
+00:00:20,340 --> 00:00:23,477
+nought and the time t Acceleration a
+
+10
+00:00:23,477 --> 00:00:26,377
+measures how much velocity changes each second
+
+11
+00:00:26,790 --> 00:00:29,740
+With constant acceleration the velocity after t
+
+12
+00:00:29,752 --> 00:00:32,277
+seconds is v nought plus a times
+
+13
+00:00:32,277 --> 00:00:32,614
+t
+
+14
+00:00:33,051 --> 00:00:36,138
+On a velocity time graph distance travelled
+
+15
+00:00:36,151 --> 00:00:38,914
+relates to the area underneath the graph
+
+16
+00:00:39,301 --> 00:00:42,701
+With constant acceleration displacement is v nought
+
+17
+00:00:42,701 --> 00:00:45,101
+times t plus a times t squared
+
+18
+00:00:45,114 --> 00:00:48,188
+divided by two This is signed displacement
+
+19
+00:00:48,638 --> 00:00:51,726
+its magnitude equals distance if the object
+
+20
+00:00:51,826 --> 00:00:53,213
+does not reverse direction
+
+21
+00:00:53,680 --> 00:00:55,617
+A cyclist moves at 2 metres per
+
+22
+00:00:55,617 --> 00:00:59,079
+second and accelerates at 1.5 metres per
+
+23
+00:00:59,092 --> 00:01:02,542
+second squared After four seconds the velocity
+
+24
+00:01:02,554 --> 00:01:06,054
+is 2 plus 1.5 times 4 that
+
+25
+00:01:06,054 --> 00:01:08,592
+is 8 metres per second The displacement
+
+26
+00:01:08,667 --> 00:01:11,530
+is 2 times 4 plus 1.5 times
+
+27
+00:01:11,530 --> 00:01:14,530
+4 squared divided by 2 that is
+
+28
+00:01:14,530 --> 00:01:17,792
+20 metres Check the average velocity is
+
+29
+00:01:17,804 --> 00:01:20,142
+5 metres per second so in four
+
+30
+00:01:20,142 --> 00:01:22,630
+seconds the cyclist travels 20 metres
+
+31
+00:01:23,092 --> 00:01:24,979
+Let’s solve task 1 from the National
+
+32
+00:01:24,992 --> 00:01:27,992
+Testing Center’s third variant collection The first
+
+33
+00:01:27,992 --> 00:01:30,204
+triangle has an area of 2 metres
+
+34
+00:01:30,630 --> 00:01:32,830
+The rectangle from one to three seconds
+
+35
+00:01:33,029 --> 00:01:35,592
+has an area of 8 metres The
+
+36
+00:01:35,592 --> 00:01:38,830
+last triangle adds another 2 metres The
+
+37
+00:01:38,830 --> 00:01:41,979
+total is 12 metres The collection’s answer
+
+38
+00:01:41,979 --> 00:01:43,880
+table also marks choice B
+
+39
+00:01:44,319 --> 00:01:48,257
+Remember with constant acceleration velocity changes by
+
+40
+00:01:48,257 --> 00:01:50,857
+the same amount every second First write
+
+41
+00:01:50,869 --> 00:01:53,394
+down the known values and units Then
+
+42
+00:01:53,394 --> 00:01:55,357
+choose an equation and check the answer
+
+43
+00:01:55,357 --> 00:01:57,107
+using the graph or the units

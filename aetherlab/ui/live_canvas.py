@@ -9,17 +9,16 @@ ARCHITECTURE NOTES
   (params, t_range, t_steps) — never on the viewport. Zoom/pan only changes the
   data→pixel affine map, which is re-applied each paint with vectorized numpy
   (no per-point Python loops for curves; see _np_to_qpolygonf).
-- NaN gaps: non-finite samples split a curve into separate polyline branches,
-  so asymptotes (e.g. 1/t) render as disconnected arms instead of a false
-  bridge across the discontinuity.
+- Gaps: non-finite and extreme off-screen samples split a curve into separate
+  polyline branches, so asymptotes (e.g. 1/t and tan(t)) do not become false
+  bridges across the discontinuity.
 - Trail lives in DATA space and is mapped at paint time, so it stays glued to
   the curve through zoom/pan.
 - Tracer advances by wall-clock time (QElapsedTimer): one sweep takes
   SWEEP_SECONDS regardless of frame rate or timer jitter.
 - All colors come from CANVAS_PALETTE, which mirrors the design tokens in
-  aetherlab/ui/style.py (bg #0A0A0F, panel #0D0D14, cyan #22D3EE, emerald
-  #10B981, violet #8B5CF6, amber #F59E0B, text #F8FAFC, muted #64748B,
-  grid #1E293B).
+  aetherlab/ui/style.py (blue-graphite surfaces, sky-blue primary accent,
+  emerald success, violet tertiary series, amber markers, and muted blue-gray text).
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from aetherlab.ui import icons
+from aetherlab.ui import icons, style
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
 
 require_qt()
@@ -45,24 +44,25 @@ SNAP_RADIUS_PX = 24.0  # hover snapping distance to a curve sample
 ZOOM_ANIM_MS = 120    # smooth-zoom animation duration
 FADE_IN_MS = 300      # first-paint fade duration
 
-# Mirrors aetherlab/ui/style.py design tokens — single source for every color
-# painted by this module. Update alongside style.py, never inline hex.
+# Resolve canvas colors from the same theme tokens as the rest of the app.
+# Keeping these semantic roles in one place prevents the graph from drifting
+# away from the selected Studio Light / custom palette.
 CANVAS_PALETTE: dict[str, str] = {
-    "bg_top": "#0F1520",
-    "bg_bottom": "#0A0A0F",
-    "grid": "#1E293B",
-    "grid_zero": "#334155",
-    "axis_text": "#475569",
-    "frame": "#334155",
-    "text_high": "#F8FAFC",
-    "text_mid": "#94A3B8",
-    "text_low": "#64748B",
-    "primary": "#22D3EE",     # cyan (v2 bright) — the driving/primary curve
-    "secondary": "#10B981",   # emerald — secondary curves
-    "tertiary": "#8B5CF6",    # violet — phase portraits / third series
-    "accent": "#F59E0B",      # amber — marked points, generic fallback
-    "reference": "#64748B",   # muted — dashed envelopes/references
-    "crosshair": "#334155",
+    "bg_top": style.BG_CANVAS_TOP,
+    "bg_bottom": style.BG_DEEPEST,
+    "grid": style.BORDER_HAIRLINE,
+    "grid_zero": style.BORDER_STRONG,
+    "axis_text": style.TEXT_LOW,
+    "frame": style.BORDER_STRONG,
+    "text_high": style.TEXT_HIGH,
+    "text_mid": style.TEXT_MID,
+    "text_low": style.TEXT_LOW,
+    "primary": style.CYAN,
+    "secondary": style.EMERALD,
+    "tertiary": style.VIOLET,
+    "accent": style.AMBER,
+    "reference": style.TEXT_LOW,
+    "crosshair": style.BORDER_STRONG,
 }
 
 # Colors handed out to secondary-role curves, in order.
@@ -168,8 +168,8 @@ def _pendulum_curves(params: dict[str, float]) -> list[CurveSpec]:
 
     def y_fn(t, p):
         g = p.get("gravity", 9.81)
-        L = p.get("length", 1.0)
-        omega = math.sqrt(g / max(L, 0.01))
+        length = p.get("length", 1.0)
+        omega = math.sqrt(g / max(length, 0.01))
         return np.sin(omega * t) * 0.8
 
     return [CurveSpec(name="θ(t)", x_fn=x_fn, y_fn=y_fn,
@@ -452,6 +452,29 @@ def _finite_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     starts = np.where(diffs == 1)[0]
     ends = np.where(diffs == -1)[0]
     return [(int(s), int(e)) for s, e in zip(starts, ends) if e - s >= 2]
+
+
+def _drawable_sample_mask(
+    px: np.ndarray, py: np.ndarray, plot_rect: QtCore.QRectF
+) -> np.ndarray:
+    """Reject non-finite points and extreme pixel spikes outside the viewport.
+
+    QPainter clips the final polyline, but a finite value close to an
+    asymptote can still be millions of pixels away. Connecting samples on
+    either side would draw a false chord through the visible plot. A
+    one-viewport overscan preserves segments that enter or leave the frame
+    while turning those spikes into gaps for ``_finite_runs`` to split.
+    """
+    finite = np.isfinite(px) & np.isfinite(py)
+    x_pad = max(float(plot_rect.width()), 1.0)
+    y_pad = max(float(plot_rect.height()), 1.0)
+    return (
+        finite
+        & (px >= plot_rect.left() - x_pad)
+        & (px <= plot_rect.right() + x_pad)
+        & (py >= plot_rect.top() - y_pad)
+        & (py <= plot_rect.bottom() + y_pad)
+    )
 
 
 class LiveCanvas(QtWidgets.QWidget):
@@ -1026,7 +1049,7 @@ class LiveCanvas(QtWidgets.QWidget):
                 idx, (np.array([]), np.array([]), np.array([]))
             )
             px, py = self._map_arrays(xs, ys, plot_rect)
-            mask = np.isfinite(px) & np.isfinite(py)
+            mask = _drawable_sample_mask(px, py, plot_rect)
             pixel_arrays[idx] = (px, py, mask)
             if curve.visible and curve.role != "reference":
                 finite_px = np.where(mask, px, np.nan)
@@ -1077,13 +1100,17 @@ class LiveCanvas(QtWidgets.QWidget):
         if not (self._state and self._state.fills and self._fill_samples):
             return
         for fill, (t, upper, lower) in zip(self._state.fills, self._fill_samples):
-            mask = np.isfinite(upper) & np.isfinite(lower) & np.isfinite(t)
+            upper_px, upper_py = self._map_arrays(t, upper, plot_rect)
+            lower_px, lower_py = self._map_arrays(t, lower, plot_rect)
+            mask = _drawable_sample_mask(upper_px, upper_py, plot_rect)
+            mask &= _drawable_sample_mask(lower_px, lower_py, plot_rect)
             for start, end in _finite_runs(mask):
-                ts = t[start:end]
-                ux, uy = self._map_arrays(ts, upper[start:end], plot_rect)
-                lx, ly = self._map_arrays(ts, lower[start:end], plot_rect)
-                poly_x = np.concatenate([ux, lx[::-1]])
-                poly_y = np.concatenate([uy, ly[::-1]])
+                poly_x = np.concatenate(
+                    [upper_px[start:end], lower_px[start:end][::-1]]
+                )
+                poly_y = np.concatenate(
+                    [upper_py[start:end], lower_py[start:end][::-1]]
+                )
                 polygon = _np_to_qpolygonf(poly_x, poly_y)
                 top = QtGui.QColor(fill.color)
                 top.setAlphaF(0.12)

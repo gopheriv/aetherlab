@@ -1,4 +1,4 @@
-"""Command-line entry point for AetherLab."""
+"""Command-line entry point for PhysLab (module-compatible with AetherLab)."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from aetherlab.services.pipeline import AetherLabPipeline
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="aetherlab",
-        description="Launch or smoke-test the AetherLab workbench.",
+        prog="physlab",
+        description="Launch or smoke-test the PhysLab physics learning workbench.",
     )
     parser.add_argument(
         "--smoke",
@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where to save the --pdf document (default: %(default)s).",
     )
     parser.add_argument(
-        "--version", action="version", version=f"AetherLab {__version__}"
+        "--version", action="version", version=f"PhysLab {__version__}"
     )
     return parser
 
@@ -95,7 +95,7 @@ def _setup_logging() -> None:
         root.addHandler(handler)
         if root.level > logging.INFO or root.level == logging.NOTSET:
             root.setLevel(logging.INFO)
-        logging.getLogger(__name__).info("AetherLab %s starting", __version__)
+        logging.getLogger(__name__).info("PhysLab %s starting", __version__)
     except Exception:  # noqa: BLE001 — logging must never block launch
         pass
 
@@ -105,7 +105,7 @@ async def _run_smoke(prompt: str) -> int:
     pipeline = AetherLabPipeline(settings=settings)
     result = await pipeline.run(ProblemRequest(prompt=prompt))
 
-    print("AetherLab smoke pipeline complete")
+    print("PhysLab smoke pipeline complete")
     print(f"Cache key: {result.cache_key}")
     print(f"Plan ({result.plan.model_name}): {', '.join(result.plan.enabled()) or 'none'}")
     print(f"Solver model: {result.solver.model_name}")

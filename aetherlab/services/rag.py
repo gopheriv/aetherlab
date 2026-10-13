@@ -23,9 +23,12 @@ class LocalVectorRag:
             return RagResult(keywords=[], hits=[], backend="none")
 
         chroma = self._try_chromadb(clean_keywords, limit)
-        if chroma is not None:
+        if chroma is not None and chroma.hits:
             return chroma
 
+        # A collection can exist and still contain no pages relevant to this
+        # language/query. An empty vector result must not suppress the local
+        # textbook search, which may see files that have not been indexed yet.
         return self._filesystem_search(clean_keywords, limit)
 
     def _try_chromadb(self, keywords: list[str], limit: int) -> RagResult | None:
@@ -79,11 +82,27 @@ class LocalVectorRag:
 
     def _filesystem_search(self, keywords: list[str], limit: int) -> RagResult:
         root = self.settings.library_path
-        if not root.exists():
+        paths = (
+            {
+                path for path in root.rglob("*")
+                if path.is_file() and path.suffix.lower() in (TEXT_SUFFIXES | PDF_SUFFIXES)
+            }
+            if root.exists()
+            else set()
+        )
+        reference_root = getattr(self.settings, "reference_sources_path", None)
+        if reference_root:
+            try:
+                from aetherlab.services.reference_catalog import searchable_reference_files
+
+                paths.update(searchable_reference_files(reference_root))
+            except Exception:  # noqa: BLE001 - local fallback must remain available
+                pass
+        if not paths:
             return RagResult(keywords=keywords, hits=[], backend="filesystem-missing-library")
 
         hits: list[RagHit] = []
-        for path in sorted(root.rglob("*")):
+        for path in sorted(paths, key=lambda item: str(item).casefold()):
             if len(hits) >= limit * 3:
                 break
             if path.suffix.lower() in TEXT_SUFFIXES:

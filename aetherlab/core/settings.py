@@ -75,6 +75,9 @@ class AppSettings:
     provider_source: str = "environment"
     api_key_source: str = "none"
     provider_warning: str = ""
+    # Optional local source folder. Only catalogued textbooks and theory
+    # references are added to the RAG index; exam packs stay separate.
+    reference_sources_path: Path | None = None
 
 
 OLLAMA_OPENAI_BASE_URL = "http://localhost:11434/v1"
@@ -123,6 +126,14 @@ def save_app_config(values: dict[str, str | None]) -> Path:
     return path
 
 
+def save_reference_sources_path(path: str | Path) -> Path:
+    """Save a valid local textbook/mock folder without touching its contents."""
+    root = Path(path).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Reference sources folder does not exist: {root}")
+    return save_app_config({"reference_sources_path": str(root)})
+
+
 def load_settings() -> AppSettings:
     # app_config_path() keys off env/default only, so honoring app_cfg's own
     # data_dir override here is safe (no recursion) and lets the Settings
@@ -143,6 +154,17 @@ def load_settings() -> AppSettings:
             else data_dir / "library"
         ),
     )
+    reference_sources_value = (
+        os.getenv("AETHERLAB_REFERENCE_SOURCES")
+        or app_cfg.get("reference_sources_path")
+    )
+    reference_sources_path = (
+        Path(reference_sources_value).expanduser()
+        if reference_sources_value
+        else Path.home() / "Projects" / "References"
+    )
+    if not reference_sources_path.is_dir():
+        reference_sources_path = None
     # The ~/.qwen autoload is a developer-machine convenience: a student's app
     # must never silently inherit provider credentials from an unrelated tool.
     # Opt back in with AETHERLAB_QWEN_AUTOLOAD=1.
@@ -222,6 +244,7 @@ def load_settings() -> AppSettings:
         cache_path=cache_path,
         chroma_path=chroma_path,
         library_path=library_path,
+        reference_sources_path=reference_sources_path,
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,

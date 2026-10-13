@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import OutputPlan, PipelineResult, ProblemRequest, SceneBundle
+from aetherlab.core.models import PipelineResult, ProblemRequest, SceneBundle
 from aetherlab.core.settings import AppSettings, load_settings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
@@ -101,7 +101,8 @@ class AetherLabPipeline:
             # render-time API errors get a bounded LLM self-repair pass.
             if scene.status == "compiled":
                 scene = await manim.render_scene_with_repair(
-                    scene, self.settings, brief=request.prompt
+                    scene, self.settings, brief=request.prompt,
+                    duration_target_s=request.duration_target_s,
                 )
                 self.cache.store_scene(key, scene)
 

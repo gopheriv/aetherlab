@@ -1,52 +1,61 @@
-"""AetherLab QSS — generated from the design system tokens.
+"""PhysLab QSS — shared UNT student palette and component styles.
 
 Source of truth: design/tokens/{colors,spacing,typography}.css and
-design/readme.md (Visual foundations). Palette: "engineering blueprint /
-dark lab". Fonts per the design's substitution note: Segoe UI (UI) and
-Cascadia Code (mono) are the native-Windows targets.
+design/readme.md. Palette: cool white, muted steel blue, mint, and apricot. Fonts:
+Segoe UI (UI) and Cascadia Code (mono) on Windows.
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+from aetherlab.ui.theme import Theme
+
+_UI_ASSETS = Path(__file__).resolve().parents[2] / "assets" / "ui"
+_CHEVRON = (_UI_ASSETS / "chevron-down.svg").as_posix()
+_CHECK = (_UI_ASSETS / "check.svg").as_posix()
+
 # ── Color tokens (design/tokens/colors.css) ──
-BG_DEEPEST = "#0A0A0F"
-BG_PANEL_1 = "#0D0D14"
-BG_PANEL_2 = "#13131A"
-BG_CANVAS_TOP = "#0F1520"
-STAGE = "#000000"        # v2: true-black screening-room letterbox
-ELEV = "#181822"         # v2: elevated controls / segmented fills
-HOVER_SURFACE = "#1C1C27"  # v2: hover surface
-LINE_0 = "#141A24"       # v2: faintest divider
-SURFACE_INPUT = "#0B0B12"
-SURFACE_INPUT_FOCUS = "#0E0E17"
+_STUDY = Theme()
+BG_DEEPEST = _STUDY.bg
+BG_PANEL_1 = _STUDY.surface
+BG_PANEL_2 = _STUDY.surface_alt
+BG_CANVAS_TOP = _STUDY.bg_deep
+STAGE = _STUDY.bg
+ELEV = _STUDY.bg_deep
+HOVER_SURFACE = _STUDY.accent_soft
+LINE_0 = _STUDY.border
+SURFACE_INPUT = _STUDY.surface_input
+SURFACE_INPUT_FOCUS = _STUDY.accent_soft
 
-BORDER_HAIRLINE = "#1E293B"
-BORDER_STRONG = "#334155"
+BORDER_HAIRLINE = _STUDY.border
+BORDER_STRONG = _STUDY.border_strong
 
-TEXT_HIGH = "#F8FAFC"
-TEXT_MID = "#94A3B8"
-TEXT_LOW = "#64748B"
-TEXT_ON_ACCENT = "#04141A"
+TEXT_HIGH = _STUDY.text_bright
+TEXT_MID = _STUDY.text_soft
+TEXT_LOW = _STUDY.text_dim
+TEXT_ON_ACCENT = "#FFFFFF"
 
-CYAN = "#22D3EE"          # v2 primary (v1 #06B6D4 kept as CYAN_DEEP)
-CYAN_DEEP = "#06B6D4"     # fills, spines, pressed states
-CYAN_HOVER = "#67E8F9"
-CYAN_ACTIVE = "#06B6D4"
-CYAN_TINT_10 = "rgba(34, 211, 238, 0.10)"
-CYAN_TINT_20 = "rgba(34, 211, 238, 0.20)"
+CYAN = _STUDY.accent
+CYAN_DEEP = _STUDY.accent_deep
+CYAN_HOVER = _STUDY.accent_hover
+CYAN_ACTIVE = _STUDY.accent_pressed
+CYAN_TINT_10 = "rgba(72, 106, 145, 0.12)"
+CYAN_TINT_20 = "rgba(72, 106, 145, 0.20)"
 
-EMERALD = "#10B981"
-EMERALD_TINT_10 = "rgba(16, 185, 129, 0.10)"
-VIOLET = "#8B5CF6"
-VIOLET_TINT_10 = "rgba(139, 92, 246, 0.10)"
-AMBER = "#F59E0B"
-AMBER_TINT_10 = "rgba(245, 158, 11, 0.10)"
-ROSE = "#F43F5E"
-ROSE_HOVER = "#FB7185"
-ROSE_TINT_10 = "rgba(244, 63, 94, 0.10)"
+EMERALD = _STUDY.success
+EMERALD_TINT_10 = "rgba(38, 114, 92, 0.12)"
+VIOLET = _STUDY.curve3
+VIOLET_TINT_10 = "rgba(83, 111, 144, 0.12)"
+AMBER = _STUDY.warning
+AMBER_TINT_10 = "rgba(138, 90, 36, 0.12)"
+ROSE = _STUDY.error
+ROSE_HOVER = _STUDY.error_deep
+ROSE_TINT_10 = "rgba(172, 64, 85, 0.12)"
 
-FONT_UI = "DejaVu Sans"
-FONT_MONO = "DejaVu Sans"
+FONT_UI = "Segoe UI" if sys.platform == "win32" else "DejaVu Sans"
+FONT_MONO = "Cascadia Code" if sys.platform == "win32" else "DejaVu Sans"
 
 
 AETHERLAB_QSS = f"""
@@ -59,15 +68,15 @@ QMainWindow#MainWindow, QWidget#Root {{
 QWidget {{
     font-family: {FONT_UI};
     font-size: 13px;
-    color: {TEXT_MID};
+    color: {TEXT_HIGH};
 }}
 
 QToolTip {{
     background-color: {BG_PANEL_2};
     color: {TEXT_HIGH};
     border: 1px solid {BORDER_STRONG};
-    border-radius: 4px;
-    padding: 5px 8px;
+    border-radius: 8px;
+    padding: 7px 10px;
     font-size: 11px;
 }}
 
@@ -82,7 +91,7 @@ QStatusBar {{
 /* ═══════════════ Title bar ═══════════════ */
 
 QWidget#TitleBar {{
-    background-color: {BG_DEEPEST};
+    background-color: {BG_PANEL_1};
     border-bottom: 1px solid {BORDER_HAIRLINE};
 }}
 
@@ -96,12 +105,12 @@ QLabel#TitleWordmark {{
 QToolButton#TitleIconButton {{
     background: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 5px;
+    border-radius: 9px;
+    padding: 7px;
 }}
 QToolButton#TitleIconButton:hover {{ background-color: {HOVER_SURFACE}; }}
 
-/* ═══════════════ Nav rail ═══════════════ */
+/* ═══════════════ Student navigation ═══════════════ */
 
 QWidget#NavRail {{
     background-color: {BG_PANEL_1};
@@ -111,32 +120,34 @@ QWidget#NavRail {{
 QToolButton#NavRailItem {{
     background: transparent;
     border: none;
-    border-radius: 8px;
-    color: {TEXT_MID};
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.3px;
-    padding: 8px 2px;
+    border-radius: 14px;
+    color: {TEXT_LOW};
+    font-size: 10px;
+    font-weight: 600;
+    padding: 6px 2px;
+    text-align: center;
 }}
-QToolButton#NavRailItem:hover {{ background-color: {HOVER_SURFACE}; }}
+QToolButton#NavRailItem[expanded="true"] {{ font-size: 13px; text-align:left; padding: 7px 12px; }}
+QToolButton#NavRailItem:hover {{ background-color: {HOVER_SURFACE}; color: {CYAN}; }}
 QToolButton#NavRailItem:checked {{
-    background-color: {CYAN_TINT_10};
-    color: {CYAN};
+    background-color: {HOVER_SURFACE};
+    color: {CYAN_DEEP};
 }}
-QToolButton#NavRailItem:disabled {{ color: #3D4B5F; }}
+QToolButton#NavRailItem:disabled {{ color: {TEXT_LOW}; }}
+QToolButton#NavRailItem:focus {{ border: 2px solid #335F92; }}
 
 /* ═══════════════ Workspace panels & cards ═══════════════ */
 
 QFrame#CardFrame {{
     background-color: {BG_PANEL_2};
     border: 1px solid {BORDER_HAIRLINE};
-    border-radius: 12px;
+    border-radius: 16px;
 }}
 
 QFrame#CanvasFrame {{
     background-color: {BG_CANVAS_TOP};
     border: 1px solid {BORDER_HAIRLINE};
-    border-radius: 12px;
+    border-radius: 16px;
 }}
 
 QLabel#PanelTitle {{
@@ -180,7 +191,7 @@ QLabel#KeywordChip {{
 }}
 
 QLabel#EmptyHint {{
-    color: #475569;
+    color: #65758A;
     font-size: 12px;
     padding: 24px;
 }}
@@ -218,12 +229,13 @@ QPushButton#DangerButton:hover {{ background-color: {ROSE_TINT_10}; }}
 
 QPushButton#SecondaryButton {{
     background-color: {BG_PANEL_2};
-    color: {TEXT_HIGH};
+    color: {TEXT_MID};
     border: 1px solid {BORDER_STRONG};
+    border-radius: 9px;
     padding: 8px 14px;
     font-size: 12.5px;
 }}
-QPushButton#SecondaryButton:hover {{ border-color: {CYAN}; }}
+QPushButton#SecondaryButton:hover {{ background-color: {HOVER_SURFACE}; border-color: {CYAN}; }}
 
 QPushButton#GhostButton {{
     background: transparent;
@@ -248,13 +260,15 @@ QPushButton#LinkButton:hover {{ color: {CYAN_HOVER}; }}
 QPushButton#ExampleChip {{
     background-color: {BG_PANEL_2};
     border: 1px solid {BORDER_HAIRLINE};
-    border-radius: 12px;
-    color: {TEXT_HIGH};
+    border-radius: 14px;
+    color: {TEXT_MID};
     font-size: 12.5px;
     font-weight: 400;
-    padding: 10px 16px;
+    padding: 17px 14px;
+    text-align: left;
 }}
-QPushButton#ExampleChip:hover {{ border-color: {CYAN}; }}
+QPushButton#ExampleChip:hover {{ background: {HOVER_SURFACE}; border-color: {CYAN}; color: {CYAN_DEEP}; }}
+QPushButton#ExampleChip[compact="true"] {{ padding: 9px 12px; }}
 
 /* Run / Cancel in the command bar */
 QPushButton#RunButton {{
@@ -393,6 +407,24 @@ QDoubleSpinBox {{
 QDoubleSpinBox:focus {{ border-color: {CYAN}; }}
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 0; }}
 
+QSpinBox, QDateEdit {{
+    background-color: {SURFACE_INPUT};
+    border: 1px solid {BORDER_HAIRLINE};
+    border-radius: 8px;
+    color: {TEXT_HIGH};
+    padding: 7px 9px;
+    font-size: 12.5px;
+}}
+QSpinBox:focus, QDateEdit:focus {{
+    border-color: {CYAN};
+    background-color: {SURFACE_INPUT_FOCUS};
+}}
+QSpinBox::up-button, QSpinBox::down-button, QDateEdit::drop-down {{
+    width: 18px;
+    border: none;
+    background-color: {BG_PANEL_2};
+}}
+
 QCheckBox {{
     color: {TEXT_MID};
     font-size: 12px;
@@ -523,6 +555,7 @@ QScrollBar::handle:vertical {{
 }}
 QScrollBar::handle:vertical:hover {{ background: {TEXT_LOW}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QScrollBar:horizontal {{
     background: transparent;
     height: 10px;
@@ -534,6 +567,7 @@ QScrollBar::handle:horizontal {{
     min-width: 30px;
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 
 /* ═══════════════ Dialogs ═══════════════ */
 
@@ -548,10 +582,10 @@ QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
 
 /* ═══════════════ Focus rings (v2 §9: keyboard-first) ═══════════════ */
-/* A visible 1.5px cyan outline on every focusable control. */
+/* A visible 1.5px blue focus outline on every focusable control. */
 QComboBox:focus {{ border: 1.5px solid {CYAN}; }}
 QCheckBox:focus {{ outline: none; }}
-QCheckBox:focus::indicator {{ border: 1.5px solid {CYAN}; }}
+QCheckBox::indicator:focus {{ border: 1.5px solid {CYAN}; }}
 QPushButton#SecondaryButton:focus,
 QPushButton#GhostButton:focus,
 QPushButton#RunButton:focus,
@@ -562,23 +596,20 @@ QSlider:focus {{ background: transparent; }}
 QSlider:focus::handle:horizontal {{ border: 2px solid {CYAN_HOVER}; }}
 
 /* ═══════════════ Command-bar focus filament ═══════════════ */
-/* The shell lifts to a cyan hairline while the prompt is focused. */
+/* The shell lifts to a blue hairline while the prompt is focused. */
 QFrame#CommandBarShell[focused="true"] {{
     border: 1px solid {CYAN};
     background-color: {ELEV};
 }}
 
-/* ═════════════ Precision-instrument refinement pass ═════════════ */
-/* The appended rules intentionally override the older v2 base above. They keep
-   the cyan/math/stage DNA while tightening radius, focus, tabs, and telemetry
-   surfaces across widgets that still relied on platform defaults. */
+/* ═════════════ Shared component refinements ═════════════ */
 
 QFrame#CardFrame,
 QFrame#AnalysisCard,
 QFrame#CanvasFrame,
 QFrame#ListShell,
 QFrame#VideoControlsBar {{
-    border-radius: 8px;
+    border-radius: 16px;
     background-color: {BG_PANEL_2};
     border: 1px solid {LINE_0};
 }}
@@ -604,11 +635,59 @@ QWidget#RunningStatusStrip {{
     border-top: 1px solid {LINE_0};
 }}
 
+QLabel#EmptyStateHeadline {{
+    color: {TEXT_HIGH};
+    font-size: 27px;
+    font-weight: 700;
+}}
+QLabel#EmptyStateSubtitle {{
+    color: {TEXT_MID};
+    font-size: 14px;
+}}
+QFrame#ENTLaunchCard {{
+    background-color: {BG_PANEL_2};
+    border: 1px solid {BORDER_STRONG};
+    border-radius: 15px;
+}}
+QLabel#ENTLaunchMark {{
+    background-color: {CYAN_TINT_10};
+    border: 1px solid {BORDER_STRONG};
+    border-radius: 11px;
+}}
+QLabel#ENTLaunchTitle {{
+    color: {TEXT_HIGH};
+    font-size: 14px;
+    font-weight: 700;
+}}
+QLabel#ENTLaunchSubtitle {{
+    color: {TEXT_MID};
+    font-size: 11px;
+}}
+QPushButton#ENTPracticeButton {{
+    background-color: {CYAN};
+    color: {TEXT_ON_ACCENT};
+    border: 1px solid {CYAN};
+    border-radius: 9px;
+    padding: 8px 14px;
+    font-weight: 700;
+}}
+QPushButton#ENTPracticeButton:hover {{
+    background-color: {CYAN_HOVER};
+    border-color: {CYAN_HOVER};
+}}
+QPushButton#ENTPracticeButton:pressed {{
+    background-color: {CYAN_DEEP};
+    border-color: {CYAN_DEEP};
+}}
+QPushButton#ENTPracticeButton:focus {{
+    border: 2px solid {CYAN_HOVER};
+}}
+
 QFrame#SetupStrip,
 QFrame#LibraryEmptyState {{
     background-color: {BG_PANEL_1};
     border: 1px dashed {BORDER_STRONG};
-    border-radius: 8px;
+    border-radius: 14px;
 }}
 
 QWidget#BlueprintBackdrop {{
@@ -619,7 +698,7 @@ QLabel#EquationBanner {{
     background-color: {STAGE};
     border: 1px solid {CYAN_TINT_20};
     border-bottom: 2px solid {CYAN_DEEP};
-    border-radius: 8px;
+    border-radius: 12px;
     color: {CYAN};
     font-family: {FONT_MONO};
     font-size: 18px;
@@ -645,7 +724,7 @@ QPushButton#ExampleChip:hover {{
 }}
 
 QPushButton#PillTab {{
-    border-radius: 8px;
+    border-radius: 12px;
     background-color: {BG_PANEL_1};
     padding: 7px 14px;
 }}
@@ -656,7 +735,7 @@ QPushButton#PillTab:checked {{
 }}
 
 QFrame#CommandBarShell {{
-    border-radius: 8px;
+    border-radius: 14px;
     background-color: {ELEV};
     border-color: {BORDER_HAIRLINE};
 }}
@@ -728,9 +807,9 @@ QListWidget::item:selected {{
 }}
 
 QToolButton#CanvasExportButton {{
-    background-color: rgba(24, 24, 34, 0.72);
-    border: 1px solid {LINE_0};
-    border-radius: 7px;
+    background-color: {BG_PANEL_1};
+    border: 1px solid {BORDER_HAIRLINE};
+    border-radius: 9px;
 }}
 QToolButton#CanvasExportButton:hover {{
     border-color: {CYAN};
@@ -741,4 +820,28 @@ QFrame#ErrorBanner {{
     background-color: {ROSE_TINT_10};
     border-bottom: 2px solid {ROSE};
 }}
+
+/* Study studio shell */
+QComboBox::down-arrow, QDateEdit::down-arrow {{ image: url("{_CHEVRON}"); width: 14px; height: 14px; }}
+QCheckBox::indicator:checked {{ image: url("{_CHECK}"); }}
+QPushButton#SecondaryButton:disabled {{ color: #8292A5; background: #F1EFF5; border-color: #D8E1EC; }}
+QDialog#ENTPracticeDialog {{ background: #F4F7FB; }}
+QLabel#EmptyStateHeadline {{ color: #18283D; font-size: 30px; font-weight: 700; }}
+QLabel#EmptyStateHeadline[compact="true"] {{ font-size: 26px; }}
+QLabel#EmptyStateSubtitle {{ color: #65758A; font-size: 14px; }}
+QFrame#ENTLaunchCard {{ background: #E9EFF7; border: none; border-radius: 16px; }}
+QLabel#ENTLaunchTitle {{ color: #304A69; font-size: 14px; font-weight: 700; }}
+QLabel#ENTLaunchSubtitle {{ color: #53647A; font-size: 11px; }}
+QLabel#ENTLaunchMark {{ background: #FFFFFF; border: none; border-radius: 12px; }}
+QWidget#CommandBarDock {{ background: #F4F7FB; border: none; }}
+QFrame#CommandBarShell {{ background: #FFFFFF; border: 1px solid #A5B6CB; border-radius: 18px; }}
+QLineEdit#CommandInput {{ background: transparent; border: none; padding: 12px 6px; font-size: 14px; }}
+QComboBox {{ background: #EDF2F8; border: 1px solid #D8E1EC; border-radius: 9px; padding: 7px 12px; }}
+QLineEdit#TopicSearch {{ background: #FFFFFF; border: 1px solid #D8E1EC; border-radius: 12px;
+    padding: 12px 16px; min-height: 20px; }}
+QPushButton#PracticeMode {{ background: #FFFFFF; border: 1px solid #D8E1EC; border-radius: 12px;
+    color: #53647A; padding: 16px; font-size: 14px; font-weight: 600; }}
+QPushButton#PracticeMode:checked {{ background: #E9EFF7; color: #304A69; border: 2px solid #486A91; }}
+QPushButton#PracticeMode:hover {{ border-color: #335F92; }}
+QPushButton:disabled {{ color: #8292A5; background: #F1EFF5; border-color: #D8E1EC; }}
 """

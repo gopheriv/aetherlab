@@ -11,7 +11,7 @@ explicitly disallowed for the installed ManimCE target):
 1. ``lint_manim_names``  — unknown top-level names (classic ManimGL leftovers
    like ``ShowCreation``/``TexMobject`` that NameError at render).
 2. ``lint_constructor_kwargs`` — keyword args that the target class's
-   ``__init__`` provably does not accept (no ``**kwargs`` escape hatch).
+   ``__init__`` chain, when every ``**kwargs`` hop visibly forwards to a strict base.
 3. ``lint_manim_method_kwargs`` — kwargs for direct calls on statically known
    Manim objects, when the installed method signature is conclusive.
 4. ``lint_forbidden_manimgl`` — legacy constructs that must not be generated.
@@ -31,8 +31,9 @@ repeated same-coordinate placement without cleanup, object accumulation,
 stale copies, abrupt ``self.clear()``, and dominant unstyled grids. These are
 advisory because some advanced scenes intentionally keep ghost overlays/trails.
 
-``validate_scene`` bundles the three hard checks into one verdict. Duration and
-scene hygiene are advisory-only (fallback templates are deliberately short).
+``validate_scene`` bundles the hard static and animation-safety checks into one
+verdict. Duration and scene hygiene are advisory-only (fallback templates are
+deliberately short).
 
 Leaf module: stdlib + (lazily) the installed manim for ground truth.
 """
@@ -43,9 +44,12 @@ import ast
 import builtins
 import inspect
 import io
+import math
 import re
+import textwrap
 import tokenize
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 # ── shared AST helpers ──────────────────────────────────────────────────────
 
@@ -136,6 +140,158 @@ def check_updater_animation_conflicts(code: str) -> list[str]:
             f"[MANIM:UPDATER_ANIMATE] {name} is animated in self.play while it has "
             "an updater; animate its controlling ValueTracker or clear the updater first."
             for name in sorted(conflicts)
+        ]
+    return []
+
+
+def check_dynamic_numeric_fade_conflicts(code: str) -> list[str]:
+    """Catch live numeric readouts whose family changes during an entrance.
+
+    A DecimalNumber/Integer can gain or lose glyph submobjects as an updater
+    changes its ValueTracker. If it is also shown in that same ``self.play``,
+    Manim interpolates the old and new families and raises a zip-length
+    ValueError. Fade the readout in during an earlier call, then animate its
+    tracker separately.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return []
+    for cls in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+        construct = next(
+            (
+                node for node in cls.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "construct"
+            ),
+            None,
+        )
+        if construct is None:
+            continue
+
+        numeric_names: set[str] = set()
+        for node in ast.walk(construct):
+            targets: list[ast.expr] = []
+            value: ast.expr | None = None
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            if not isinstance(value, ast.Call) or _call_name(value.func).split(".")[-1] not in {
+                "DecimalNumber", "Integer",
+            }:
+                continue
+            numeric_names.update(
+                target.id for target in targets if isinstance(target, ast.Name)
+            )
+
+        container_members: dict[str, set[str]] = {}
+        for node in ast.walk(construct):
+            targets: list[ast.expr] = []
+            value: ast.expr | None = None
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            if value is None:
+                continue
+            group_calls = [
+                call for call in ast.walk(value)
+                if isinstance(call, ast.Call)
+                and _call_name(call.func).split(".")[-1] in {"Group", "VGroup"}
+            ]
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if group_calls:
+                    container_members.setdefault(target.id, set()).update(
+                        item.id
+                        for call in group_calls
+                        for argument in call.args
+                        for item in ast.walk(argument)
+                        if isinstance(item, ast.Name)
+                    )
+
+        for node in ast.walk(construct):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"add", "add_to_back", "add_to_front"}
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in container_members
+            ):
+                continue
+            container_members[node.func.value.id].update(
+                item.id
+                for argument in node.args
+                for item in ast.walk(argument)
+                if isinstance(item, ast.Name)
+            )
+
+        controllers: dict[str, set[str]] = {}
+        for node in ast.walk(construct):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_updater"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in numeric_names
+            ):
+                continue
+            tracker_names = {
+                access.value.id
+                for argument in node.args
+                for access in ast.walk(argument)
+                if isinstance(access, ast.Attribute)
+                and access.attr == "get_value"
+                and isinstance(access.value, ast.Name)
+            }
+            if tracker_names:
+                controllers[node.func.value.id] = tracker_names
+
+        conflicts: set[tuple[str, str]] = set()
+        for node in ast.walk(construct):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "play"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+            ):
+                continue
+            names_in_play = {
+                item.id for item in ast.walk(node) if isinstance(item, ast.Name)
+            }
+            animated_trackers = {
+                item.value.id
+                for item in ast.walk(node)
+                if isinstance(item, ast.Attribute)
+                and item.attr == "animate"
+                and isinstance(item.value, ast.Name)
+            }
+            shown_readouts = set(controllers) & names_in_play
+            pending_containers = list(container_members.keys() & names_in_play)
+            inspected_containers: set[str] = set()
+            while pending_containers:
+                container = pending_containers.pop()
+                if container in inspected_containers:
+                    continue
+                inspected_containers.add(container)
+                members = container_members[container]
+                shown_readouts.update(members & set(controllers))
+                pending_containers.extend(
+                    (members & container_members.keys()) - inspected_containers
+                )
+            for readout, tracker_names in controllers.items():
+                active_trackers = tracker_names & animated_trackers
+                if readout in shown_readouts and active_trackers:
+                    conflicts.add((readout, ", ".join(sorted(active_trackers))))
+
+        return [
+            f"[MANIM:DYNAMIC_NUMBER_FADE] {readout} is shown while its changing "
+            f"ValueTracker ({trackers}) is animated in the same self.play; fade "
+            "the readout in first, then animate the tracker to avoid mismatched "
+            "mobject families."
+            for readout, trackers in sorted(conflicts)
         ]
     return []
 
@@ -419,13 +575,98 @@ def motion_contract_issues(code: str) -> list[str]:
 # ── 2. constructor-kwarg lint ───────────────────────────────────────────────
 
 
-def lint_constructor_kwargs(code: str) -> list[str]:
-    """Flag kwargs a Manim class constructor provably does not accept.
+def _forwards_var_keyword_to_super(init, parameter_name: str) -> bool:
+    """Prove an initializer directly forwards its **kwargs to super().__init__."""
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(init)))
+    except (OSError, TypeError, SyntaxError):
+        return False
+    initializer = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ),
+        None,
+    )
+    if initializer is None:
+        return False
+    for statement in initializer.body:
+        expression = None
+        if isinstance(statement, ast.Expr):
+            expression = statement.value
+        elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Return)):
+            expression = statement.value
+        if not isinstance(expression, ast.Call):
+            continue
+        receiver = expression.func.value if isinstance(expression.func, ast.Attribute) else None
+        if not (
+            isinstance(expression.func, ast.Attribute)
+            and expression.func.attr == "__init__"
+            and isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Name)
+            and receiver.func.id == "super"
+        ):
+            continue
+        if any(
+            keyword.arg is None
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == parameter_name
+            for keyword in expression.keywords
+        ):
+            return True
+    return False
 
-    Conservative: only checks direct ``ClassName(...)`` calls where ClassName
-    resolves to a class in the installed manim whose ``__init__`` has **no**
-    ``**kwargs`` catch-all. Anything with a catch-all is skipped (most Manim
-    mobjects forward kwargs), so false positives are structurally impossible.
+
+@lru_cache(maxsize=512)
+def _constructor_keyword_surface(cls) -> set[str] | None:
+    """Return accepted keyword names if a **kwargs chain ends at a strict base.
+
+    Manim often forwards styling keywords through several constructors. Only
+    follow a catch-all when its source directly calls ``super().__init__(**kwargs)``;
+    if source or forwarding is ambiguous, leave the class unchecked.
+    """
+    accepted: set[str] = set()
+    for base in inspect.getmro(cls):
+        if base is object:
+            break
+        init = base.__dict__.get("__init__")
+        if init is None:
+            continue
+        try:
+            params = inspect.signature(init).parameters
+        except (ValueError, TypeError):
+            return None
+        accepted.update(
+            parameter.name
+            for parameter in params.values()
+            if parameter.name not in {"self", "cls"}
+            and parameter.kind in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        )
+        var_keyword = next(
+            (
+                parameter
+                for parameter in params.values()
+                if parameter.kind is inspect.Parameter.VAR_KEYWORD
+            ),
+            None,
+        )
+        if var_keyword is None:
+            return accepted
+        if not _forwards_var_keyword_to_super(init, var_keyword.name):
+            return None
+    return None
+
+
+def lint_constructor_kwargs(code: str) -> list[str]:
+    """Flag kwargs a Manim constructor chain provably does not accept.
+
+    Direct class calls are checked against the installed Manim signatures.
+    Forwarded ``**kwargs`` chains are checked only when each step is visible in
+    Python source and ends at an initializer without a catch-all.
     """
     tree = _parse(code)
     if tree is None:
@@ -442,14 +683,9 @@ def lint_constructor_kwargs(code: str) -> list[str]:
         cls = getattr(manim, node.func.id, None)
         if not inspect.isclass(cls):
             continue
-        try:
-            sig = inspect.signature(cls.__init__)
-        except (ValueError, TypeError):
-            continue
-        params = sig.parameters
-        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-            continue  # **kwargs catch-all — can't prove anything wrong
-        accepted = {name for name in params if name != "self"}
+        accepted = _constructor_keyword_surface(cls)
+        if accepted is None:
+            continue  # cannot prove that unknown kwargs reach a strict base
         for kw in node.keywords:
             if kw.arg is not None and kw.arg not in accepted:
                 issues.append(
@@ -1341,9 +1577,51 @@ def scene_hygiene_warnings(code: str) -> list[str]:
 
 _TIMED_BEAT_MARKER_RE = re.compile(
     # A<act>.B<n> in single scenes; S<segment>.B<n> in long-video segments.
-    r"(?m)^\s*#\s*BEAT\s+([AS]\d+\.B\d+)\s*\|\s*"
-    r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*s\s*$"
+    r"(?m)^[ \t]*#[ \t]*BEAT[ \t]+([AS]\d+\.B\d+)[ \t]*\|[ \t]*"
+    r"(\d+(?:\.\d+)?)[ \t]*-[ \t]*(\d+(?:\.\d+)?)[ \t]*s[ \t]*\r?$"
 )
+
+
+def normalize_timeline_markers(code: str, timeline: list[dict] | None) -> str:
+    """Canonicalize beat labels/windows when generated marker count is exact.
+
+    Models occasionally duplicate or permute otherwise correctly placed marker
+    comments. The source order still follows the visual actions, so when there
+    is exactly one marker slot per scheduled event we can safely restore the
+    canonical IDs and timestamps without moving or editing any animation.
+    Missing/extra marker slots are ambiguous and remain for the normal repair
+    path to handle.
+    """
+    if not isinstance(timeline, list) or not timeline:
+        return code
+    expected: list[tuple[str, float, float]] = []
+    for event in timeline:
+        if not isinstance(event, dict) or not event.get("id"):
+            continue
+        beat_id = str(event["id"])
+        if not re.fullmatch(r"[AS]\d+\.B\d+", beat_id):
+            return code
+        try:
+            start_s = float(event["start_s"])
+            end_s = float(event["end_s"])
+        except (KeyError, TypeError, ValueError):
+            return code
+        if not math.isfinite(start_s) or not math.isfinite(end_s) or end_s < start_s:
+            return code
+        expected.append((beat_id, start_s, end_s))
+
+    markers = list(_TIMED_BEAT_MARKER_RE.finditer(code))
+    if not expected or len(markers) != len(expected):
+        return code
+
+    normalized = code
+    for match, (beat_id, start_s, end_s) in reversed(list(zip(markers, expected, strict=True))):
+        indent_match = re.match(r"[ \t]*", match.group(0))
+        indent = indent_match.group(0) if indent_match else ""
+        line_ending = "\r" if match.group(0).endswith("\r") else ""
+        canonical = f"# BEAT {beat_id} | {start_s:.2f}-{end_s:.2f} s{line_ending}"
+        normalized = normalized[:match.start()] + indent + canonical + normalized[match.end():]
+    return normalized
 
 
 def restore_beat_markers(original: str, repaired: str) -> str:
@@ -1730,6 +2008,7 @@ def validate_scene(
         + check_timeline_markers(code, timeline)
         + check_timeline_runtime(code, timeline)
         + check_updater_animation_conflicts(code)
+        + check_dynamic_numeric_fade_conflicts(code)
     )
     if require_motion:
         issues.extend(motion_contract_issues(code))

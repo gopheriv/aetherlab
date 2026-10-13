@@ -1,14 +1,21 @@
 # AetherLab — Phase 2 Error Log
 
-Testing method: `test_features.py` exercises all 214 catalogued features
-(headless logic, offscreen-Qt widget construction, and source assertions).
-**Automated result: 214/214 pass at the behavioural/happy-path level.**
+Testing method: `test_features.py` exercises all 231 catalogued features
+(headless logic, offscreen-Qt interactions, integration paths, and source assertions).
+**Automated result (2026-10-09): 231/231 feature checks passed, 217 pytest cases passed, and strict visual regression passed 7/7.**
 
 Green happy-path tests do not prove the absence of defects, so this log records
 the logistical/UX errors found by close code review of paths the happy-path
 tests don't reach. Each is fixed in Phase 3 and re-verified in Phase 4. The
 canonical tracker's per-story `Phase-2 result` / `Phase-4 result` columns record
-the full user-story audit (161 PASS / 4 PARTIAL / 3 FAIL-fixed at Phase 2).
+the full user-story audit (Phase 2: 220 PASS / 8 FAIL-fixed / 3 PARTIAL;
+Phase 4: 231 PASS / 0 PARTIAL). The three historical Phase-2 partials were
+retested after fixes: F54 exercised the local Manim render, F153 exercised
+settings persistence, and F154 completed the live GitHub Actions path below.
+The log contains 121 uniquely numbered issue rows. Its reverse-link audit now
+requires every logged BUG ID to appear in a feature's `Errors found` cell (or in
+an explicit non-feature allowlist, currently empty). Two old duplicate IDs were
+renumbered as BUG-119 and BUG-120 so no issue row shares an identifier.
 
 | # | Severity | Feature | File | Defect |
 |---|----------|---------|------|--------|
@@ -28,8 +35,8 @@ re-verified; full suite stays green.
 
 | # | Severity | Feature | File | Defect |
 |---|----------|---------|------|--------|
-| BUG-6 | Rendering | F148 Produced lesson (crossfades) | `services/assembly.py:343` | `_xfade_chain` tracks `cum` so that `offset_k = cum - k*d` should equal the documented `sum(durs[0..k-1]) - k*d`. But it updated `cum += durs[k] - d`, **double-subtracting the overlap** — so from the 2nd crossfade on, each `offset` drifts earlier by an accumulating `d`, over-clipping mid-lesson segments (a ~10-segment lesson with `d≈0.5s` lands its final crossfade ~4s early). ffmpeg still runs (offsets stay monotonic), so the smoke test F148 passes while the produced lesson silently loses time. Fixed to `cum += durs[k]`; offsets now match the reference formula exactly. |
-| BUG-7 | Logistical | F146/F147 Chapter aspects | `services/lesson_pipeline.py:314` | `_chapter_aspect` decided the "setup" (first-chapter) composition via `renderable[0].id == ch.id`. LLM-planned lessons routinely omit chapter ids (`LessonChapter.from_json` defaults `id=""`), so `"" == ""` tagged **every** id-less chapter as `setup`, collapsing the setup→evolution→math→recap arc for AI lessons (keyless lessons have hardcoded ids and were unaffected — why F147 passed). Fixed to compare by object identity (`renderable[0] is ch`), robust regardless of ids. |
+| BUG-119 | Rendering | F148 Produced lesson (crossfades) | `services/assembly.py:343` | `_xfade_chain` tracks `cum` so that `offset_k = cum - k*d` should equal the documented `sum(durs[0..k-1]) - k*d`. But it updated `cum += durs[k] - d`, **double-subtracting the overlap** — so from the 2nd crossfade on, each `offset` drifts earlier by an accumulating `d`, over-clipping mid-lesson segments (a ~10-segment lesson with `d≈0.5s` lands its final crossfade ~4s early). ffmpeg still runs (offsets stay monotonic), so the smoke test F148 passes while the produced lesson silently loses time. Fixed to `cum += durs[k]`; offsets now match the reference formula exactly. |
+| BUG-120 | Logistical | F146/F147 Chapter aspects | `services/lesson_pipeline.py:314` | `_chapter_aspect` decided the "setup" (first-chapter) composition via `renderable[0].id == ch.id`. LLM-planned lessons routinely omit chapter ids (`LessonChapter.from_json` defaults `id=""`), so `"" == ""` tagged **every** id-less chapter as `setup`, collapsing the setup→evolution→math→recap arc for AI lessons (keyless lessons have hardcoded ids and were unaffected — why F147 passed). Fixed to compare by object identity (`renderable[0] is ch`), robust regardless of ids. |
 | BUG-8 | Logistical / UX | F145 Lesson view (seek + subtitles) | `ui/widgets.py:3624`, `services/lesson_pipeline.py`, `services/assembly.py` | The produced lesson prepends a 3s intro card and inserts a 2.2s card before every chapter, then crossfades all segments — but the chapter-outline **seek offsets** and the **.srt** cue times were both computed as a plain running sum of raw chapter-clip durations from t=0. So clicking "Chapter 2" seeked into the *middle of Chapter 1* in the real video, and the error compounded (~9s off by chapter 3); subtitles drifted the same way. A regression from the produced-lesson work (before it, `assemble_lesson` did a plain concat and the naive offsets lined up). Additionally the UI indexed durations by *plan*-chapter index, mis-aligning whenever a lesson had a non-rendered `interactive` chapter. Fixed: `assemble_lesson(..., return_offsets=True)` reports each chapter clip's true start (shared `_segment_starts` with the xfade graph); `LessonBundle.chapter_offsets` carries them (cache-safe); the outline seeks and `build_srt(segments, starts)` use them; the UI walks rendered chapters with a separate index and falls back to a running sum for old caches. |
 | BUG-9 | Logistical / UX | F143/F145 Partial lesson alignment | `services/lesson_pipeline.py:142,222`, `core/models.py`, `ui/widgets.py:3631` | If a middle renderable chapter failed, `run()` compacted successful `SceneBundle`s into `rendered`, then `_narrate_chapters()` zipped that compact list against the full renderable chapter list. A surviving later clip (e.g. Chapter 3) was narrated, titled, subtitled, and outlined as the failed earlier chapter (Chapter 2). Fixed by carrying `rendered_chapter_indexes` (plan indexes) alongside `chapter_scenes`/`chapter_offsets`, narrating from `(plan_index, chapter, scene)` tuples, and teaching `LessonView` to map offsets by plan index. Old caches keep the legacy fallback. |
 
@@ -119,6 +126,7 @@ concurrency bound), not a BUG row.
 |---|----------|---------|------|--------|
 | BUG-31 | Correctness / wrong learning signal | F173 exemplar promotion → F179 retrieval | `services/manim_runtime.py` | The tournament renders + critiques candidates as 480p **drafts**, uses those draft scores to SELECT the winner (correct — cheap), then re-renders the winner at the requested (e.g. 1080p) quality and re-critiques it in `render_scene_with_repair`. But exemplar promotion recorded the winner's **draft** score *before* that HQ render — so the flywheel's "winners teach" store (and the F179 semantic retrieval built on it) learned from and re-served scenes judged at draft quality, not the quality the user actually sees. A scene that looks good at 480p but weak at 1080p could be promoted and re-injected into future prompts; one that improves at HQ could be rejected. Fixed by recording the exemplar **after** `render_scene_with_repair` returns, from the FINAL bundle whose critique loop re-scored the promoted HQ render (and any aesthetic revision). Selection still uses the cheap draft score; promotion + retrieval now use the HQ score. Tests missed it because `t_f173` exercised the store directly and `t_f161` stubbed `render_scene_with_repair`, so no test made the draft and HQ scores diverge. Regression added to `t_f173`: a weak-draft/strong-HQ winner IS promoted and a strong-draft/weak-HQ winner is NOT. |
 | BUG-32 | Logistical / self-contradicting verdict | F180 A/B verdict | `tools/prompt_quality_lab.py` | `_ab_verdict()` decided "did NOT help" with `if mean_lift < -_AB_EPS or losses > wins:`. The `or losses > wins` clause fires whenever more prompts individually regressed than improved — **even when the mean lift is positive** (a tournament that helps a few prompts a lot but slightly hurts more prompts). The result is a self-contradicting conclusion the whole A/B harness exists to communicate: `Tournament did NOT help (mean +2.00, 1 win / 2 loss)`. A user reading the verdict of the flywheel's core measurement would be told the opposite of the number beside it. Fixed by making the negative verdict require a genuinely negative mean (`mean_lift < -_AB_EPS and losses >= wins`) and routing sign/count disagreement to an explicit `Mixed result … inspect the per-prompt deltas` verdict, so a positive mean is never labelled a failure. `t_f180` only covered clean win / identical / clean loss cases; regression added asserting a positive-mean/net-loss run is `Mixed`, never "did NOT help". |
+| BUG-109 | P1 invalid quality conclusion | F180 provider A/B measurement | `tools/prompt_quality_lab.py` | A provider-backed A/B report could show a numeric lift and a normal verdict even when the vision critic had silently skipped most solves, tournament candidates were ranked by static fallback, the arms had mismatched prompts or failed cases, or the ON arm spent no extra render and therefore made no multi-candidate choice. The saved 2026-07-12 run demonstrates the failure: only 1/11 solves in each arm had a real vision score, the ON ledger had one candidate and zero extra renders, yet the report showed `mean_lift: +0.049`. Reusing the same `--out` also reused old app state, allowing prior ledger candidates or cached renders to contaminate a repeat. Each invocation now gets fresh isolated ON/OFF state. The pairing validates every solve in both arms, every ON-ledger candidate, matching prompt IDs, passing cases, and at least one extra candidate render; it records coverage and validation reasons, labels an invalid numeric result exploratory only, and returns exit code 2 for invalid provider runs. Regression in `t_f180`. A fresh live keyed attempt on 2026-10-09 was also invalid/incomplete: 11/12 ON contacts were produced, 3 tournament records each rendered only one candidate (zero extra candidate renders), 11 ledger entries failed, and the final ON lesson timed out at 547s while the GitHub runner was on apt dependency installation. The OFF arm was not run; see `.analysis/prompt-quality-lab/ab-cloud-20261008/diagnostic.md`. Follow-up fixes now route tournament candidates through shared static/runtime repair, normalize correctly-counted beat markers, retry malformed planner/storyboard JSON, and bound/minimize the cloud TeX install. A fresh keyed A/B is still needed to confirm candidate ranking and vision coverage. |
 | BUG-33 | Correctness / locale-dependent render failure | F133 cross-platform render subprocess | `services/manim_runtime.py`, `scene_critic.py`, `pdf.py`, `render_backend.py`, `ui/main_window.py` | All six external-tool subprocess calls (Manim render, pdflatex, GIF ffmpeg, ffmpeg + ffprobe frame sampling, `gh auth token`) captured output with `text=True` but **no `encoding=`**, so Python decoded the child's bytes with the host **locale** codec. On a non-UTF-8 Windows console (this user's is **cp1251**/Cyrillic), Manim emits UTF-8 output containing a byte undefined in cp1251 (e.g. `0x98`), which raised `UnicodeDecodeError` inside `subprocess`'s stdout **reader thread**; `communicate()` re-raised it, so `subprocess.run` failed an otherwise-successful render. Observed end-to-end as a visual revision that "did not render, keeping previous cut" — silently **capping scene quality** (a 4.0 draft never got polished to a ship-quality revision) and, more broadly, making any render/critique/export flaky on non-UTF-8 locales. Fixed by adding `encoding="utf-8", errors="replace"` to all six calls (external tools emit UTF-8; `replace` guarantees no crash on a stray byte). Found only by driving a real solve on the user's machine — the green suite never exercised a non-UTF-8 locale. Regression in `t_f133`: every `text=True` call in these files must carry `errors="replace"`. |
 
 ## Tenth review pass (provider and render reliability mission)
@@ -142,7 +150,7 @@ concurrency bound), not a BUG row.
 |---|----------|---------|------|--------|
 | BUG-44 | P0 reliability / silent state loss | F07/F143/F154/F167/F172/F173/F175 mutable JSON stores | `core/atomic_json.py`, `core/settings.py`, `render_ledger.py`, `render_backend.py`, `lesson_pipeline.py`, `course_mode.py`, `error_learner.py`, `scene_exemplars.py` | Render candidates and lesson chapters complete concurrently, but their config, ledger, cloud manifest, chapter cache, course progress, learned-error counters, aesthetic tallies, and exemplar queue all used unprotected read-modify-write sequences. Two successful in-process writers could load the same old snapshot and the later save silently erased the earlier update; direct `write_text` also let readers observe truncated/partial JSON, and course progress reused one `.tmp` path that writers could collide on. Fixed with a process-wide re-entrant lock keyed by normalized absolute path plus unique same-directory staging files, flush/fsync, and `os.replace`; mutable stores hold the lock across the full reload/merge/save transaction, while immutable plan entries use atomic replacement. Python documents locks as context managers and `os.replace` as atomic on success. Existing tests wrote sequentially through one instance, so they could not expose stale-instance races. `t_f07` and `t_f175` now start synchronized writers through fresh callers for every mutable store, parse each final document, and prove no update or staging file is lost. Cross-process atomic replacement prevents torn files; merging simultaneous edits from separate AetherLab processes is deliberately not claimed. |
 | BUG-45 | P0 reliability / malformed persistent state crash | F07/F33/F143/F154/F167/F173/F175/F176 cache/config surfaces | `core/settings.py`, `core/cache.py`, `lesson_pipeline.py`, `render_backend.py`, `course_mode.py`, `render_ledger.py`, `scene_exemplars.py`, `ui/ledger_panel.py` | Several fail-soft readers caught `JSONDecodeError` but trusted any syntactically valid JSON value and every nested field. Files containing `null`, `[]`, scalar list entries, malformed counters, or a SQLite cache field with the wrong object shape then reached `.items()`, `.get()`, `.setdefault()`, model constructors, or `int()` and crashed app startup, lesson quizzes, cache reuse, cloud artifact lookup, or the Settings render dashboard. Fixed by enforcing the expected top-level shape, filtering/defaulting nested rows, coercing counters safely, and decoding each SQLite artifact independently so one damaged field becomes a cache miss while good fields survive; the next legitimate mutation repairs mutable files atomically. Existing tests covered missing files and invalid JSON syntax, never valid JSON of the wrong schema. Owning regressions in `t_f07`, `t_f33`, `t_f143`, `t_f154`, `t_f167`, `t_f173`, `t_f175`, and `t_f176` exercise hostile valid shapes and observable recovery. |
-| BUG-46 | P0 test reliability / unintended external API traffic | F161 candidate tournament | `test_features.py` | `t_f161` claimed all network/vision work was stubbed, but its “N=1 delegation” settings supplied `sk-test` + a vision model and left `auto_tournament=True`. Since F177, a configured critic auto-enables a three-candidate tournament even when `scene_candidates=1`, so the green harness made repeated real `https://api.openai.com/v1/chat/completions` requests, received 401s, then passed because production fail-soft fallback reached the fake single path. This made the canonical suite slower, network-dependent, noisy, and capable of spending real provider quota if a non-sentinel key leaked in. Fixed by explicitly setting `auto_tournament=False` for the single-path case and replacing `_build_scene_candidates` with a sentinel that fails if the supposedly disabled provider path is touched. Existing assertions only checked the final fake call sequence after fallback and never asserted which branch ran or that no request escaped. Regression is intrinsic to `t_f161`: old auto-on behavior now raises before any HTTP request. |
+| BUG-46 | P0 test reliability / unintended external API traffic | F161 candidate tournament | `test_features.py` | `t_f161` claimed all network/vision work was stubbed, but its “N=1 delegation” settings supplied `sk-test` + a vision model and left `auto_tournament=True`. Since F177, a configured critic auto-enables a three-candidate tournament even when `scene_candidates=1`, so the green harness made repeated real `https://api.openai.com/v1/chat/completions` requests, received 401s, then passed because production fail-soft fallback reached the fake single path. This made the canonical suite slower, network-dependent, noisy, and capable of spending real provider quota if a non-sentinel key leaked in. The single-path case now explicitly disables auto-tournament and installs a candidate-builder sentinel. A later replay uncovered the separate candidate-render repair request (BUG-117), which is also fixed and blocked by the final regression. |
 | BUG-47 | P1 reliability / web enrichment breaks solve | F125 Wikipedia references | `services/web_references.py` | The provider’s “never raises” handler wrapped only `_http_get_json`; response traversal happened afterward and assumed a dict-shaped `query.pages` map whose values were page objects with numeric indexes. MediaWiki officially documents that API errors/warnings can be returned as JSON with HTTP 200, and proxies/mocks can also produce valid JSON arrays/scalars. Such a response raised `AttributeError`/`TypeError` during `.get()`, `.values()`, sorting, or page traversal, escaping the provider contract (the outer pipeline happened to catch it, but direct callers and future reuse were unsafe). Fixed by validating every response container, filtering page entries to objects, and ranking malformed indexes with a safe default; malformed/error responses now return `[]`, preserving local references. Existing F125 covered DNS failure only, so its exception happened inside the guarded fetch. Regression stubs five valid wrong-shape/error payloads plus mixed malformed/valid pages. |
 | BUG-48 | P0 shutdown correctness / live QThread destruction | F21 graceful close | `ui/main_window.py` | `closeEvent()` called `cancel()` and `wait(5000)` but ignored `wait`’s boolean result, then always delegated to the superclass close handler. Provider calls can legitimately last 60–900 seconds and local renders up to 30 minutes, so after five seconds the window could be destroyed while its subclassed solve/lesson `QThread` was still running. Qt’s official contract says deleting a running QThread can crash and recommends waiting for `finished`; `terminate()` is explicitly dangerous. Fixed by cancelling first, waiting the bounded grace period, ignoring the close event when any known thread remains, connecting each lingering thread’s `finished` signal to `_close_when_idle`, and retrying close only after all are idle. The previous F21 test merely searched source for `cancel()` and `wait(5000)`, so it certified the buggy implementation without checking the return value. The new behavioral regression supplies a worker whose wait returns false and proves close is deferred, cancellation requested, and no forced termination exists. |
 | BUG-49 | P2 UX / false cancellation state | F18 pipeline cancellation | `ui/main_window.py` | `_cancel_pipeline()` requested cooperative cancellation but immediately called `command_bar.set_busy(False)`, hid the running surface, switched workspaces, and showed “Run cancelled by user” while the worker could still be waiting on a provider or render until its next between-stage check. The command bar therefore exposed Run even though `start_pipeline()` rejected it as “already running,” making cancellation look broken and losing honest progress state. Fixed by keeping the command bar busy, disabling repeat Cancel, and showing the cancelling state until `QThread.finished`; `_on_worker_finished()` alone restores Run, re-enables Cancel for the next run, hides loading, and shows the completed-cancellation toast. Lesson cancellation now says “Cancelling lesson” until its existing cancelled bundle handler confirms completion. Existing F18 tested only the worker flag/exception and never observed the main-window state transition. Regression inspects both state-transition methods and rejects premature `set_busy(False)`. |
@@ -164,13 +172,16 @@ concurrency bound), not a BUG row.
 - No infinite-loop risk in the param↔canvas signal path: `blockSignals`
   guards the mirror updates.
 
-### Second-pass re-audit (2026-07-19) — evaluated, intentionally not fixed here
-- **LiveCanvas polyline gap for discontinuous curves.** `_compute_points`
-  drops off-range/non-finite samples, then `drawPolyline` connects the survivors
-  with one straight segment across the gap (visible on `tan`, `1/t`-type
-  curves). Cosmetic only; the fix (splitting the cached curve into segments in
-  the hot paint path) carries a real perf/regression risk, so it is recorded as
-  a known limitation rather than changed under a QA pass.
+### Second-pass re-audit (2026-07-19; canvas follow-up fixed 2026-10-09)
+- **LiveCanvas polyline gap for finite asymptote samples (BUG-118).** The
+  earlier review deferred this because splitting curves in the paint path
+  carried performance risk. The renderer already partitions NaN/inf samples,
+  but `tan(pi/2)` is a huge finite float; it survived the finite-only mask, so
+  `drawPolyline` joined both sides with a false chord. The canvas now masks
+  pixel coordinates beyond a one-viewport overscan before building polyline
+  runs; fill polygons use the same mask. The F113 regression requires three
+  branches for `tan(t)` over `[-pi, pi]`, confirms all samples are finite, and
+  checks that the offscreen Qt render contains visible primary-curve pixels.
 - **Manim scene code is executed, only `compile()`-checked.**
   `manim_runtime.render_scene` writes LLM/template scene code to disk and runs
   it via `python -m manim` (arbitrary execution). This is inherent to the app's
@@ -387,16 +398,13 @@ and then reproduced with a concrete input before fixing. Regressions live in
 
 Not changed; recorded as risks:
 
-- `lesson_planner.plan_lesson` discards a complete LLM lesson plan for the generic
-  template when it lacks *any* of the prediction/key-symbol/retrieval scaffolds, which
-  the prompt itself allows to be `null`. That is a quality trade-off, not a crash.
-  Consider back-filling scaffolds from the plan's own questions instead.
+- The nullable-scaffold fallback defect is fixed and recorded as BUG-99 below;
+  authored chapters are kept and malformed optional checks are safely omitted.
 - `derivation_verify` still reports squaring or square-rooting both sides as not
   equivalent. That is conservative, since it can add a root, but it shows REVIEW on a
   correct `T = 2π√(L/g) → T² = 4π²L/g` step.
-- `_animation_range_for_times` maps critic timestamps to `-n start,end`, but Manim's
-  upper bound is exclusive. The partial preview therefore stops one animation early.
-  Only the discarded preview is affected (opt-in `AETHERLAB_MANIM_PARTIAL_REVISIONS`).
+- The partial-preview range defect was fixed and recorded as BUG-96 below; its
+  regression covers a sample in the final animation event.
 - `services/agent_team.py` (a lead agent plus Researcher/Coder/Reviewer, all on MiniMax-M3) was removed on 2026-10-01 and restored the same day at the owner's request, now **cloud-ready**. The Reviewer's preview renders go through the app's render backend: GitHub Actions in Cloud mode (never local), cloud-then-local in Auto. The lead's tool choice and the Reviewer's JSON verdict run with MiniMax thinking off; the Researcher keeps it on for the numbers. Verified live: a Reviewer preview rendered on GitHub Actions (199 s round trip, frame grid intact). The first full team run (blackbody, over a VPN because `minimax.io` is blocked on this network) completed entirely on the cloud: 21 min 24 s, a 20.7 s video, critic 2/10 (single-agent run 6: 7 min 42 s, 4/10). The rod heated correctly, but the Planck curves never appeared. Contributing causes: the Coder spent its 3 calls on gate fixes (BUG-92), and the one preview crash reached the Reviewer as git noise (BUG-91). The team stays opt-in (no setting enables it in the app); old local experiment files are in `.analysis/_archived_agent_team/`.
 
 ## Live AI-path mission (2026-09-30, MiniMax-M3)
@@ -429,6 +437,19 @@ observed live, reproduced, fixed, and covered in `tests/test_bugcheck_regression
 | BUG-93 | P0 CI hard crash | F157 | `aetherlab/ui/main_window.py` `SettingsDialog` task slots | CI on windows-latest / Python 3.12 died silently inside F157 (step exit code 1, no traceback; CI on master had been red since 2026-07-19). With faulthandler enabled CI showed `Windows fatal exception: access violation` in a `main_window.py` lambda. The provider, cloud and GitHub Settings tasks connected `finished`/`failed` to lambdas such as `lambda: self._cloud_test_btn.setEnabled(True)`. A lambda gives Qt no receiver, so the connection outlives the dialog, and a signal queued from a destroyed dialog ran against its deleted button. A local repro (dialog destroyed before the queued signal is delivered) killed the old code every time and passes with the fix: all five slots are bound methods, so PyQt drops them with the dialog. The first fix alone did not clear CI. The same race existed on the main window's export task (result/failure/finished lambdas) and the lesson worker's `finished`; the extended repro killed the code with only the Settings fix and passes with all of them converted. CI also now runs the suite with `-X faulthandler`, so any future native crash prints its stack. |
 | BUG-94 | P2 lost diagnostic | F220 | `aetherlab/services/study_document.py` `write_study_document` | Surfaced once CI got past F157 and reached the pytest step, which it had not done since July. With no model configured *and* no pdflatex (the CI runner), the 'Model authoring unavailable…' note was overwritten by the pdflatex note, so the PDF no longer said why its content was generic. Both notes are kept now. |
 | BUG-95 | P2 silent downgrade / flaky CI | F148 | `aetherlab/services/assembly.py` | On the Windows runner the produced-lesson ffmpeg run (title cards + crossfades) failed once with "Conversion failed!" after a complete encode. The app silently fell back to a plain concat (chapter 1 at 0 s, no cards), and F148 caught it. The logged error was only the last 600 characters, which were encoder statistics, so the cause was invisible. The produced build now retries once before downgrading, and the warning includes ffmpeg's actual error lines (`_ffmpeg_error_summary`). |
+| BUG-96 | P2 partial preview truncation | F222 | `aetherlab/services/manim_runtime.py` `_animation_range_for_times` | Manim's `-n START,END` end index is exclusive, but partial critic previews returned `END` as the last selected event's index. A preview sampled in the final `wait` or `play` therefore omitted that event. The mapper now returns one past the last selected event; regression checks a middle event, final event, and combined span. |
+| BUG-97 | P2 generic user-story text | F183–F222 (40 generated stories) | `build_feature_tracker.py` `_story_fields` | Forty stories replaced each feature's specific existing user story with the generic claim that behavior matched the implementation. The concrete legacy story was relegated to a trailing field, so the canonical Story column did not describe the user-visible outcome. Generated stories now lead with the feature's concrete scenario and retain persona, preconditions, steps, and code-grounded expected behavior/source references. |
+| BUG-98 | P1 false algebra verification | F194 / derivation verifier | `aetherlab/services/derivation_verify.py` `_is_nonzero_scaling` | A residual ratio that was a monomial in symbols was accepted as a nonzero multiplier without checking whether those symbols could be zero. For example, `x = y` and `x*y = y**2` differ by factor `y`, which is zero at valid states and adds solutions. The verifier now accepts symbolic scaling only when finite solver values prove every factor nonzero, reports unknown factors as `not_checked`, and rejects a supplied zero factor. Regression in `tests/test_bugcheck_regressions.py::test_bug98_symbolic_scaling_must_be_provably_nonzero`. |
+| BUG-99 | P1 creative lesson silently downgraded | F141 / lesson planning and cache | `aetherlab/services/lesson_planner.py` `plan_lesson`; `lesson_pipeline._PlanCache.get` | A complete model-authored chapter plan was rejected and replaced by a generic domain template whenever any prediction, symbol, or retrieval scaffold was missing, although the JSON schema explicitly permits individual checks to be null. The planner and cache now require renderable authored chapters, keep null optional checks, and discard only malformed non-null checks so the UI can safely skip them. The F141 regression supplies a topic-specific chapter with no checks and proves its title/beats survive. |
+| BUG-100 | P1 aggregate falsely said derivation passed | Derivation verification / scene-spec evidence | `aetherlab/services/derivation_verify.py` `verify_derivation_records` | If a list contained one symbolically valid step plus an unsupported, malformed, or expression-less record, the aggregate counter did not include the unchecked record and could report the whole derivation as `passed`. Every record now contributes to `checked`, `failed`, or `not_checked`; a mixed checked/unchecked set cannot aggregate to `passed`. Regression: `tests/test_upgrade_missions.py::test_mixed_derivation_records_cannot_aggregate_to_passed`. |
+| BUG-101 | P1 preflight missed forwarded invalid constructor keyword | F106 static pre-render validation | `aetherlab/services/scene_validation.py` `lint_constructor_kwargs` | Constructor lint skipped all classes whose `__init__` accepted `**kwargs`, including Manim `TracedPath` whose kwargs flow through `VMobject` into strict `Mobject.__init__`. A live Planck Cloud sample used `TracedPath(time_traced=1.2)`, which Manim 0.21.0 rejects and which consumed preflight/render repair attempts. Lint now follows only source-visible direct `super().__init__(**kwargs)` chains to a strict base and checks the union of accepted keyword names; ambiguous chains remain unchecked. Regression rejects `time_traced` while accepting `dissipating_time` and style kwargs. |
+| BUG-102 | P1 incomplete render-farm observability / unsafe persisted text | F154/F175/F176 | `aetherlab/services/render_backend.py`, `render_ledger.py`, `ui/ledger_panel.py` | The original dashboard feature was marked complete while the cloud workflow still omitted a `completed` event, rate-limit retries were invisible, token-scope errors appeared as generic failures, run/artifact links and job id/FPS were not shown, and several ledger text fields were not consistently scrubbed. Fixed with an explicit `action_required` scope-failure event and sanitized log tail, visible `rate_limited → in_progress` retry events, a `completed` event before artifact retrieval, strict credential-free GitHub Actions URL validation/canonical artifact links, metadata and diagnostics scrubbing, and dashboard details for job id, FPS, and safe clickable links. Stub regressions in `t_f154`, `t_f175`, and `t_f176`; Auto fallback integration remains covered in `t_f155`. |
+| BUG-103 | P1 multilingual lesson narration failure | F143 | `aetherlab/services/lesson_pipeline.py` `_narrate_chapters` | The multilingual voice selection used `plan.language` inside `_narrate_chapters`, where `plan` was not in scope. A narration-enabled lesson raised `NameError` for every completed chapter. `LessonPipeline.run` now passes the plan language into the narration stage, and the existing regression verifies the language-specific voice. |
+| BUG-104 | P2 localized CLI output may fail on legacy consoles | F133 | `tools/build_accelerated_motion_route.py` `main`; `tools/verify_accelerated_motion_route.py` CLI entry point | The ENT route tools print Kazakh/Russian text and Windows paths but did not set the shared UTF-8 stdio policy, so redirected output on a legacy-codepage console could fail. Both entry points now call `configure_utf8_stdio()` before printing; the existing F133 source audit covers them. |
+| BUG-105 | P1 produced-lesson timing drift / fallback | F148 | `aetherlab/services/assembly.py` `_assemble_produced`, `_xfade_chain` | The 0.2 s lower bound on crossfade duration could exceed a very short chapter segment, causing FFmpeg to reject the produced assembly and fall back to plain concatenation. Also, the filter graph rounded fade duration and offsets to two decimals while chapter offsets used full precision, so long chains could accumulate timeline drift. Fade length now stays below 40% of the shortest normalized segment and FFmpeg receives six-decimal parameters; `t_f148` checks short-segment bounds and emitted filter precision. |
+| BUG-106 | P1 lesson cancellation delayed / ignored | F150 | `aetherlab/services/lesson_pipeline.py`, `assembly.py`, `voiceover.py` | Lesson cancellation reached chapter renders but was not passed into narration or assembly, so cancel could wait through narration/FFmpeg and still report a completed lesson. The cancel callback now reaches narration muxing and lesson assembly; those FFmpeg subprocess trees terminate through `run_process_tree`, incomplete staged output is removed without replacing an older good file, and the pipeline returns a `cancelled` bundle. Regression in `t_f150` covers cancellation in narration/assembly and preservation of prior output files. |
+| BUG-107 | P1 scene safety gate arbitrary file write | F103 | `aetherlab/services/code_safety.py` `BANNED_IO_ATTRIBUTES` | NumPy's allowlisted `ndarray.dump(path)` serializes a pickle to an exact host path, bypassing the existing AST guard for `tofile`/`save`/`savetxt` sinks. A generated scene could write a malicious pickle into a startup location. The gate now rejects `dump` attribute access; `t_f103` includes the method alongside the other NumPy I/O probes. |
+| BUG-108 | P2 visual regression false positives across fade and duration changes | F224 | `tools/visual_regression.py` `audit_video`, `quality_failures`, `compare_report` | Strict mode counted normal sub-second transition fades as broken blank spans, and compared normalized blank/static ratios from a 25–161 s render directly with July baselines of 6–35 s. It now tolerates fades up to 1.0 s, still fails sustained gaps or blank ratios over 10%, compares ratios only when clip durations are within 25%, and marks skipped ratio comparisons in each delta. Duration-loss checks remain active regardless. Regression in `t_f224`. |
 
 Decisions recorded with evidence:
 
@@ -465,3 +486,493 @@ the preflight compiled (warm preflight ~15 s; cold ~35–50 s, mostly LaTeX the 
 Concurrent tournament candidates never share a cache folder. Switch it off with `AETHERLAB_PREFLIGHT=0`.
 Tests: `tests/test_scene_preflight.py` (real dry runs plus pipeline branches). The live end-to-end check was
 stopped by low system memory before the render and is still to do.
+
+## ЕНТ student-path test audit (2026-10-09)
+
+The full test suite was green, but tracing the newer ЕНТ user path exposed two issues the
+existing feature surface audit did not detect: localized dictionaries were invisible to its
+literal-string scan, and the source browser remained Russian when the user selected Kazakh or
+English. The tracker now contains separate user stories for the bank, practice UI, progress,
+PDF, curated lesson, dashboard, and reference browser (F225–F231).
+
+| # | Severity | Feature | File | Defect |
+|---|---|---|---|---|
+| BUG-110 | P1 quality gate / false green | F164 | `tools/feature_surface_audit.py` | The surface scanner only examined literal widget strings, CLI flags, and settings. It ignored locale dictionaries such as `_TEXT` and `_COPY`; its ASCII-only tokenization also dropped Kazakh/Russian text. A new translated screen could therefore remain absent from the canonical feature tracker while the coverage gate reported green. Fixed by recording nested localized dictionaries, matching them against tracker source-module and language declarations, and tokenizing Unicode words. `t_f164` now requires the locale-map coverage in addition to the existing surface checks. |
+| BUG-111 | P2 student UX / language consistency | F231 | `aetherlab/ui/reference_sources.py` | The textbook/ЕНТ source dialog hard-coded its title, guidance, tabs, statuses, empty states, file details, and errors in Russian; opening it from Kazakh or English practice produced a mixed-language flow. Opening the dialog without first constructing MainWindow also skipped registration of the bundled language-safe UI font. Fixed with complete kk/ru/en copy, active-language propagation from both practice and library entry points, and local font registration. `t_f231` exercises empty/populated source states, all three language maps, tabs, guidance, and caller wiring in each locale. |
+| BUG-112 | P1 user-visible crash / saved study goal | F227 | `aetherlab/ui/exam_practice.py:701` | Reproduction: save a future exam date in the practice-goal store, then open the practice dialog. Expected: the localized days-to-exam summary appears; actual: `_update_dashboard_summary()` raised `NameError: date is not defined`, so the screen did not finish loading. The code now imports `datetime.date`; `t_f227` reopens the dialog with a future saved date and checks the localized countdown. The previous F227 test verified only persistence and mistake-review JSON and never loaded the UI summary with a date. |
+| BUG-113 | P2 launcher failure / broken widget facade | F01 | `aetherlab/ui/widgets.py` | During this QA turn, Ruff auto-fix removed imports that served as public re-exports after UI modularization, leaving the backward-compatible facade incomplete. Reproduction: import `AnalysisPanel`/`CommandBar` from `aetherlab.ui.widgets`; actual: `ImportError`. Explicit module re-exports and `__all__` restored the main widget symbols; the subsequent pytest run caught a second omitted legacy symbol, `_DiagnosticsDrawer`, used by the existing diagnostics test. That symbol is now re-exported and `t_f01` requires it while constructing MainWindow. |
+
+The question bank itself remains explicitly marked for Kazakhstan physics-teacher review. The
+software checks confirm fixed keys, scoring rules, translations' presence, and PDF/source behavior;
+they do not replace expert review of every physics answer and translation.
+
+
+## Live cloud retest (2026-10-09)
+
+F154 was run against the configured dedicated render repository `gopheriv/manim-render-worker`.
+A generic dot-fade scene was provisioned and dispatched as job
+`65b1f8ae92a20d886df29c18` (GitHub Actions run `37885770038`). The workflow
+completed successfully in 88.7 seconds, the downloaded MP4 passed the container
+signature/size validation, and repeating the identical scene returned the cached
+artifact in 2.2 seconds without creating another workflow run. The application
+provisioned the current workflow on the default and render branches; the test
+scene contains no student data or credentials. Detailed machine-readable evidence
+is in `.analysis/cloud-live-f154/report.json` (gitignored).
+
+## Full-suite rerun after lint remediation (2026-10-09)
+
+The post-lint rerun first caught a cancellation API compatibility regression at F18
+(230/231 passed). `PipelineWorker` retained the renamed internal exception
+`_PipelineCancelledError`, but callers and the established F18 cancellation
+contract still import `_PipelineCancelled`. The worker cancellation path was
+intact; the missing module export raised `ImportError` before that behavior
+could be exercised. A compatibility alias now maps the former name to the
+current sentinel. A later pytest pass also found the diagnostics drawer omitted
+from the modularized widget facade; the drawer was re-exported and added to the
+F01 facade contract. The canonical CSV/XLSX were regenerated after updating the
+F18 and F01 evidence.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-114 | P2 compatibility / cancellation contract | F18 pipeline cancel | `aetherlab/ui/workers.py` | The cancellation sentinel had been renamed from `_PipelineCancelled` to `_PipelineCancelledError` while existing F18 callers still imported the old name. The cancellation implementation was present, but the missing module export raised `ImportError` before its contract could be tested. Added `_PipelineCancelled = _PipelineCancelledError` as a backward-compatible alias; targeted and full F18 checks pass. The final complete feature suite passes 231/231. |
+| BUG-115 | P2 test coverage / false confidence | F54 local render | `aetherlab/services/manim_runtime.py`, `test_features.py` | Phase-2 F54 inspected generated command flags and failure classification but never required a successful render artifact, so it was marked PARTIAL even though the feature's central user outcome is an MP4. The original t_f54 did not perform a real Manim render. It now renders a small isolated scene and requires a non-empty MP4; strict visual regression exercises the rendered scenes as well. The Phase-2 PARTIAL is retained as historical evidence and now links this coverage-gap entry; Phase-4 is PASS. |
+| BUG-116 | P2 tracker fidelity / false references | F01–F231 feature stories | `build_feature_tracker.py`, `tools/tracker_integrity_audit.py` | The tracker generator emitted placeholder `:1` citations for many stories, kept file paths from before UI modularization, and could not resolve the hidden `.github` directory because path cleanup removed its leading dot. This made story-to-code review unreliable, and the integrity check only required a nonempty citation. The resolver now maps symbols to Python definitions and YAML settings to concrete lines; all 231 stories have existing source references with valid, nonblank line numbers. The audit now rejects missing, out-of-range, blank-line, or undocumented references and requires Phase-2 FAIL/PARTIAL rows to link a logged BUG. |
+| BUG-117 | P0 test isolation / unintended provider traffic | F161 candidate tournament | `test_features.py` | A network-blocked replay traced the test's real OpenAI request to `_render_and_score_candidates`: stubbing `_render_once` did not cover the scorer's direct call to `render_scene_with_repair`, which invoked provider-backed scene repair. The test now stubs the full renderer for candidate scoring and asserts all three candidate codes were handled there, so the branch remains covered without external traffic. |
+| BUG-118 | P1 wrong graph / false discontinuity bridge | F113 LiveCanvas curve rendering | `aetherlab/ui/live_canvas.py`, `test_features.py` | The renderer split only NaN/inf samples. `tan(pi/2)` is represented by a large finite float, so it survived the mask and `drawPolyline` connected both sides of the asymptote through the visible graph. A one-viewport overscan now masks extreme pixel coordinates before run segmentation; fills use the same bound. The F113 regression checks three `tan(t)` branches, confirms all samples are finite, and verifies the curve is visible in the rendered Qt image. |
+| BUG-121 | P1 tracker fidelity / orphaned issues | F165 canonical tracker audit | `build_feature_tracker.py`, `tools/tracker_integrity_audit.py` | The audit checked that tracker bug references existed in the log, but never checked the reverse direction. Twelve documented issues therefore had no story link in the canonical `Errors found` column. The generator now attaches all known defect IDs to their feature stories, and the audit rejects any logged BUG row absent from the tracker or an explicit non-feature allowlist. `t_f165` checks complete log-to-tracker coverage; the allowlist is empty. |
+
+## Final verification and audit note (2026-10-09)
+
+- `python test_features.py`: **231/231 passed**. This includes the real local
+  Manim render (F54, BUG-115 coverage gap now closed), the ENT learner flow, cache-corruption recovery,
+  cancellation during active renders, settings persistence, and three-locale
+  scripted UI checks.
+- `python -m pytest -q --basetemp .analysis\pytest-final-20261009`:
+  **217 passed**; one third-party ChromaDB `asyncio.iscoroutinefunction`
+  deprecation warning.
+- `python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools`,
+  `python -m ruff check`, and `git -c core.whitespace=cr-at-eol diff --check`:
+  passed.
+- `tools/tracker_integrity_audit.py --check`: 231 features, stories, results,
+  and tests aligned; 73 defect-linked features and 716 concrete implementation
+  references with existing files and valid line numbers. `tools/feature_surface_audit.py
+  --check`: 96/96 user-facing surfaces covered.
+- Strict visual regression: 7/7 cases, zero render failures, quality failures,
+  warnings, or baseline regressions. The six scene contact sheets and the lesson
+  contact sheet were visually inspected. Evidence: `.analysis/visual-regression-final-20261009/`.
+- Clean-profile/no-key smoke: F02 passed in the full harness, which isolates
+  AetherLab data/library/cache paths and removes configured provider credentials;
+  F16 also completed through the deterministic offline solver/render fallback.
+  The desktop automation provider returned no targetable native apps, so a
+  separate foreground-window walkthrough and P3 keyed-provider run were not
+  performed. The separate live GitHub render smoke is recorded above.
+- Hand-audited paths for this remediation: `aetherlab/ui/workers.py`,
+  `aetherlab/ui/widgets.py`, `aetherlab/ui/simulation_panel.py`,
+  `aetherlab/ui/exam_practice.py`, `test_features.py`, `tests/test_batch.py`,
+  `build_feature_tracker.py`, and `docs/USER_STORY_AUDIT_PROMPT.md`. The
+  adversarial checks exercised cache damage/schema drift, cancellation during
+  rendering, offline fallback, invalid provider output, environment/config
+  precedence, narrow layouts, and kk/ru/en navigation.
+
+The ENT answer bank and translations still require review by a Kazakhstan
+physics teacher; software checks verify structure and configured answer keys,
+not the truth of every physics claim or translation.
+
+## Final rerun after tracker and test-isolation fixes (2026-10-09)
+
+- Re-ran `python test_features.py` after BUG-116/117: **231/231 passed**. The
+  F161 candidate scorer now uses the isolated full-render stub; its focused
+  regression also passed with both HTTPX send methods forced to fail, proving
+  the test makes no provider request.
+- Re-ran `python -m pytest -q --basetemp
+  .analysis\pytest-final-20261009-fix117`: **217 passed**, with the same single
+  third-party ChromaDB deprecation warning.
+- Rebuilt the canonical CSV/XLSX and passed the strengthened tracker audit,
+  feature-surface audit, bytecode compilation, and whitespace/diff check.
+- Ruff initially reported one import-order issue in the tracker generator; it
+  was corrected, and `python -m ruff check` now passes.
+
+## Tracker reference integrity retest (2026-10-09)
+
+After BUG-116, the canonical tracker contains **716 concrete implementation
+references across 231 stories**. All referenced files exist, each line is
+nonblank and in range, and no story is missing a reference. The tracker audit
+also verifies that each Phase-2 FAIL/PARTIAL result links to an issue in this
+log. CSV and XLSX are generated from the same feature catalog.
+
+## Final rerun after canvas asymptote fix (2026-10-09)
+
+- F113 now has a finite-valued `tan(t)` regression in addition to the existing
+  `1/t` and viewport-cache checks. The rendered Qt image contains over 100
+  exact primary-color curve pixels, and the `tan(t)` samples split into three
+  branches with no false chord.
+- Re-ran `python test_features.py`: **231/231 passed**. Rebuilt the canonical
+  tracker: 231 stories/results/tests, 73 defect-linked features, Phase 2 has
+  220 PASS / 8 logged FAIL-fixed / 3 logged PARTIAL, and Phase 4 has 231 PASS.
+- Re-ran `python -m pytest -q`: **217 passed**, one third-party ChromaDB
+  deprecation warning. Strict visual regression: **7/7**, zero render/quality
+  failures, warnings, or baseline regressions. All six scene contact sheets,
+  the lesson sheet, and the `tan(t)` Qt render were visually inspected. Evidence:
+  `.analysis/visual-regression-post-bug118/` and `.analysis/bug118_tan.png`.
+- The tracker audit validates all **716** implementation references; none are
+  missing or point to line 1. Feature-surface coverage remains 96/96. Ruff and
+  compileall pass; use `git -c core.whitespace=cr-at-eol diff --check` for the
+  repository's existing CRLF line endings.
+- The foreground manual walkthrough and P3 keyed-provider run remain
+  unverified: the current computer-use snapshot exposes no native apps
+  (`apps: []`). The Kazakhstan physics-teacher review of question correctness
+  and translation quality also remains outstanding.
+
+## Error-log coverage audit (2026-10-09)
+
+- Linked all **121/121** uniquely numbered BUG rows to a canonical feature
+  story's `Errors found` field. The empty non-feature allowlist makes any future
+  orphaned error row fail the tracker gate and F165 regression.
+- Renumbered the two duplicated historical IDs: the produced-lesson crossfade
+  defect is BUG-119 and the chapter-aspect assignment defect is BUG-120. Their
+  feature rows retain Phase-4 PASS and link to the original regression tests.
+
+## Complete test run after tracker coverage fix (2026-10-09)
+
+- `python test_features.py`: **231/231 passed**, including a real local Manim
+  render and the 3-language ENT practice flows.
+- `python -m pytest -q --basetemp .analysis\pytest-final-20261009-full`:
+  **217 passed**; one third-party ChromaDB deprecation warning.
+- Strict visual regression: **7/7 passed**, zero render or quality failures,
+  warnings, or baseline regressions. All six scene contact sheets and the
+  lesson contact sheet were visually inspected in
+  `.analysis/visual-regression-post-full-20261009/`.
+- The canonical tracker now has 231 stories/results/tests, 73 defect-linked
+  features, and 121/121 error rows linked to stories. Feature-surface coverage
+  is 96/96; Ruff, compileall, and the CRLF-aware diff check pass.
+
+## Rendering repair review (2026-10-09)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-122 | P1 render quality selection | F108 visual critic | `aetherlab/services/manim_runtime.py` | If a visual revision rendered but its next critique returned `skipped`, the revision remained selected even though it had no score; the same happened when the final post-loop critique skipped. Both paths now restore the last scored render and record why. Regression: `test_unscored_revision_is_reverted_when_critique_is_skipped`. |
+| BUG-123 | P1 cloud render admission | F106 scene generation/render repair | `aetherlab/services/manim_runtime.py` | Crash repairs and visual revisions were checked for syntax, safety, and crash-level lint, but the accepted scene's cloud cost/play-call budget was not rechecked before dispatch. A heavier repaired scene could reach cloud rendering despite the generation gate. The cloud/auto admission check now runs before initial dispatch and after render repair, visual revision, and visual-revision repair; it accepts the same duration target used by the request. Regressions: `test_cloud_repair_over_budget_is_rejected_before_render` and `test_cloud_visual_revision_over_budget_is_not_rendered`. |
+
+Verification after these fixes: full pytest **221 passed** (one upstream ChromaDB
+deprecation warning); an actual no-key local `render_scene_with_repair` smoke
+produced a non-empty MP4; strict visual regression **7/7**, zero render or
+quality failures, warnings, or baseline regressions; tracker and surface audits,
+Ruff, compileall, and the CRLF-aware diff check pass.
+
+## Current feature and story audit (2026-10-12)
+
+Historical test totals above describe their dated runs; they are not current
+certification. The canonical workbook now records check time and verification
+scope separately from full user-behaviour acceptance. Native UI, real camera and
+live-cloud journeys remain incomplete until direct evidence is recorded.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-124 | Audit completeness | F164/F165 | `build_feature_tracker.py`, canonical XLSX/CSV | The 231-row catalog omitted new student profiles, quotas, weekly mocks, exam resume, camera hints, teacher review, school ranking, companion flows and later media checks. Its stored source-line references were stale, and a timed mock was documented as 80 instead of the implemented 90 minutes. Added F232–F250, updated source references from current definitions and corrected duration. Initial surface check: 79/88 covered; after catalog update: 88/88. Software checks and full user-journey acceptance now have separate columns. |
+| BUG-125 | False verification | F215 | `build_feature_tracker.py`, `test_features.py` | `apply_results()` marked historical defect features FIXED even when the supplied run contained no result for them. Missing evidence now leaves PARTIAL and Phase-4 PENDING. F215 additionally asserts that an unchecked defect cannot be stamped FIXED. |
+| BUG-126 | Test isolation | F02/F165 | `test_features.py` | The harness isolated its library but still inherited the default external reference root and enabled web retrieval, causing offline probes to scan real textbooks or contact web sources. Test setup now explicitly selects a nonexistent reference directory and disables web retrieval; source-specific tests continue to provide their own fixtures. Windows sandbox socketpair restrictions were diagnosed separately and are an execution-environment limitation, not an application defect. |
+| BUG-127 | P1 incorrect physics answer | F232 | `aetherlab/services/ent_topic_bank.py`, `tests/test_ent_practice_mvp.py` | Hydrostatic pressure variants used depth alone as the kPa answer. At 1000 kg/m³, g=10 m/s² and h=11 m the answer was 11 kPa instead of 110 kPa. The existing correction uses 10*h, matching the formula and substitution; the independent regression checks 110 in all three languages. This audit links the previously applied fix to its story. |
+| BUG-128 | Media memory use | F249 | `aetherlab/services/render_backend.py`, `tests/test_cloud_media_check.py` | `validate_mp4()` read the entire video before slicing its header, so a long download consumed memory proportional to file size. It now reads 64 bytes and obtains size from the same open descriptor. A 128 MiB sparse-file regression asserts less than 1 MiB of allocated memory; all five media-gate tests passed after the fix. |
+| BUG-129 | Invalid regression fixture | F154/F249 | `test_features.py`, `tests/test_upgrade_missions.py` | Both the feature-level cloud test and the transient cloud-poll regression supplied an ftyp marker plus junk and expected successful rendering. The stronger media gate correctly rejected the fake video; the full unit run returned 1 failure / 288 passes. Both fixtures now contain a real small 854×480 MP4 and continue to exercise delivery without bypassing validation. The poll regression and five media-gate checks passed together after the fix; current feature-run results are retained separately. |
+| BUG-130 | Audit recovery | F165 | `tools/tracker_integrity_audit.py` | F165 requests structural consistency without certifying the previous run, but the defect-status audit still rejected a correctly recorded REGRESSED row. A failure in F165 could therefore keep failing itself after the original issue was fixed. Structural checking now compares the row with its recorded result (PASS→FIXED, FAIL→REGRESSED, missing→PARTIAL). The CLI certification gate still rejects recorded harness failures and regressions. |
+| BUG-131 | Incorrect camera review hints | F239 | `aetherlab/services/proctoring.py`, `tests/test_exam_resume_and_proctoring.py` | Face-count timers survived camera-unavailable/lost periods. When the camera returned, one missing/multiple-face observation could immediately produce a prolonged-observation flag by counting camera downtime. Unknown observations and explicit stream loss now reset continuous face-count timers and raised face flags; renewed observations must meet the full threshold. The regression checks both absence and multiple faces across a long outage. |
+| BUG-132 | P1 unverified cloud media accepted | F249 | `aetherlab/services/render_backend.py`, `pyproject.toml`, `tests/test_cloud_media_check.py` | Without PyAV, the profile gate accepted header-only junk; with PyAV it checked metadata without requiring any decodable frame. Both new regressions failed against the original code (5 passed / 2 failed, `tmp/media-gate-baseline-20261012.log`). A valid signature and metadata do not establish playback. |
+| BUG-133 | P1 cloud output identity | F158/F249 | `aetherlab/services/render_backend.py`, `.github/workflows/render.yml`, `tests/test_cloud_output_identity.py` | If the requested scene MP4 was absent, the worker renamed the largest MP4 as the job output, including unrelated scene output or fragments; multiple exact candidates were silently reduced to the first match. Five executable selection scenarios failed the initial gate (`tmp/cloud-identity-baseline-20261012.log`); bundle/file parity passed. |
+
+Post-fix targeted verification: **13 passed** in
+`tmp/cloud-validation-postfix-20261012.log`. The client now refuses unverified
+media with a PyAV repair hint and samples a decoded frame; `av` is a base
+dependency, independent of local Manim. Worker version 7 requires exactly one
+final class-named MP4 and invalidates older cached worker outputs via the job
+hash. Tests execute the same selection code for missing, unrelated, fragment,
+ambiguous and successful paths, including paths with spaces. F158/F239/F249
+passed their feature checks in `tmp/cloud-story-recheck-20261012.log`. Live
+GitHub dispatch, packaged dependency loading and full media review remain open.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-134 | P1 Windows profile persistence recovery | F234/F242 | `aetherlab/core/atomic_json.py`, `tests/test_atomic_json.py` | The complete regression run returned 295 passes / 1 failure when replacing a student registry raised WinError 5. The original cause of that OS refusal is not established. The writer made only one replace attempt; injected transient sharing violations independently reproduce an unrecoverable save, and a persistent-lock regression establishes the missing bounded-recovery contract (2 failed / 1 passed before the fix). Recovery must reuse the staged file, preserve atomic replacement, retain old data on lasting refusal and propagate non-transient errors. Evidence: `tmp/feature-goal-unit-cloudfix-20261012.log`, `tmp/atomic-recovery-baseline-20261012.log`. |
+
+Final verification after BUG-132–BUG-134: **299 passed**, one upstream ChromaDB
+deprecation warning, exit 0 in
+`tmp/feature-goal-unit-cloudfix-final-20261012.log`. The temporary-lock regression
+checks WinError 5/32/33; at most five replacement attempts add 375 ms total
+delay. Five affected feature stories passed in
+`tmp/cloud-story-recheck-final-20261012.log`; all 134 BUG IDs are linked in the
+canonical tracker. No live GitHub job was attempted because current settings
+have no GitHub token; real cloud/native UI/camera/media review remains open.
+
+## Profile editor acceptance review (2026-10-12)
+
+Baseline `tmp/profile-editing-baseline-final-20261012.log`: **7 failed / 1 passed**.
+The form-cancel path passed; failures exercise real Qt PNG files and registry
+bytes, with injected write refusals only where necessary.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-135 | P1 avatar rollback and misleading save | F235 | `aetherlab/ui/profile_dialog.py`, `tests/test_profile_editing.py` | Avatar bytes were overwritten before identity validation/registry commit, so duplicate username or failed registry save changed an existing photo despite reporting failure. A failed PNG save silently persisted the external source path; a disappearing source silently cleared the old avatar. Failed image loading used a generic profile-save error. Regressions verify unchanged registry/avatar bytes, retained draft and explicit localized photo errors. |
+| BUG-136 | P1 partial new-profile commit | F234/F235 | `aetherlab/ui/profile_dialog.py`, `aetherlab/services/student_profiles.py` | Creating a profile used three independent registry commits: create, activate, update with copied avatar. Failure between them left a profile partially created/activated while the form reported save failure. A regression refuses a second commit and requires complete identity/avatar/active selection in one registry replacement. |
+| BUG-137 | P1 maximum name persistence | F235 | `aetherlab/services/student_profiles.py` | Both name fields allowed 40 characters, producing an 81-character display name including the space. Creation rejected that value; update accepted it but the registry reader discarded it on reload under the 80-character name limit, risking loss/reset of the selected profile. The boundary regression creates, updates and reopens a 40+40-character identity. |
+| BUG-138 | P1 profile switch failure handling | F234/F235 | `aetherlab/ui/profile_dialog.py` | The Use-profile slot allowed registry OSError/ValueError to escape the Qt callback. Direct invocation independently reproduces the exception without crashing the test runner. Failure must remain in the dialog, keep the current profile and show a localized save message. |
+
+After BUG-135–BUG-138: **26 targeted tests passed**, including eleven new form
+regressions; full regression **310 passed**, one upstream ChromaDB warning, exit
+0 (`tmp/profile-editing-postfix-final-20261012.log`,
+`tmp/feature-goal-unit-profilefix-20261012.log`). Profile creation/activation now
+uses one registry commit; unique QSaveFile photo copies preserve prior images
+on rejected writes and are removed on registry failure. All three languages
+report photo errors and support identity edits. Maximum structured names survive
+create/update/reload, while free-form creation keeps its old 80-character limit.
+F234/F235/F242 passed in `tmp/profile-story-recheck-20261012.log`. Injected
+file-picker results do not establish native dialog/keyboard/layout acceptance.
+
+## Profile registry read-recovery review (2026-10-12)
+
+Baseline: seven failures in `tmp/profile-read-baseline-20261012.log`, exercising
+permission failures on test files and direct Qt slot calls.
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-139 | P1 profile registry overwritten after read failure | F234 | `aetherlab/services/student_profiles.py` | `_read_registry` treated every OSError as an empty store. Opening/reading the active profile could replace the unreadable registry with a default profile, while creating a profile could overwrite all existing entries. Transient read refusal must propagate without writing; missing files and malformed JSON retain their existing recovery behavior. Regressions compare original registry bytes and the active learner after recovery. |
+| BUG-140 | P1 profile reload/selection UI recovery | F235 | `aetherlab/ui/profile_dialog.py`, `aetherlab/ui/main_window.py` | Refresh cleared choices and blocked signals before reading the registry, then let read errors escape. Selection/discard read errors also escaped; a successful save followed by a refresh failure was not distinguished from a failed save. Main-window profile opening could leak the same exception. Failures must retain prior choices/draft/current views, disable actions on unconfirmed selections, provide localized Retry, and identify already-saved data accurately. |
+| BUG-141 | P1 teacher-view read-error handling | F240 | `aetherlab/ui/teacher_review_dialog.py` | Registry read failures escaped teacher-review construction/reload. The view must retain a loaded snapshot, distinguish inaccessible data from no mocks and allow retry. Reloading after a spanned empty/error row also needs to clear spans before displaying score columns. |
+| BUG-142 | P1 leaderboard endpoint storage errors | F242 | `aetherlab/ui/leaderboard_dialog.py` | Save/sync caught invalid URLs but not OSError from persisting the endpoint. A file permission failure could escape the Qt slot; it needs a localized storage diagnosis, retained draft, unchanged saved endpoint and no network worker launch. Three school-view regression functions fail initially in `tmp/school-view-io-baseline-20261012.log`. |
+| BUG-143 | P1 local ranking read-error handling | F241 | `aetherlab/ui/leaderboard_dialog.py` | A registry read refusal escaped local-ranking construction/reload. The local sync branch then unconditionally set a local-only status, masking any failure once the loader handled it. Read failures now retain the last confirmed snapshot, show a localized local-file diagnosis, and do not launch a network worker or announce successful loading. |
+| BUG-144 | P1 score-history display | F241 | `aetherlab/ui/leaderboard_dialog.py` | Selecting a student without mocks spanned the empty-history placeholder across both date/score columns. Selecting a scored student afterwards populated the score item without clearing that span, hiding the score from view. A new selection regression fails before the fix in `tmp/ranking-history-span-baseline-20261012.log` and asserts a normal one-column date cell plus visible 42/50 score after switching. |
+
+Targeted verification after BUG-139–BUG-144: **42 passed** in
+`tmp/school-view-io-postfix-final-20261012.log`. Five affected feature stories
+passed in `tmp/read-recovery-story-final-20261012.log`. Registry read failures
+preserve bytes/learner identity, profile forms offer localized Retry and retain
+drafts, and teacher/ranking views retain confirmed snapshots on failure. History
+selection clears old spans. These offscreen checks do not certify native UI,
+real cameras or deployed services.
+
+Full post-fix regression: **323 passed**, one upstream ChromaDB deprecation
+warning, exit 0 (`tmp/feature-goal-unit-readfix-final-20261012.log`). Tracker and
+surface gates passed: 250 stories/results/functions, 82 defect-linked features,
+144 numbered errors linked, 88/88 detected surfaces. The canonical workbook
+retains separate software status and full-behaviour acceptance. Live cloud is
+still unverified: fresh readiness confirms the GitHub token is absent.
+
+## Leaderboard endpoint and mode acceptance (2026-10-12)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-145 | P1 ranking mode mismatch | F241/F242 | `aetherlab/ui/leaderboard_dialog.py` | Clearing and saving the server URL announced local mode but kept the displayed remote rows. The local rows must be loaded before that message, while a registry failure retains the last snapshot with an error rather than falsely claiming a local reload. The first two mode regressions fail in `tmp/leaderboard-mode-baseline-20261012.log`. |
+| BUG-146 | P1 inconsistent endpoint override | F242 | `aetherlab/services/leaderboard_client.py`, `aetherlab/ui/leaderboard_dialog.py` | Getter honored AETHERLAB_LEADERBOARD_URL, but setter/sync returned and used the typed URL. Clearing/saving could announce local mode while reopening used the environment server; sync could bypass the override. Effective URL must be consistent, shown explicitly, and distinguished from the saved preference. Invalid overrides must diagnose configuration and launch no network worker. Initial override regressions fail in `tmp/leaderboard-mode-baseline-20261012.log`; new tests cover blocked invalid overrides and mocked worker destination. |
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-147 | P1 AI allowance read failure resets usage | F236 | `aetherlab/services/ai_help_quota.py` | Every OSError was treated as an empty allowance file. A denied read could grant fresh attempts and overwrite the day's used count. Other IO failures must propagate without updating the counter; missing/malformed-file recovery remains as before. |
+| BUG-148 | P1 AI allowance UI error handling | F236 | `aetherlab/ui/main_window.py`, `aetherlab/ui/command_bar.py` | Reading/writing the allowance had no error boundary, and the badge could represent an unknown allowance as a valid 10/10. The UI needs a translated unknown state, disabled AI actions, available practice and automatic refresh/recovery without claiming consumption. Five initial regression failures are in `tmp/ai-quota-io-baseline-20261012.log`. |
+
+After BUG-145–BUG-148: **334 full regressions passed**, one upstream ChromaDB
+deprecation warning, exit 0 (`tmp/feature-goal-unit-mode-quota-20261012.log`).
+The stronger remote-snapshot completion/model fixture plus all affected quota
+and ranking tests then passed **27 checks** in
+`tmp/mode-quota-postfix-final-20261012.log`; product source was unchanged.
+F236/F241/F242 passed final story checks in
+`tmp/mode-quota-story-final-20261012.log`. Live-provider/native/hardware journeys
+remain separate acceptance requirements.
+
+## Progress and exam persistence recovery (2026-10-12)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-149 | P1 stored progress loss | F227 | `aetherlab/services/ent_practice_progress.py` | Updates treated an unreadable existing progress file as empty and could replace attempts, goals, mistakes and lifetime points. Mutation reads now propagate IO errors and preserve bytes; existing missing/malformed-JSON recovery remains. Read-only consumers still need a separate unavailable-data contract. |
+| BUG-150 | P1 false completion and unhandled save | F227 | `aetherlab/ui/exam_practice.py` | Goal writes escaped and results were marked finished before history commit. Translated errors retain goal drafts; failed results freeze answers, stop the timer and offer retry. Completion/active-file cleanup follow a confirmed commit. |
+| BUG-151 | P1 answer persistence and close | F238 | `aetherlab/ui/exam_practice.py` | Autosave exceptions escaped and dialog closure did not save the currently selected answer. Save errors now appear in the dialog; close/reject retries saving and keeps the window open if persistence fails. |
+| BUG-152 | P1 resume and duplicate result | F238 | `aetherlab/services/ent_practice_progress.py`, `aetherlab/ui/exam_practice.py` | Denied active-file reads appeared absent, allowing replacement. A stale active snapshot after cleanup failure could record the same result again. Resume now reports read errors; pending completion survives reopening, remains frozen and uses a UUID to deduplicate retained history/points. |
+| BUG-153 | P1 failed companion selection | F244 | `aetherlab/ui/student_views.py` | Failed progress updates could destroy stored progress and replace the confirmed companion. Updates now retain the prior choice, report an error in kk/ru/en and permit retry. |
+
+Initial seven regressions failed in
+`tmp/progress-recovery-baseline-20261012.log`. After fixes and an additional
+expired-timer test, **27 focused checks passed** in
+`tmp/progress-recovery-timer-final-20261012.log`. The checks use isolated files,
+injected IO failures and offscreen Qt; they do not certify native OS dialogs or
+physical storage behaviour. Full regression and catalog evidence are recorded
+in `docs/FEATURE_AUDIT_STATUS.md`.
+
+Final ordering fix passed **343 full regressions**, one upstream ChromaDB
+deprecation warning, exit 0 in `tmp/feature-progress-final-unit-20261012.log`.
+F227/F238/F244 passed their final catalog checks; all 153 numbered errors are
+linked in the canonical 250-story workbook. Full user-behaviour acceptance
+remains open.
+
+## Unavailable progress across student and school screens (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-154 | P1 false empty progress | F227 | `aetherlab/services/ent_practice_progress.py` | Read-only getters swallowed IO errors and returned empty history/default goals/zero points. All readers now propagate real IO failures; a normalized ProgressSnapshot reads one file consistently. Existing missing/malformed-JSON recovery remains. |
+| BUG-155 | P1 misleading/reset progress views | F230/F246 | `aetherlab/ui/student_views.py`, `aetherlab/ui/progress_notice.py` | A denied read reset known dashboard/history/confidence values or showed a new learner/zero progress. A translated unavailable/stale notice and Reload now preserve confirmed snapshots, show unknown initial state and keep search/learning available. Cache identity is the file path, so a failed profile switch cannot reveal another student's snapshot. |
+| BUG-156 | P1 unknown goals and mistakes | F227 | `aetherlab/ui/exam_practice.py` | Unreadable setup looked like absent goals/mistakes and exposed default goal edits. Unknown goal controls and mistake review are now disabled; retry restores saved values and preserves drafts that were already loaded/edited. Ordinary question practice remains available. |
+| BUG-157 | P1 wrong sync error diagnosis | F242 | `aetherlab/ui/leaderboard_dialog.py` | Local history IO failure was reported as a network failure. The worker now emits a trusted local-file error key, makes no request and keeps the ranking snapshot; the UI translates that diagnosis. |
+
+The initial run reproduced five read/view failures and passed the existing
+missing/malformed recovery check (`tmp/progress-read-baseline-20261012.log`).
+Its school test and one interim sync test had fixture API mistakes, which were
+corrected and are not counted as application defects. The final focused group
+passed **37 tests** (`tmp/progress-read-confirmed-20261013.log`), and full
+regression passed **353 tests**, one upstream ChromaDB deprecation warning,
+exit 0 (`tmp/feature-read-progress-unit-20261013.log`). Ten affected catalog
+stories passed in `tmp/progress-read-stories-20261013.log`; these use offscreen
+Qt/injected file failures, not native OS or deployed-provider acceptance.
+
+## Partial practice, invalid numbers and worked PDF layout (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-158 | P1 inconsistent practice report | F228 | `aetherlab/ui/exam_practice.py`, `aetherlab/services/ent_practice_pdf.py` | Ending a ten-question practice after answering two displayed/saved 2/2, but exported 2/10 and ten scored items. A shared scoring selection now supplies the header/count; the full study key stays present with explicit excluded labels. Timed unanswered questions still count. |
+| BUG-159 | P1 malformed progress crashes | F227/F230 | `aetherlab/services/ent_practice_progress.py`, `aetherlab/ui/progress_notice.py` | Infinity in goals/points or invalid aggregate scores could raise OverflowError/ValueError and stop student views. Readers omit invalid aggregates, recover usable preferences/points, preserve source bytes and disclose recovered values. Updates recover lifetime points from valid historical scores rather than reset them to zero. |
+| BUG-160 | P1 misleading unanswered review | F233 | `aetherlab/ui/exam_practice.py` | Unattempted practice items displayed a zero-point penalty even though excluded from totals. Their review now explicitly says they are not counted, in kk/ru/en. |
+| BUG-161 | P1 raw math in report | F228 | `aetherlab/services/ent_practice_pdf.py` | Worked reports displayed LaTeX commands as prose and omitted the shared solution_latex steps. Report-scoped image resources now render those equations; mathematical prose refers to the displayed steps. A formula failure is reported before replacing an existing file. Formula images are not selectable text. |
+| BUG-162 | P2 PDF pagination | F228 | `aetherlab/services/ent_practice_pdf.py` | Source notices spilled onto almost-empty pages. Adding formula blocks also exposed split worked questions in an intermediate revision. A formula question and the source section now receive explicit page boundaries; native table attributes separate/align progress columns. |
+| BUG-163 | P1 unreadable report after Qt restart | F228 | `aetherlab/ui/fonts.py` | A module-wide installed flag survived destruction of Qt's application font database. Recreated applications exported rectangles in place of all prose and had no searchable PDF text. Registration now belongs to the QApplication instance, skips calls before an application exists and preserves a later custom font. |
+| BUG-164 | P1 unsafe report replacement | F228 | `aetherlab/services/ent_practice_pdf.py` | A no-output print claimed success based on the size of an existing report; partial output destroyed that report, and large corrupt data was accepted. Export now writes to a unique sibling stage, checks a readable PDF and its report title, fsyncs and atomically replaces the destination. Print/validation/replacement failures preserve old bytes and clean the stage. |
+
+Five new baseline checks failed in
+`tmp/result-consistency-baseline-20261013.log`. Focused checks passed after
+scoring/numeric repairs and then with formula/layout tests; the ten new checks
+passed in `tmp/result-topic-formulas-final-20261013.log` before the final
+pagination assertion was strengthened. Final source/test evidence is in
+`docs/FEATURE_AUDIT_STATUS.md`. Poppler previews of all 36 pages of three
+isolated ten-question reports were inspected after the final layout change.
+The first exercise's three formula steps were rendered for each of the 25
+topics; this does not certify every numerical variation or question layout.
+
+The first combined regression found one order-dependent failure: **1 failed,
+362 passed** in `tmp/feature-results-final-unit-20261013.log`. Poppler inspection
+showed rectangles in place of prose. The shortened quota/PDF sequence also
+failed (**1 failed, 10 passed**, `tmp/font-order-baseline.log`), and both new
+font-lifetime cases failed before repair (`tmp/font-lifetime-baseline2.log`).
+After the per-application registration fix, the affected group passed **41
+tests** in `tmp/font-order-postfix.log`. A new subprocess case recreates Qt and
+checks selectable Russian/Kazakh/English PDF prose; it also confirms that a
+custom font is not reset by a repeated installer call.
+
+All three PDF write-failure baselines failed in
+`tmp/pdf-transaction-baseline.log`: no output falsely claimed success, partial
+output altered existing bytes, and large invalid output was accepted. These
+are injected printer failures, not a physical-disk interruption certification.
+
+## Live cloud output diagnostics (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-165 | P1 wrong cloud failure kind | F136/F158/F249 | `aetherlab/services/manim_runtime.py`, `aetherlab/services/render_backend.py` | A real empty-scene job failed the exact-MP4 selector, but the client called it ffmpeg because dependency output contained that word. Long cleanup also hid the actual output error. The client now extracts the concrete selector failure, classifies zero/multiple outputs as artifact_missing/artifact_ambiguous and explains the animation/retry action. Missing upload and invalid downloaded media retain artifact_missing/artifact_invalid instead of unknown/ffmpeg. |
+
+The initial real failure was run 38311744646, job
+`f512afe300c568d70a73a5a0`; worker version 7 refused the missing output and no
+local Manim fallback ran, but the recorded kind was wrong. The five new
+diagnosis cases failed before repair, with three existing cases passing
+(`tmp/cloud-diagnosis-baseline.log`). After repair, **64** related diagnosis,
+worker-selection, media and established bug regressions passed in
+`tmp/cloud-diagnosis-postfix.log`. Live post-fix and final regression evidence
+are recorded in `docs/FEATURE_AUDIT_STATUS.md`.
+
+Final combined regression: **376 passed**, one upstream ChromaDB warning,
+exit 0 in `tmp/feature-complete-confirm-unit-20261013.log`. All 15 affected
+catalog stories passed after final repairs. The initial font catalog timeout
+was followed by a successful recheck with font-lifetime assertions separated
+from unrelated math startup. The real post-fix missing-output run 38312254517
+reported artifact_missing with no video or local fallback. The successful
+four-second 720p30 run 38311353505 and its cache reuse were fully decoded;
+this is limited cloud evidence, not a complete narrated-lesson certification.
+
+## Native practice feedback and readable review (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-166 | P2 raw math commands in study prose | F233 | `aetherlab/services/practice_math.py`, `aetherlab/ui/exam_practice.py` | Native practice feedback and the result key showed `v_0` and `\\cdot` next to correctly typeset equations. A source-matched formatter now displays the authored bank's supported math subset as readable text, retaining grouped fractions, roots and scripts. Original questions, answers and typeset LaTeX are unchanged. Unsupported expressions are retained rather than silently dropping operators. |
+| BUG-167 | P2 invented mistakes after a perfect attempt | F230/F233 | `aetherlab/ui/student_views.py`, `aetherlab/ui/exam_practice.py` | After native early finish at 2/2, home told the student to review mistakes and the result action called the topic weak. Perfect samples now display their actual count, invite further practice and avoid a mastery claim. A later imperfect attempt restores the review action in kk/ru/en. |
+| BUG-168 | P2 code font used for the study key | F233 | `aetherlab/ui/exam_practice.py` | The native result key inherited the global code-editor font, Cascadia Code, producing small dense study prose. A scoped PracticeReview style now uses the application's language-safe UI font at 14px. Code editor styles remain separate. |
+
+Each defect was reproduced before repair: three language cases failed in each
+of `tmp/explanation-baseline-20261013.log`,
+`tmp/recommend-baseline-20261013.log`, and
+`tmp/review-font-baseline-20261013.log`. The first formatter group passed 12
+checks; the pre-font combined group passed 60 checks in
+`tmp/explanation-focused-20261013.log`. Final regression, native scope and
+remaining acceptance are recorded in `docs/FEATURE_AUDIT_STATUS.md`.
+
+Native tests used a current-source pythonw window and the isolated
+`tmp/feature-native-ui-20261013-current` learner data, preserving the original
+PhysLab window. The native PDF picker was opened and cancelled; no export or
+physical storage failure is claimed from that action. Native screenshots were
+inspected through Computer Use; no accessibility-index failure is recorded as
+an app defect.
+
+## Native PDF device and completed mistake review (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-169 | P1 PDF export blocks on a system printer | F228 | `aetherlab/services/ent_practice_pdf.py` | Saving a Russian report through the native file picker opened Windows' printer-connection wait even though the requested result was a PDF. Cancelling that wait allowed the old PDF path to finish. Export now uses QPdfWriter directly, releases its output handle before validation and retains staged validation, fsync and atomic replacement. After restart, a native Kazakh export completed without the printer wait; its three pages were inspected. |
+| BUG-170 | P2 completed mistakes still advertised as pending | F230 | `aetherlab/ui/student_views.py` | After native correction of the only missed item, home showed zero mistakes but still instructed the student to review mistakes because historical accuracy remained 5/6. Recommendations now inspect pending IDs in the selected topic, retaining historical counts and inviting new practice when that topic has no queued items. A pending mistake in another topic cannot revive this action. |
+
+The first two pytest commands for BUG-169 did not reach tmp_path tests because
+the system pytest temporary directory denied access. Their logs record setup
+errors, not a product failure baseline. An isolated repository basetemp then
+passed **34** focused checks. Failure-injection tests now supply the stage path
+directly rather than relying on QPrinter.outputFileName; their old-file and
+cleanup assertions remain intact. A new regression forbids system-printer
+construction while producing a readable PDF.
+
+BUG-170 was reproduced natively and in all three languages: **3 failed** in
+`tmp/native-cleared-mistakes-baseline-20261013.log`. The existing imperfect
+sample regression now records actual wrong question IDs, matching its expected
+review action. Post-fix evidence and remaining acceptance are recorded in
+`docs/FEATURE_AUDIT_STATUS.md`.
+
+## Native timed mock follow-up (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-171 | P2 orphan setup label in timed mode | F226 | `aetherlab/ui/exam_practice.py` | Switching from exercises to the timed mock hid only the session-size combo box, leaving its label and an empty row. The complete field now hides; returning to practice or changing language preserves the selected practice count. Native Kazakh post-fix setup was inspected. |
+| BUG-172 | P2 mock mistakes missing from home recommendation | F230 | `aetherlab/ui/student_views.py` | A native completed mock showed one Dynamics mistake but home said that topic had no queued questions. The earlier topic-membership lookup covered only exercise IDs. It now checks exercises and the fixed mock bank, without treating another topic's mistake as local or rewriting historical accuracy. Native post-restart home correctly invites Dynamics review. |
+
+BUG-171 failed in three locales before repair
+(`tmp/timed-setup-baseline-20261013.log`). After repair, 34 related checks passed
+in `tmp/native-timed-focused-20261013.log`. The strengthened setup regression
+also checks language rebuilding and direct timed initialization; all three
+cases passed in `tmp/timed-setup-final-20261013.log`.
+
+BUG-172 was reproduced in the native English dashboard after a 1/50 mock and
+in a standalone check. Its three-locale regression failed before repair in
+`tmp/mock-recommend-three-baseline-20261013.log`; the post-fix display/read/setup
+group passed 34 in `tmp/timed-home-postfix-20261013.log`.
+
+The first full regression stalled during collection in asyncio's local
+socketpair accept under restricted network permissions. The visible stack in
+`tmp/timed-collection-visible-stack-20261013.log` identifies
+`tests/test_batch.py`'s import-time RAG check. Own stalled processes were
+identified by exact commands and stopped before the permitted full retry.
+No product success/failure baseline is inferred from that environment stall.
+
+## Worked mock math and confirmation recovery (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-173 | P2 missing typeset mock/result solutions | F233 | `aetherlab/services/ent_mock_solutions.py`, `aetherlab/ui/exam_practice.py` | All 40 fixed mock items had empty solution_latex; completed practice and mock reviews displayed prose without their worked equations. Shared math now covers every fixed mock item, renders in completed reviews and feeds PDF. Review image resources belong to a new per-attempt document. Typesetting failure falls back to readable math or an explicit localized diagnosis, never raw TeX. |
+| BUG-174 | P2 exam buttons ignore the selected language | F226 | `aetherlab/ui/exam_practice.py` | Native Kazakh confirmations used Qt's stock English Yes/No buttons. Resume/Start again/Cancel and Finish/Continue now have explicit kk/ru/en labels. Finishing defaults to Continue; replacement warns that saved answers will be removed. |
+| BUG-175 | P1 dismissing Resume loses the saved attempt | F238 | `aetherlab/ui/exam_practice.py` | Escape/window dismissal could return a non-Yes result and proceed through clearing the active file and starting again. An explicit Cancel/escape control now returns to setup without changing saved bytes. A globally valid question ID incompatible with the session's bank is diagnosed without silently replacing it. Explicit Resume and Start again retain their distinct behavior. |
+
+BUG-173 baseline: **8 failed** in `tmp/mock-math-baseline-20261013.log`.
+BUG-174/175 baseline: **6 failed** in
+`tmp/exam-confirm-baseline2-20261013.log`. The first confirmation collection
+attempt had an incorrect helper import; it was a test-authoring error, not an
+app failure. The corrected baseline completed with exit 1.
+
+The first post-fix group passed 46 and exposed a test's comparison of 0.4
+against a correctly formatted 0.40. The next group terminated after two test
+failures. Isolating them showed that the RMS key rounds to whole volts and
+that globally unknown IDs are rejected before Resume appears. A queued Qt
+callback then had no intended modal. Tests now compare numerical values,
+apply that item's explicit whole-volt approximation, and use a valid exercise
+ID incompatible with the timed bank. No storage validation was weakened.
+
+The repaired focused group passed **63**. Extended math/confirmation checks
+passed **21**, including all equations in three full mock PDFs and renderer
+failure fallback. Final full regression passed **422**, one upstream warning,
+exit 0, in `tmp/solutions-full-final-20261013.log`. Scope, native evidence and
+remaining acceptance are recorded in `docs/FEATURE_AUDIT_STATUS.md`.

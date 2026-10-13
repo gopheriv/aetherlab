@@ -16,6 +16,6 @@ else:
 def require_qt() -> None:
     if QT_IMPORT_ERROR is not None:
         raise RuntimeError(
-            "PyQt6 is not installed. Install AetherLab (PyQt6 is a core dependency) with: "
+            "PyQt6 is not installed. Install PhysLab (PyQt6 is a core dependency) with: "
             "python -m pip install -e .  —  or just: python -m pip install PyQt6"
         ) from QT_IMPORT_ERROR

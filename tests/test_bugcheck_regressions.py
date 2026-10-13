@@ -137,6 +137,32 @@ def test_bug69_rearranging_by_a_symbol_is_equivalent():
     ]) == ["failed", "failed"]
 
 
+def test_bug98_symbolic_scaling_must_be_provably_nonzero():
+    uncertain = SimpleNamespace(
+        derivation_records=[{"from_expression": "x = y", "to_expression": "x*y = y**2"}],
+        derivation_steps=["Multiply both sides by y."],
+        variables={},
+    )
+    result = verify_derivation_records(uncertain)
+    assert result["status"] == "not_checked"
+    assert result["items"][0]["status"] == "not_checked"
+    assert "may be zero" in result["items"][0]["detail"]
+
+    nonzero = SimpleNamespace(
+        derivation_records=[{"from_expression": "F = m*a", "to_expression": "a = F/m"}],
+        derivation_steps=["Divide by mass."],
+        variables={"F": 10.0, "m": 2.0, "a": 5.0},
+    )
+    assert verify_derivation_records(nonzero)["items"][0]["status"] == "passed"
+
+    zero = SimpleNamespace(
+        derivation_records=[{"from_expression": "x = y", "to_expression": "x*y = y**2"}],
+        derivation_steps=["Multiply both sides by y."],
+        variables={"y": 0.0},
+    )
+    assert verify_derivation_records(zero)["items"][0]["status"] == "failed"
+
+
 def test_bug70_generic_phrases_do_not_route_to_unrelated_components():
     wrong = {
         "atwood machine": _solver(
@@ -468,6 +494,8 @@ def _revision_loop(monkeypatch, scores, passes, tmp_path):
     async def fake_critique(*_a, **_k):
         calls["critique"] += 1
         score = queue.pop(0)
+        if score == "skipped":
+            return Critique(verdict="skipped")
         return Critique(verdict="revise" if score < 7 else "ship", score=score, issues=["x"])
 
     async def fake_revise(self, code, critique, class_name):
@@ -509,6 +537,148 @@ def test_last_revision_is_scored_before_it_ships(monkeypatch, tmp_path):
     assert any("Final visual critique" in d for d in kept.diagnostics)
     reverted, _calls, original = _revision_loop(monkeypatch, [4.0, 3.5], 1, tmp_path)
     assert reverted.code == original and reverted.quality_score == 4.0
+
+
+def test_unscored_revision_is_reverted_when_critique_is_skipped(monkeypatch, tmp_path):
+    # Skipping a critic call must not promote the latest trial over the last
+    # render that actually received a score, both during the loop and at exit.
+    in_loop, calls, original = _revision_loop(
+        monkeypatch, [4.0, "skipped"], 2, tmp_path
+    )
+    assert in_loop.code == original and in_loop.quality_score == 4.0
+    assert calls == {"critique": 2, "render": 1}, calls
+    assert any("kept the last scored render" in d for d in in_loop.diagnostics)
+
+    at_exit, _calls, original = _revision_loop(
+        monkeypatch, [4.0, "skipped"], 1, tmp_path
+    )
+    assert at_exit.code == original and at_exit.quality_score == 4.0
+    assert any("kept the last scored render" in d for d in at_exit.diagnostics)
+
+
+def test_cloud_repair_over_budget_is_rejected_before_render(monkeypatch, tmp_path):
+    import asyncio
+    from dataclasses import replace
+
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    original = (
+        "from manim import *\nclass AetherLabScene(Scene):\n"
+        "    def construct(self):\n        self.play(Create(Dot()))\n"
+    )
+    over_budget = (
+        "from manim import *\nclass AetherLabScene(Scene):\n"
+        "    def construct(self):\n"
+        + "".join("        self.play(Wait(1))\n" for _ in range(17))
+    )
+    settings = SimpleNamespace(
+        openai_api_key="sk-test", vision_model="", llm_model="test",
+        render_mode="cloud", data_dir=tmp_path, narration_enabled=False,
+    )
+    runtime = ManimRuntime(settings)
+    start = SceneBundle("AetherLabScene", original, "manim-community", "compiled")
+    render_calls = []
+
+    async def fake_preflight(bundle, *_a, **_k):
+        return bundle
+
+    async def fake_render(bundle, *_a, **_k):
+        render_calls.append(bundle.code)
+        failed = replace(bundle, status="render-error")
+        failed.diagnostics.append("synthetic render failure")
+        return failed
+
+    async def fake_repair(self, *_a, **_k):
+        return over_budget
+
+    monkeypatch.setattr(runtime, "_preflight_and_repair", fake_preflight)
+    monkeypatch.setattr(runtime, "_render_once", fake_render)
+    monkeypatch.setattr(SceneGenerator, "repair", fake_repair)
+    result = asyncio.run(runtime.render_scene_with_repair(
+        start, settings, quality="l", max_repairs=1, max_revisions=0,
+        duration_target_s=30,
+    ))
+
+    assert render_calls == [original], "over-budget repaired code reached the cloud renderer"
+    assert result.code == original
+    assert any("[PERF:PLAY_BUDGET]" in d for d in result.diagnostics)
+
+
+def test_cloud_visual_revision_over_budget_is_not_rendered(monkeypatch, tmp_path):
+    import asyncio
+    from dataclasses import replace
+
+    from aetherlab.services import manim_runtime, scene_critic
+    from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_critic import Critique
+    from aetherlab.services.scene_generator import SceneGenerator
+
+    video = tmp_path / "baseline.mp4"
+    video.write_bytes(b"video")
+    original = (
+        "from manim import *\nclass AetherLabScene(Scene):\n"
+        "    def construct(self):\n        self.play(Create(Dot()))\n"
+    )
+    over_budget = (
+        "from manim import *\nclass AetherLabScene(Scene):\n"
+        "    def construct(self):\n"
+        + "".join("        self.play(Wait(1))\n" for _ in range(17))
+    )
+    settings = SimpleNamespace(
+        openai_api_key="sk-test", vision_model="vision", llm_model="test",
+        render_mode="cloud", visual_critic_max_passes=1,
+        visual_critic_keyframes=3, data_dir=tmp_path, narration_enabled=False,
+    )
+    runtime = ManimRuntime(settings)
+    start = SceneBundle(
+        "AetherLabScene", original, "manim-community", "rendered",
+        video_path=str(video),
+    )
+    render_calls = []
+    monkeypatch.setattr(manim_runtime, "_blocking_scene_issues", lambda *_a: (True, []))
+
+    async def fake_critique(*_a, **_k):
+        return Critique(verdict="revise", score=4.0, issues=["Improve the composition."])
+
+    async def fake_revise(self, *_a, **_k):
+        return over_budget
+
+    async def fake_repair(self, *_a, **_k):
+        return over_budget
+
+    async def fake_render(bundle, *_a, **_k):
+        render_calls.append(bundle.code)
+        return replace(bundle, status="rendered", video_path=str(video))
+
+    monkeypatch.setattr(scene_critic, "critique_video", fake_critique)
+    monkeypatch.setattr(SceneGenerator, "revise", fake_revise)
+    monkeypatch.setattr(SceneGenerator, "repair", fake_repair)
+    monkeypatch.setattr(runtime, "_render_once", fake_render)
+    result = asyncio.run(runtime.render_scene_with_repair(
+        start, settings, quality="l", max_revisions=1, duration_target_s=30,
+    ))
+
+    assert render_calls == [], "over-budget visual revision reached the cloud renderer"
+    assert result.code == original
+    assert any("[PERF:PLAY_BUDGET]" in d for d in result.diagnostics)
+
+
+def test_cloud_admission_uses_cost_and_play_budgets_but_allows_local():
+    from aetherlab.services.manim_runtime import _cloud_render_admission_issues
+
+    long_wait = (
+        "from manim import *\nclass AetherLabScene(Scene):\n"
+        "    def construct(self):\n"
+        + "".join("        self.wait(15)\n" for _ in range(4))
+    )
+    cloud_issues = _cloud_render_admission_issues(
+        long_wait, SimpleNamespace(render_mode="cloud"), duration_target_s=30
+    )
+    assert any(issue.startswith("[PERF:CLOUD_COST]") for issue in cloud_issues)
+    assert _cloud_render_admission_issues(
+        long_wait, SimpleNamespace(render_mode="local"), duration_target_s=30
+    ) == []
 
 
 def test_repair_that_fixes_the_crash_but_keeps_advisory_drift_still_ships(monkeypatch):

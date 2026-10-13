@@ -1,886 +1,1427 @@
 {
   "F01": {
     "status": "PASS",
-    "note": "MainWindow constructs; title ok=True"
+    "note": "MainWindow constructs; widget facade preserves 32 exports",
+    "checked_at": "2026-10-12T14:00:36+00:00"
   },
   "F02": {
     "status": "PASS",
-    "note": "smoke exit 0; scene status line present"
+    "note": "smoke exit 0; scene status line present",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F03": {
     "status": "PASS",
-    "note": "nargs='?' const + explicit prompt both parse"
+    "note": "nargs='?' const + explicit prompt both parse",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F04": {
     "status": "PASS",
-    "note": "watchdog present with backoff logic"
+    "note": "watchdog present with backoff logic",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F05": {
     "status": "PASS",
-    "note": "require_qt raises RuntimeError w/ install hint"
+    "note": "require_qt raises RuntimeError w/ install hint",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F06": {
     "status": "PASS",
-    "note": "model=gpt-5.5 data_dir set timeout=900.0; bounded async client retries; manim-bot aliases load (BUG-34)"
+    "note": "model=gpt-5.5 data_dir set timeout=900.0; bounded async client retries; manim-bot aliases load (BUG-34)",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F07": {
     "status": "PASS",
-    "note": "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
+    "note": "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F08": {
     "status": "PASS",
-    "note": "env > app-config precedence verified"
+    "note": "env > app-config precedence verified",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F09": {
     "status": "PASS",
-    "note": "missing\u2192{}; parsed model/baseUrl/apiKey"
+    "note": "missing\u2192{}; parsed model/baseUrl/apiKey",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F10": {
     "status": "PASS",
-    "note": "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
+    "note": "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F11": {
     "status": "PASS",
-    "note": "data=AetherLab chroma=chroma"
+    "note": "data=AetherLab chroma=chroma",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F12": {
     "status": "PASS",
-    "note": "submit trims+emits+clears; empty guarded"
+    "note": "submit trims+emits+clears; empty guarded",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F13": {
     "status": "PASS",
-    "note": "10 examples; pick fills field"
+    "note": "10 examples; pick fills field",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F14": {
     "status": "PASS",
-    "note": "quality maps Draft/Standard/High\u2192l/m/h; set_quality by flag"
+    "note": "quality maps Draft/Standard/High\u2192l/m/h; set_quality by flag",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F15": {
     "status": "PASS",
-    "note": "Run\u2194Cancel swap + input disable"
+    "note": "Run\u2194Cancel swap + input disable",
+    "checked_at": "2026-10-12T14:04:13+00:00"
   },
   "F16": {
     "status": "PASS",
-    "note": "pipeline ran: solver=deterministic-fallback scene=rendered"
+    "note": "pipeline ran: solver=deterministic-fallback scene=rendered",
+    "checked_at": "2026-10-12T14:04:44+00:00"
   },
   "F17": {
     "status": "PASS",
-    "note": "stage transitions + reset clears timing (BUG-1)"
+    "note": "stage transitions + reset clears timing (BUG-1)",
+    "checked_at": "2026-10-12T14:04:44+00:00"
   },
   "F18": {
     "status": "PASS",
-    "note": "cancel stays honest and stops active render process promptly (BUG-49/56)"
+    "note": "cancel stays honest and stops active render process promptly (BUG-49/56)",
+    "checked_at": "2026-10-12T14:04:44+00:00"
   },
   "F19": {
     "status": "PASS",
-    "note": "double-run guard present"
+    "note": "double-run guard present",
+    "checked_at": "2026-10-12T14:04:44+00:00"
   },
   "F20": {
     "status": "PASS",
-    "note": "old worker disconnected + deleteLater"
+    "note": "old worker disconnected + deleteLater",
+    "checked_at": "2026-10-12T14:04:44+00:00"
   },
   "F21": {
     "status": "PASS",
-    "note": "close defers until pipeline and library QThreads finish (BUG-48/54)"
+    "note": "close defers until pipeline and library QThreads finish (BUG-48/54)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F22": {
     "status": "PASS",
-    "note": "remote solve path present (temp 0.2 via model policy, plot key)"
+    "note": "remote solve path present (temp 0.2 via model policy, plot key)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F23": {
     "status": "PASS",
-    "note": "fallback: 5 steps, plot attached"
+    "note": "fallback: 5 steps, plot attached",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F24": {
     "status": "PASS",
-    "note": "phrases: ['navier stokes', 'navier-stokes'] / ['fourier transform', 'fourier']"
+    "note": "phrases: ['navier stokes', 'navier-stokes'] / ['fourier transform', 'fourier']",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F25": {
     "status": "PASS",
-    "note": "think-strip + brace extraction"
+    "note": "think-strip + brace extraction",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F26": {
     "status": "PASS",
-    "note": "plot dict kept; non-dict \u2192 None"
+    "note": "plot dict kept; non-dict \u2192 None",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F27": {
     "status": "PASS",
-    "note": "whitelisted expr compiles + vectorizes"
+    "note": "whitelisted expr compiles + vectorizes",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F28": {
     "status": "PASS",
-    "note": "all 6 unsafe exprs rejected; ^\u2192** works"
+    "note": "all 6 unsafe exprs rejected; ^\u2192** works",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F29": {
     "status": "PASS",
-    "note": "fallback payload compiles; bad kind rejected"
+    "note": "fallback payload compiles; bad kind rejected",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F30": {
     "status": "PASS",
-    "note": "whitespace-normalized key 03b04becd521"
+    "note": "whitespace-normalized key 03b04becd521",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F31": {
     "status": "PASS",
-    "note": "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)"
+    "note": "stage cache independent; corrupt SQLite quarantined and rebuilt (BUG-50/51)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F32": {
     "status": "PASS",
-    "note": "fallback+key rejected; wrong model rejected"
+    "note": "fallback+key rejected; wrong model rejected",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F33": {
     "status": "PASS",
-    "note": "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
+    "note": "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F34": {
     "status": "PASS",
-    "note": "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache"
+    "note": "_video_exists guards empty/missing/unplayable; UI worker rejects bad video cache",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F35": {
     "status": "PASS",
-    "note": "chromadb path scores 1/(1+dist)"
+    "note": "chromadb path scores 1/(1+dist)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F36": {
     "status": "PASS",
-    "note": "filesystem: 1 hit(s), scores in [0,1] (BUG-3)"
+    "note": "filesystem: 1 hit(s), scores in [0,1] (BUG-3)",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F37": {
     "status": "PASS",
-    "note": "empty keywords \u2192 backend 'none'"
+    "note": "empty keywords \u2192 backend 'none'",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F38": {
     "status": "PASS",
-    "note": "reference cards render + empty state"
+    "note": "reference cards render + empty state",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F39": {
     "status": "PASS",
-    "note": "auto-ingest on empty collection"
+    "note": "auto-ingest on empty collection",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F40": {
     "status": "PASS",
-    "note": "2 pending file(s) detected"
+    "note": "2 pending file(s) detected",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F41": {
     "status": "PASS",
-    "note": "6 chunks from long text"
+    "note": "6 chunks from long text",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F42": {
     "status": "PASS",
-    "note": "PDF page-by-page chunking present"
+    "note": "PDF page-by-page chunking present",
+    "checked_at": "2026-10-12T14:04:49+00:00"
   },
   "F43": {
     "status": "PASS",
-    "note": "ingest upserted 12; re-run 0; stale chunks purged on change"
+    "note": "ingest upserted 12; re-run 0; stale chunks purged on change",
+    "checked_at": "2026-10-12T14:04:52+00:00"
   },
   "F44": {
     "status": "PASS",
-    "note": "library panel refresh; file_count=3"
+    "note": "library panel refresh; file_count=3",
+    "checked_at": "2026-10-12T14:04:52+00:00"
   },
   "F45": {
     "status": "PASS",
-    "note": "add-folder copies + triggers reindex"
+    "note": "add-folder copies + triggers reindex",
+    "checked_at": "2026-10-12T14:04:52+00:00"
   },
   "F46": {
     "status": "PASS",
-    "note": "index/download workers join app close barrier; cancel remains pending (BUG-54)"
+    "note": "index/download workers join app close barrier; cancel remains pending (BUG-54)",
+    "checked_at": "2026-10-12T14:04:52+00:00"
   },
   "F47": {
     "status": "PASS",
-    "note": "starter dialog + cancel-safe completion: 3 defaults (BUG-54)"
+    "note": "starter dialog + cancel-safe completion: 3 defaults (BUG-54)",
+    "checked_at": "2026-10-12T14:04:52+00:00"
   },
   "F48": {
     "status": "PASS",
-    "note": "URL fallback + positive free_disk_mb + skip-existing"
+    "note": "URL fallback + positive free_disk_mb + skip-existing",
+    "checked_at": "2026-10-12T14:04:54+00:00"
   },
   "F49": {
     "status": "PASS",
-    "note": "extract strips think/fences+renames; context budget wired (BUG-5)"
+    "note": "extract strips think/fences+renames; context budget wired (BUG-5)",
+    "checked_at": "2026-10-12T14:04:58+00:00"
   },
   "F50": {
     "status": "PASS",
-    "note": "compile+retry path present"
+    "note": "compile+retry path present",
+    "checked_at": "2026-10-12T14:04:58+00:00"
   },
   "F51": {
     "status": "PASS",
-    "note": "static template compiles (1586 chars)"
+    "note": "static template compiles (1586 chars)",
+    "checked_at": "2026-10-12T14:04:58+00:00"
   },
   "F52": {
     "status": "PASS",
-    "note": "dynamic fallback compiles w/ ValueTracker"
+    "note": "dynamic fallback compiles w/ ValueTracker",
+    "checked_at": "2026-10-12T14:04:58+00:00"
   },
   "F53": {
     "status": "PASS",
-    "note": "engine=manim-community"
+    "note": "engine=manim-community",
+    "checked_at": "2026-10-12T14:04:58+00:00"
   },
   "F54": {
     "status": "PASS",
-    "note": "render command builder supplies fps+media_dir"
+    "note": "local Manim command flags verified; real render produced 5334 bytes",
+    "checked_at": "2026-10-12T14:05:02+00:00"
   },
   "F55": {
     "status": "PASS",
-    "note": "tier=constrained fps=30; env override honored"
+    "note": "tier=constrained fps=30; env override honored",
+    "checked_at": "2026-10-12T14:05:02+00:00"
   },
   "F56": {
     "status": "PASS",
-    "note": "quality timeout statuses + whole process-tree termination (BUG-55)"
+    "note": "quality timeout statuses + whole process-tree termination (BUG-55)",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F57": {
     "status": "PASS",
-    "note": "_find_video None + _clean_old_renders safe"
+    "note": "_find_video None + _clean_old_renders safe",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F58": {
     "status": "PASS",
-    "note": "manim cmd: C:\\Python314\\python.exe -m manim"
+    "note": "manim cmd: C:\\Python314\\python.exe -m manim",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F59": {
     "status": "PASS",
-    "note": "pill tabs map to stack pages"
+    "note": "pill tabs map to stack pages",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F60": {
     "status": "PASS",
-    "note": "diagnostics surfaced in the drawer (v2), code view stays clean"
+    "note": "diagnostics surfaced in the drawer (v2), code view stays clean",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F61": {
     "status": "PASS",
-    "note": "video player + time label formatting"
+    "note": "video player + time label formatting",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F62": {
     "status": "PASS",
-    "note": "toggle canvas\u2194code present"
+    "note": "toggle canvas\u2194code present",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F63": {
     "status": "PASS",
-    "note": "LiveCanvas constructs + set_state"
+    "note": "LiveCanvas constructs + set_state",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F64": {
     "status": "PASS",
-    "note": "plot-driven curve; bad plot falls back"
+    "note": "plot-driven curve; bad plot falls back",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F65": {
     "status": "PASS",
-    "note": "damped/pendulum/generic all produce curves"
+    "note": "damped/pendulum/generic all produce curves",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F66": {
     "status": "PASS",
-    "note": "phase adds curve (1\u21922)"
+    "note": "phase adds curve (1\u21922)",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F67": {
     "status": "PASS",
-    "note": "reset_view restores zoom/pan"
+    "note": "reset_view restores zoom/pan",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F68": {
     "status": "PASS",
-    "note": "empty canvas safe; effective ranges default"
+    "note": "empty canvas safe; effective ranges default",
+    "checked_at": "2026-10-12T14:05:04+00:00"
   },
   "F69": {
     "status": "PASS",
-    "note": "negative range preserved on update_variable (BUG-2)"
+    "note": "negative range preserved on update_variable (BUG-2)",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F70": {
     "status": "PASS",
-    "note": "spinbox\u2192slider sync"
+    "note": "spinbox\u2192slider sync",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F71": {
     "status": "PASS",
-    "note": "collapse toggles container"
+    "note": "collapse toggles container",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F72": {
     "status": "PASS",
-    "note": "summary banner + cache note + chips"
+    "note": "summary banner + cache note + chips",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F73": {
     "status": "PASS",
-    "note": "collapsible steps + expand-all"
+    "note": "collapsible steps + expand-all",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F74": {
     "status": "PASS",
-    "note": "empty hint present pre-run"
+    "note": "empty hint present pre-run",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F75": {
     "status": "PASS",
-    "note": "rail select emits index"
+    "note": "rail select emits index",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F76": {
     "status": "PASS",
-    "note": "arrow key advances selection"
+    "note": "arrow key advances selection",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F77": {
     "status": "PASS",
-    "note": "Params gated until result"
+    "note": "Lab destination remains available before and after a solve",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F78": {
     "status": "PASS",
-    "note": "scene ready auto-switches to Scene"
+    "note": "scene ready hides loading and opens the Lab workspace",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F79": {
     "status": "PASS",
-    "note": "history persists; corrupt DB quarantined and rebuilt (BUG-52)"
+    "note": "history persists; corrupt DB quarantined and rebuilt (BUG-52)",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F80": {
     "status": "PASS",
-    "note": "double-click emits prompt_selected"
+    "note": "double-click emits prompt_selected",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F81": {
     "status": "PASS",
-    "note": "clear empties list + db"
+    "note": "clear empties list + db",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F82": {
     "status": "PASS",
-    "note": "toast shows kind + details"
+    "note": "toast shows kind + details",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F83": {
     "status": "PASS",
-    "note": "error banner + deduped details window"
+    "note": "error banner + deduped details window",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F84": {
     "status": "PASS",
-    "note": "failure sets stepper error + status bar"
+    "note": "failure sets stepper error + status bar",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F85": {
     "status": "PASS",
-    "note": "latex export + escaping"
+    "note": "latex export + escaping",
+    "checked_at": "2026-10-12T14:05:05+00:00"
   },
   "F86": {
     "status": "PASS",
-    "note": "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)"
+    "note": "PDF compiles off-thread; failure saves chosen .tex fallback (BUG-57)",
+    "checked_at": "2026-10-12T14:05:06+00:00"
   },
   "F87": {
     "status": "PASS",
-    "note": "scene code export"
+    "note": "scene code export",
+    "checked_at": "2026-10-12T14:05:06+00:00"
   },
   "F88": {
     "status": "PASS",
-    "note": "video copy is backgrounded, cancellable, and atomic (BUG-57)"
+    "note": "video copy is backgrounded, cancellable, and atomic (BUG-57)",
+    "checked_at": "2026-10-12T14:05:06+00:00"
   },
   "F89": {
     "status": "PASS",
-    "note": "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)"
+    "note": "GIF conversion is backgrounded, cancellable, and atomic (BUG-57)",
+    "checked_at": "2026-10-12T14:05:06+00:00"
   },
   "F90": {
     "status": "PASS",
-    "note": "QSS present (15853 chars)"
+    "note": "QSS present (19423 chars)",
+    "checked_at": "2026-10-12T14:05:06+00:00"
   },
   "F91": {
     "status": "PASS",
-    "note": "responsive shell + command bar + media/canvas minimums fit small screens"
+    "note": "responsive shell + command bar + media/canvas minimums fit small screens",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F92": {
     "status": "PASS",
-    "note": "title bar constructs w/ settings signal"
+    "note": "title bar constructs w/ settings signal",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F93": {
     "status": "PASS",
-    "note": "empty-state status reflects key + library"
+    "note": "empty-state status reflects key + library",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F94": {
     "status": "PASS",
-    "note": "running view stage text"
+    "note": "running view stage text",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F95": {
     "status": "PASS",
-    "note": "icons render + unknown falls back"
+    "note": "icons render + unknown falls back",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F96": {
     "status": "PASS",
-    "note": "overlay timer idle until shown"
+    "note": "overlay timer idle until shown",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F97": {
     "status": "PASS",
-    "note": "corrupt/empty json \u2192 safe defaults"
+    "note": "corrupt/empty json \u2192 safe defaults",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F98": {
     "status": "PASS",
-    "note": "_nice_step degenerate=1.0; map guard present"
+    "note": "_nice_step degenerate=1.0; map guard present",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F99": {
     "status": "PASS",
-    "note": "StateBus subscribe/emit"
+    "note": "StateBus subscribe/emit",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F100": {
     "status": "PASS",
-    "note": "sanitize + stable per-code hashing"
+    "note": "sanitize + stable per-code hashing",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F101": {
     "status": "PASS",
-    "note": "self-heal wired incl. timeout repair; non-compiled path safe (F101)"
+    "note": "self-heal wired incl. timeout repair; non-compiled path safe (F101)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F102": {
     "status": "PASS",
-    "note": "truncation guard raises in repair AND revise (F102)"
+    "note": "truncation guard raises in repair AND revise (F102)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F103": {
     "status": "PASS",
-    "note": "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)"
+    "note": "safety gate blocks imports/builtins/direct+string dunder escapes; wired twice (F103)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F104": {
     "status": "PASS",
-    "note": "pitfall KB + persistent recurrence store + prompt wiring (F104)"
+    "note": "pitfall KB + persistent recurrence store + prompt wiring (F104)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F105": {
     "status": "PASS",
-    "note": "5 domains compile LaTeX-free; both fallback paths routed (F105)"
+    "note": "5 domains compile LaTeX-free; both fallback paths routed (F105)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F106": {
     "status": "PASS",
-    "note": "lint+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41, F106)"
+    "note": "lint+forwarded-kwargs+LaTeX+color repair+motion contract+hygiene wired (BUG-40/41/101, F106)",
+    "checked_at": "2026-10-12T14:05:11+00:00"
   },
   "F107": {
     "status": "PASS",
-    "note": "hot storyboard/cold codegen; Qwen + MiniMax thinking toggles; coder guidance (F107)"
+    "note": "hot storyboard/cold codegen; Qwen + MiniMax thinking toggles; coder guidance (F107)",
+    "checked_at": "2026-10-12T14:05:14+00:00"
   },
   "F108": {
     "status": "PASS",
-    "note": "critique loop wired + fail-soft + final-frame sampling; no render available for frame sampling (F108)"
+    "note": "critique loop wired + fail-soft + final-frame sampling; no render available for frame sampling (F108)",
+    "checked_at": "2026-10-12T14:05:14+00:00"
   },
   "F109": {
     "status": "PASS",
-    "note": "zoom anchors cursor; 120ms smooth-zoom animation wired"
+    "note": "zoom anchors cursor; 120ms smooth-zoom animation wired",
+    "checked_at": "2026-10-12T14:05:14+00:00"
   },
   "F110": {
     "status": "PASS",
-    "note": "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump"
+    "note": "data-space trail survives zoom/pan; wall-clock sweep (6s), no resume jump",
+    "checked_at": "2026-10-12T14:05:14+00:00"
   },
   "F111": {
     "status": "PASS",
-    "note": "snaps within 24px with (t,x,y); raw-coords fallback beyond"
+    "note": "snaps within 24px with (t,x,y); raw-coords fallback beyond",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F112": {
     "status": "PASS",
-    "note": "one palette dict; zero stray hex in module body"
+    "note": "one palette dict; zero stray hex in module body",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F113": {
     "status": "PASS",
-    "note": "viewport-independent sample cache; 1/t = 2 branches, no bridge"
+    "note": "sample cache stable under zoom; 1/t has 2 branches; finite tan(t) asymptotes split into 3",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F114": {
     "status": "PASS",
-    "note": "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated"
+    "note": "curves[]/roles/fill/points compile+render; legacy payload = 1 curve; prompt updated",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F115": {
     "status": "PASS",
-    "note": "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn"
+    "note": "right/Shift-drag scrubs t (anim paused); dbl-click resets; progress bar drawn",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F116": {
     "status": "PASS",
-    "note": "2x PNG written (73234 bytes) + signal"
+    "note": "2x PNG written (47217 bytes) + signal",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F117": {
     "status": "PASS",
-    "note": "legend always shown, hit-testable, toggles visibility"
+    "note": "legend always shown, hit-testable, toggles visibility",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F118": {
     "status": "PASS",
-    "note": "mono param chip; 300ms fade only on first paint"
+    "note": "mono param chip; 300ms fade only on first paint",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F119": {
     "status": "PASS",
-    "note": "cyan #22D3EE primary; stage/elev/hover/line-0 tokens; 56px rail"
+    "note": "study palette tokens; shared canvas/theme accent; 92px navigation rail",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F120": {
     "status": "PASS",
-    "note": "mathtext \u2192 pixmaps; symbol map; math/prose discriminator; safe on junk"
+    "note": "mathtext \u2192 pixmaps; symbol map; math/prose discriminator; safe on junk",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F121": {
     "status": "PASS",
-    "note": "hero banner: math\u2192pixmap, prose\u2192text; param symbols; ambient watermarks"
+    "note": "hero banner: math\u2192pixmap, prose\u2192text; param symbols; ENT and setup cards",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F122": {
     "status": "PASS",
-    "note": "parse repaired/revised/critique/duration; storyboard acts + hero bookmark"
+    "note": "parse repaired/revised/critique/duration; storyboard acts + hero bookmark",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F123": {
     "status": "PASS",
-    "note": "screening room widgets swapped in; code artifact + highlighter; act-click seeks"
+    "note": "screening room widgets swapped in; code artifact + highlighter; act-click seeks",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F124": {
     "status": "PASS",
-    "note": "library spines + chunk counts + freshness; Settings vision\u00b7critique field"
+    "note": "library spines + chunk counts + freshness; Settings vision\u00b7critique field",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F125": {
     "status": "PASS",
-    "note": "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)"
+    "note": "web provider transport/schema fail-soft; RagHit back-compat; toggle honored (BUG-47)",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F126": {
     "status": "PASS",
-    "note": "merge: library-first + web-tagged; fail-soft on provider error; toggle wired"
+    "note": "merge: library-first + web-tagged; fail-soft on provider error; toggle wired",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F127": {
     "status": "PASS",
-    "note": "web/library card styling + dimming; provenance; backdrop; filament; settings toggle"
+    "note": "web/library card styling + dimming; provenance; backdrop; filament; settings toggle",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F128": {
     "status": "PASS",
-    "note": "ollama preset resolves; qwen gated; env wins (F128)"
+    "note": "ollama preset resolves; qwen gated; env wins (F128)",
+    "checked_at": "2026-10-12T14:05:15+00:00"
   },
   "F129": {
     "status": "PASS",
-    "note": "provider test is backgrounded + preset UI + CTA (0 local models) (BUG-53)"
+    "note": "provider test is backgrounded + preset UI + CTA (0 local models) (BUG-53)",
+    "checked_at": "2026-10-12T14:05:18+00:00"
   },
   "F130": {
     "status": "PASS",
-    "note": "key_equations end-to-end: model\u2192fallback domains\u2192banner\u2192export (F130)"
+    "note": "key_equations end-to-end: model\u2192fallback domains\u2192banner\u2192export (F130)",
+    "checked_at": "2026-10-12T14:05:18+00:00"
   },
   "F131": {
     "status": "PASS",
-    "note": "--version=1.0.0; rotating log; ico + taskbar wiring (F131)"
+    "note": "--version=1.0.0; rotating log; ico + taskbar wiring (F131)",
+    "checked_at": "2026-10-12T14:05:18+00:00"
   },
   "F132": {
     "status": "PASS",
-    "note": "LaTeX-aware prompts (latex=True); frozen manim relay + strict gate (F132)"
+    "note": "LaTeX-aware prompts (latex=True); frozen manim relay + strict gate (F132)",
+    "checked_at": "2026-10-12T14:05:18+00:00"
   },
   "F133": {
     "status": "PASS",
-    "note": "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
+    "note": "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)",
+    "checked_at": "2026-10-12T14:05:21+00:00"
   },
   "F134": {
     "status": "PASS",
-    "note": "render isolated+disable_caching; discovery returns this render (F134)"
+    "note": "render isolated+disable_caching; discovery returns this render (F134)",
+    "checked_at": "2026-10-12T14:05:21+00:00"
   },
   "F135": {
     "status": "PASS",
-    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success; winner reuse (F135)"
+    "note": "cost light=1.0<heavy=5.0; draft\u2192final partial-success; winner reuse (F135)",
+    "checked_at": "2026-10-12T14:05:21+00:00"
   },
   "F136": {
     "status": "PASS",
-    "note": "failure classified+dumped; failure_kind round-trips (F136)"
+    "note": "failure classified+dumped; failure_kind round-trips (F136); 2 behavioural checks in tests/test_cloud_failure_diagnosis.py: test_worker_output_failure_overrides_dependency_banners, test_worker_output_excerpt_keeps_the_actual_failure",
+    "checked_at": "2026-10-12T21:44:57+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "live_cloud_evidence": {
+      "confirmed": true,
+      "scope": "Short silent Manim scene: exact worker output, full decode, cache reuse and missing-output refusal; native playback and full narrated lesson not checked",
+      "success_run_id": 38311353505,
+      "failure_run_url": "https://github.com/gopheriv/manim-render-worker/actions/runs/38312254517",
+      "workflow_version": "7",
+      "artifact_sha256": "e7806a21550235dc4a256d559b4ef3840caf418858b10e35acd04ac2c8fe25b0",
+      "cache_hit": true,
+      "evidence_files": [
+        "tmp\\live-cloud-acceptance-20261013\\evidence.json",
+        "tmp\\live-cloud-acceptance-20261013\\evidence-cache.json",
+        "tmp\\live-cloud-acceptance-20261013\\missing-output\\evidence.json"
+      ]
+    }
   },
   "F137": {
     "status": "PASS",
-    "note": "spec collects manimpango/skia/moderngl; frozen relay intact (F137)"
+    "note": "spec collects manimpango/skia/moderngl; frozen relay intact (F137)",
+    "checked_at": "2026-10-12T14:05:21+00:00"
   },
   "F138": {
     "status": "PASS",
-    "note": "fit-to-video math + merge policy + fail-soft (avail=True) (F138)"
+    "note": "fit-to-video math + merge policy + fail-soft (avail=True) (F138)",
+    "checked_at": "2026-10-12T14:05:22+00:00"
   },
   "F139": {
     "status": "PASS",
-    "note": "narration derived from code+storyboard; wired + fail-soft (F139)"
+    "note": "narration derived from code+storyboard; wired + fail-soft (F139)",
+    "checked_at": "2026-10-12T14:05:22+00:00"
   },
   "F140": {
     "status": "PASS",
-    "note": "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)"
+    "note": "narration settings env/config + manim-bot aliases + silent_video_path + dialog toggle (F140)",
+    "checked_at": "2026-10-12T14:05:22+00:00"
   },
   "F141": {
     "status": "PASS",
-    "note": "lesson plan model round-trips; keyless domain templates coherent (F141)"
+    "note": "lesson round-trip; keyless templates coherent; nullable checks preserve/cache authored lesson (F141)",
+    "checked_at": "2026-10-12T14:05:23+00:00"
   },
   "F142": {
     "status": "PASS",
-    "note": "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)"
+    "note": "srt timeline (cumulative, blank-skip, ms carry) + narrate_segment fail-soft (F142)",
+    "checked_at": "2026-10-12T14:05:23+00:00"
   },
   "F143": {
     "status": "PASS",
-    "note": "lesson pipeline: 5 chapters \u2192 assembled mp4; partial-render narration aligned (F143)"
+    "note": "lesson pipeline: 5 chapters \u2192 assembled mp4; partial-render narration aligned (F143)",
+    "checked_at": "2026-10-12T14:05:37+00:00"
   },
   "F144": {
     "status": "PASS",
-    "note": "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)"
+    "note": "fact-check fail-soft; study-guide .tex has objectives/chapters/questions (F144)",
+    "checked_at": "2026-10-12T14:05:40+00:00"
   },
   "F145": {
     "status": "PASS",
-    "note": "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+    "note": "LessonView + MCQ + worker + main-window Learn wiring (F145)",
+    "checked_at": "2026-10-12T14:05:45+00:00"
   },
   "F146": {
     "status": "PASS",
-    "note": "aspect setup/evolution/math/recap \u2192 distinct, gate-passing scenes per domain (F146)"
+    "note": "aspect setup/evolution/math/recap \u2192 distinct, gate-passing scenes per domain (F146)",
+    "checked_at": "2026-10-12T14:05:46+00:00"
   },
   "F147": {
     "status": "PASS",
-    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'math', 'recap'] (F147)"
+    "note": "chapter\u2192aspect: first=setup, roles=['setup', 'evolution', 'math', 'math', 'recap'] (F147)",
+    "checked_at": "2026-10-12T14:05:46+00:00"
   },
   "F148": {
     "status": "PASS",
-    "note": "produced lesson: cards + crossfades \u2192 11.8s 1280x720; chapter offsets [4.7, 7.9] past intro (F148)"
+    "note": "produced lesson: cards + crossfades \u2192 11.8s 1280x720; chapter offsets [4.7, 7.9] past intro (F148)",
+    "checked_at": "2026-10-12T14:05:53+00:00"
   },
   "F149": {
     "status": "PASS",
-    "note": "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)"
+    "note": "plan cache: warm hit reused, audience-scoped, regenerate-bypassable (F149)",
+    "checked_at": "2026-10-12T14:05:53+00:00"
   },
   "F150": {
     "status": "PASS",
-    "note": "Learn cancellation reaches active chapter render and returns partial bundle (BUG-56)"
+    "note": "Learn cancellation reaches active render, narration, and assembly (BUG-56/106)",
+    "checked_at": "2026-10-12T14:05:58+00:00"
   },
   "F151": {
     "status": "PASS",
-    "note": "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)"
+    "note": "partial lessons mark skipped chapters and keep surviving offsets mapped (F151)",
+    "checked_at": "2026-10-12T14:05:58+00:00"
   },
   "F152": {
     "status": "PASS",
-    "note": "backend selection local/cloud/auto + stable cloud job ids (F152)"
+    "note": "backend selection local/cloud/auto + stable cloud job ids (F152)",
+    "checked_at": "2026-10-12T14:05:58+00:00"
   },
   "F153": {
     "status": "PASS",
-    "note": "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)"
+    "note": "cloud settings persist; env + legacy .env CLOUD_RENDER_* aliases load (F153)",
+    "checked_at": "2026-10-12T14:05:58+00:00"
   },
   "F154": {
     "status": "PASS",
-    "note": "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)"
+    "note": "cloud success/cache/provisioning + gh auth + signed-artifact download (F154)",
+    "checked_at": "2026-10-12T21:44:59+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "live_cloud_evidence": {
+      "confirmed": true,
+      "scope": "Short silent Manim scene: exact worker output, full decode, cache reuse and missing-output refusal; native playback and full narrated lesson not checked",
+      "success_run_id": 38311353505,
+      "failure_run_url": "https://github.com/gopheriv/manim-render-worker/actions/runs/38312254517",
+      "workflow_version": "7",
+      "artifact_sha256": "e7806a21550235dc4a256d559b4ef3840caf418858b10e35acd04ac2c8fe25b0",
+      "cache_hit": true,
+      "evidence_files": [
+        "tmp\\live-cloud-acceptance-20261013\\evidence.json",
+        "tmp\\live-cloud-acceptance-20261013\\evidence-cache.json",
+        "tmp\\live-cloud-acceptance-20261013\\missing-output\\evidence.json"
+      ]
+    }
   },
   "F155": {
     "status": "PASS",
-    "note": "explicit Cloud mode stops on unavailable/timeout without local fallback (F155)"
+    "note": "explicit Cloud mode stops on unavailable/timeout without local fallback (F155)",
+    "checked_at": "2026-10-12T14:05:59+00:00"
   },
   "F156": {
     "status": "PASS",
-    "note": "cloud payload secret scan + token masking (F156)"
+    "note": "cloud payload secret scan + token masking (F156)",
+    "checked_at": "2026-10-12T14:05:59+00:00"
   },
   "F157": {
     "status": "PASS",
-    "note": "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)"
+    "note": "provider/cloud/device actions backgrounded + backend chip (BUG-53, F157)",
+    "checked_at": "2026-10-12T14:05:59+00:00"
   },
   "F158": {
     "status": "PASS",
-    "note": "cloud render workflow + docs present; no cache:pip; bundle==file (F158)"
+    "note": "cloud workflow + docs; no cache:pip; bundle==file; 3 behavioural checks in tests/test_cloud_output_identity.py: test_worker_rejects_unproven_scene_output, test_worker_copies_exact_scene_and_preserves_other_outputs, test_bundled_worker_matches_shipped_workflow",
+    "checked_at": "2026-10-12T21:44:59+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "live_cloud_evidence": {
+      "confirmed": true,
+      "scope": "Short silent Manim scene: exact worker output, full decode, cache reuse and missing-output refusal; native playback and full narrated lesson not checked",
+      "success_run_id": 38311353505,
+      "failure_run_url": "https://github.com/gopheriv/manim-render-worker/actions/runs/38312254517",
+      "workflow_version": "7",
+      "artifact_sha256": "e7806a21550235dc4a256d559b4ef3840caf418858b10e35acd04ac2c8fe25b0",
+      "cache_hit": true,
+      "evidence_files": [
+        "tmp\\live-cloud-acceptance-20261013\\evidence.json",
+        "tmp\\live-cloud-acceptance-20261013\\evidence-cache.json",
+        "tmp\\live-cloud-acceptance-20261013\\missing-output\\evidence.json"
+      ]
+    }
   },
   "F159": {
     "status": "PASS",
-    "note": "precision-instrument graphic redesign hooks + notes (F159)"
+    "note": "precision-instrument graphic redesign hooks + notes (F159)",
+    "checked_at": "2026-10-12T14:05:59+00:00"
   },
   "F160": {
     "status": "PASS",
-    "note": "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)"
+    "note": "quality score persists; min_quality_score rejects low-score cache; default reuse preserved (F160)",
+    "checked_at": "2026-10-12T14:05:59+00:00"
   },
   "F161": {
     "status": "PASS",
-    "note": "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)"
+    "note": "candidate tournament selects highest score, drops failed candidates, N=1 delegates (F161)",
+    "checked_at": "2026-10-12T14:06:00+00:00"
   },
   "F162": {
     "status": "PASS",
-    "note": "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)"
+    "note": "visual-regression quality gate: quality_failures + regression flags + strict exit (F162)",
+    "checked_at": "2026-10-12T14:06:00+00:00"
   },
   "F163": {
     "status": "PASS",
-    "note": "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)"
+    "note": "4 exemplars compile+safety+lint+latex-free; domain-selected; injected into codegen (F163)",
+    "checked_at": "2026-10-12T14:06:00+00:00"
   },
   "F164": {
     "status": "PASS",
-    "note": "feature-surface audit covers 85/85 current surfaces (F164)"
+    "note": "feature-surface audit covers 88/88 current surfaces, including 17 locale maps (F164)",
+    "checked_at": "2026-10-12T14:06:08+00:00"
   },
   "F165": {
     "status": "PASS",
-    "note": "tracker integrity: 221 features/221 stories/221 results/221 tests aligned (F165)"
+    "note": "tracker integrity: 250 features/250 stories/250 results/250 tests aligned (F165)",
+    "checked_at": "2026-10-12T14:06:14+00:00"
   },
   "F166": {
     "status": "PASS",
-    "note": "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+    "note": "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)",
+    "checked_at": "2026-10-12T14:06:19+00:00"
   },
   "F167": {
     "status": "PASS",
-    "note": "course progress persists quiz answers and updates lesson recommendation strip (F167)"
+    "note": "course progress scores due MCQ recall separately from open-response self-ratings and updates recommendations (F167)",
+    "checked_at": "2026-10-12T14:06:24+00:00"
   },
   "F168": {
     "status": "PASS",
-    "note": "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)"
+    "note": "prompt quality lab validates prompt sets, scores reports, and flags regressions (F168)",
+    "checked_at": "2026-10-12T14:06:24+00:00"
   },
   "F169": {
     "status": "PASS",
-    "note": "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)"
+    "note": "quality flywheel gate: 12-prompt golden set + committed baseline ratchet (F169)",
+    "checked_at": "2026-10-12T14:06:24+00:00"
   },
   "F170": {
     "status": "PASS",
-    "note": "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)"
+    "note": "per-axis critic rubric + backward-compatible persistence + static no-vision proxy (F170)",
+    "checked_at": "2026-10-12T14:06:24+00:00"
   },
   "F171": {
     "status": "PASS",
-    "note": "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)"
+    "note": "cloud fan-out: candidate ids isolate artifacts and branch PUTs serialize (BUG-36, F171)",
+    "checked_at": "2026-10-12T14:06:33+00:00"
   },
   "F172": {
     "status": "PASS",
-    "note": "aesthetic pitfall learning: critic issues feed the next generation prompt (F172)"
+    "note": "aesthetic pitfall learning: critic issues feed the next generation prompt (F172)",
+    "checked_at": "2026-10-12T14:06:33+00:00"
   },
   "F173": {
     "status": "PASS",
-    "note": "exemplar promotion keys off the final HQ critique, not the draft score (F173)"
+    "note": "exemplar promotion keys off the final HQ critique, not the draft score (F173)",
+    "checked_at": "2026-10-12T14:06:34+00:00"
   },
   "F174": {
     "status": "PASS",
-    "note": "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)"
+    "note": "cheap-first escalation: difficulty-scaled budget spends fan-out only when needed (F174)",
+    "checked_at": "2026-10-12T14:06:35+00:00"
   },
   "F175": {
     "status": "PASS",
-    "note": "render-farm ledger + atomic concurrent JSON persistence across stores (F175)"
+    "note": "render-farm ledger + atomic concurrent JSON persistence across stores (F175)",
+    "checked_at": "2026-10-12T14:06:36+00:00"
   },
   "F176": {
     "status": "PASS",
-    "note": "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)"
+    "note": "render-farm dashboard panel lists jobs, candidates, winner, scrubbed failures (F176)",
+    "checked_at": "2026-10-12T14:06:37+00:00"
   },
   "F177": {
     "status": "PASS",
-    "note": "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)"
+    "note": "tournament default-on for configured critics; keyless stays single-shot; toggle persists (F177)",
+    "checked_at": "2026-10-12T14:06:37+00:00"
   },
   "F178": {
     "status": "PASS",
-    "note": "global local-render concurrency bound prevents lesson x tournament thrash (F178)"
+    "note": "global local-render concurrency bound prevents lesson x tournament thrash (F178)",
+    "checked_at": "2026-10-12T14:06:37+00:00"
   },
   "F179": {
     "status": "PASS",
-    "note": "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)"
+    "note": "semantic exemplar retrieval: past winners re-served to similar problems via embeddings (F179)",
+    "checked_at": "2026-10-12T14:06:39+00:00"
   },
   "F180": {
     "status": "PASS",
-    "note": "tournament A/B harness: paired lift math + isolated arms + honest verdict (F180)"
+    "note": "tournament A/B: provider evidence gate + fresh arm state + paired lift (BUG-109, F180)",
+    "checked_at": "2026-10-12T14:06:39+00:00"
   },
   "F181": {
     "status": "PASS",
-    "note": "ledger report mines spend, winner margin, and the draft->HQ pair (F181)"
+    "note": "ledger report mines spend, winner margin, and the draft->HQ pair (F181)",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F182": {
     "status": "PASS",
-    "note": "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)"
+    "note": "learned keyless quality proxy: ledger-trained axis weights, gate-safe when absent (F182)",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F183": {
     "status": "PASS",
-    "note": "planner routes: concept=['pdf'] dyn=['numeric', '2d', 'animation', 'pdf'] 3d=['2d', '3d', 'animation', 'pdf']"
+    "note": "planner routes: concept=['pdf'] dyn=['numeric', '2d', 'animation', 'pdf'] 3d=['2d', '3d', 'animation', 'pdf']",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F184": {
     "status": "PASS",
-    "note": "conditional pipeline: plan=['pdf'] scene=skipped"
+    "note": "conditional pipeline: plan=['pdf'] scene=skipped",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F185": {
     "status": "PASS",
-    "note": "offline planner deterministic: ['numeric', '2d', 'animation', 'pdf']"
+    "note": "offline planner deterministic: ['numeric', '2d', 'animation', 'pdf']",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F186": {
     "status": "PASS",
-    "note": "view pills gated by plan (canvas/video hidden for pdf-only)"
+    "note": "view pills gated by plan (canvas/video hidden for pdf-only)",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F187": {
     "status": "PASS",
-    "note": "numeric matches analytic (max_err=3.98e-07); unsafe rhs rejected"
+    "note": "numeric matches analytic (max_err=3.98e-07); unsafe rhs rejected",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F188": {
     "status": "PASS",
-    "note": "canvas driven by numeric (x(0)=1.000); bad spec falls back safely"
+    "note": "canvas driven by numeric (x(0)=1.000); bad spec falls back safely",
+    "checked_at": "2026-10-12T14:06:40+00:00"
   },
   "F189": {
     "status": "PASS",
-    "note": "research pdf via pdflatex, 1 citation(s), verified"
+    "note": "research pdf via pdflatex, 1 citation(s), verified",
+    "checked_at": "2026-10-12T14:06:42+00:00"
   },
   "F190": {
     "status": "PASS",
-    "note": "matplotlib fallback pdf ok (60271 bytes)"
+    "note": "matplotlib fallback pdf ok (60271 bytes)",
+    "checked_at": "2026-10-12T14:06:43+00:00"
   },
   "F191": {
     "status": "PASS",
-    "note": "trajectory component composes a compilable numeric-driven scene (6658 chars)"
+    "note": "trajectory component composes a compilable numeric-driven scene (6658 chars)",
+    "checked_at": "2026-10-12T14:06:43+00:00"
   },
   "F192": {
     "status": "PASS",
-    "note": "3D surface composed for needs_3d; None otherwise"
+    "note": "3D surface composed for needs_3d; None otherwise",
+    "checked_at": "2026-10-12T14:06:43+00:00"
   },
   "F193": {
     "status": "PASS",
-    "note": "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)"
+    "note": "ManimRuntime composes from curated library (numeric-driven, no raw LLM code)",
+    "checked_at": "2026-10-12T14:06:43+00:00"
   },
   "F194": {
     "status": "PASS",
-    "note": "verifier passes physical oscillator (3/3 physics checks passed.)"
+    "note": "verifier passes physical oscillator (3/3 physics checks passed.)",
+    "checked_at": "2026-10-12T14:06:46+00:00"
   },
   "F195": {
     "status": "PASS",
-    "note": "verifier flags unphysical growth (1/3 physics checks passed.)"
+    "note": "verifier flags unphysical growth (1/3 physics checks passed.)",
+    "checked_at": "2026-10-12T14:06:46+00:00"
   },
   "F196": {
     "status": "PASS",
-    "note": "solver retries transient failures; persistent failure is reported loudly"
+    "note": "solver retries transient failures; persistent failure is reported loudly",
+    "checked_at": "2026-10-12T14:07:00+00:00"
   },
   "F197": {
     "status": "PASS",
-    "note": "planner unions with the heuristic floor and retries before conceding"
+    "note": "planner unions with the heuristic floor and retries before conceding",
+    "checked_at": "2026-10-12T14:07:04+00:00"
   },
   "F198": {
     "status": "PASS",
-    "note": "fallback ODE only attached on-topic; off-topic verification stays honest"
+    "note": "fallback ODE only attached on-topic; off-topic verification stays honest",
+    "checked_at": "2026-10-12T14:07:04+00:00"
   },
   "F199": {
     "status": "PASS",
-    "note": "text-mode math promoted to MathTex (render-killer auto-repaired)"
+    "note": "text-mode math promoted to MathTex (render-killer auto-repaired)",
+    "checked_at": "2026-10-12T14:07:04+00:00"
   },
   "F200": {
     "status": "PASS",
-    "note": "pendulum component staged from nonlinear solution (5183 chars); oscillator unaffected"
+    "note": "pendulum component staged from nonlinear solution (5183 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:05+00:00"
   },
   "F201": {
     "status": "PASS",
-    "note": "phase portrait composed on request (7490 chars); default stays time-series"
+    "note": "phase portrait composed on request (7490 chars); default stays time-series",
+    "checked_at": "2026-10-12T14:07:05+00:00"
   },
   "F202": {
     "status": "PASS",
-    "note": "dipole field-line component composed (17249 chars); oscillator unaffected"
+    "note": "dipole field-line component composed (17249 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:05+00:00"
   },
   "F203": {
     "status": "PASS",
-    "note": "Fourier epicycle component composed (2339 chars); harmonic-oscillator not stolen"
+    "note": "Fourier epicycle component composed (2339 chars); harmonic-oscillator not stolen",
+    "checked_at": "2026-10-12T14:07:05+00:00"
   },
   "F204": {
     "status": "PASS",
-    "note": "quantum wavepacket component composed (4563 chars); classical oscillator unaffected"
+    "note": "quantum wavepacket component composed (4563 chars); classical oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:06+00:00"
   },
   "F205": {
     "status": "PASS",
-    "note": "double-slit interference component composed (2793 chars); oscillator unaffected"
+    "note": "double-slit interference component composed (2793 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:06+00:00"
   },
   "F206": {
     "status": "PASS",
-    "note": "kinetic-theory component composed + deterministic (5281 chars); oscillator unaffected"
+    "note": "kinetic-theory component composed + deterministic (5281 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:06+00:00"
   },
   "F207": {
     "status": "PASS",
-    "note": "double-pendulum component integrates 4-state chaos (6283 chars); single pendulum unaffected"
+    "note": "double-pendulum component integrates 4-state chaos (6283 chars); single pendulum unaffected",
+    "checked_at": "2026-10-12T14:07:06+00:00"
   },
   "F208": {
     "status": "PASS",
-    "note": "thin-lens ray-diagram component composed (4542 chars); oscillator unaffected"
+    "note": "thin-lens ray-diagram component composed (4542 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:07+00:00"
   },
   "F209": {
     "status": "PASS",
-    "note": "standing-wave component composed (2404 chars); oscillator unaffected"
+    "note": "standing-wave component composed (2404 chars); oscillator unaffected",
+    "checked_at": "2026-10-12T14:07:07+00:00"
   },
   "F210": {
     "status": "PASS",
-    "note": "Kepler-orbit component integrates two-body + equal-area law (7297 chars)"
+    "note": "Kepler-orbit component integrates two-body + equal-area law (7297 chars)",
+    "checked_at": "2026-10-12T14:07:07+00:00"
   },
   "F211": {
     "status": "PASS",
-    "note": "surface3d builds four supported scalar fields and declines a fake orbital density"
+    "note": "surface3d builds four supported scalar fields and declines a fake orbital density",
+    "checked_at": "2026-10-12T14:07:07+00:00"
   },
   "F212": {
     "status": "PASS",
-    "note": "7 curated components track solver variables; empty solver keeps canonical default"
+    "note": "7 curated components track solver variables; empty solver keeps canonical default",
+    "checked_at": "2026-10-12T14:07:07+00:00"
   },
   "F213": {
     "status": "PASS",
-    "note": "coupled-oscillator component integrates the two-mass ODE (11605 chars)"
+    "note": "coupled-oscillator component integrates the two-mass ODE (11605 chars)",
+    "checked_at": "2026-10-12T14:07:08+00:00"
   },
   "F214": {
     "status": "PASS",
-    "note": "concave-mirror ray-diagram component composed (4782 chars); lens unaffected"
+    "note": "concave-mirror ray-diagram component composed (4782 chars); lens unaffected",
+    "checked_at": "2026-10-12T14:07:08+00:00"
   },
   "F215": {
     "status": "PASS",
-    "note": "gate fails loudly: exit code follows the run; F07 REGRESSED not FIXED; Phase-4 overridden to FAIL; audit rejects failing results (F215)"
+    "note": "gate fails loudly: exit code follows the run; F07 REGRESSED not FIXED; Phase-4 overridden to FAIL; audit rejects failing results (F215)",
+    "checked_at": "2026-10-12T14:07:14+00:00"
   },
   "F216": {
     "status": "PASS",
-    "note": "14 curated scenes explained with light cards, safe, valid, ~30s; glyphs verified; opt-in devices render correctly (F216)"
+    "note": "14 curated scenes explained with light cards, safe, valid, ~30s; glyphs verified; opt-in devices render correctly (F216)",
+    "checked_at": "2026-10-12T14:07:41+00:00"
   },
   "F217": {
     "status": "PASS",
-    "note": "7 topic scenarios composed (safe, valid, ~30 s); race \u221a2, equal areas, Gibbs 9.0%, bands vs hump, energy transfer 93% verified (F217)"
+    "note": "7 topic scenarios composed (safe, valid, ~30 s); race \u221a2, equal areas, Gibbs 9.0%, bands vs hump, energy transfer 93% verified (F217)",
+    "checked_at": "2026-10-12T14:07:46+00:00"
   },
   "F218": {
     "status": "PASS",
-    "note": "3 problem videos (kicked ball 32.5 m, Moon clock 2.46 s, ISS 92.8 min) solve, self-check by simulation, use verified glyphs; plain topics keep scenarios (F218)"
+    "note": "3 problem videos (kicked ball 32.5 m, Moon clock 2.46 s, ISS 92.8 min) solve, self-check by simulation, use verified glyphs; plain topics keep scenarios (F218)",
+    "checked_at": "2026-10-12T14:07:52+00:00"
   },
   "F219": {
     "status": "PASS",
-    "note": "backup provider takes over a failed K3 call as MiniMax-M3 at the wanted temperature (F219)"
+    "note": "backup provider takes over a failed K3 call as MiniMax-M3 at the wanted temperature (F219)",
+    "checked_at": "2026-10-12T14:07:52+00:00"
   },
   "F220": {
     "status": "PASS",
-    "note": "topic/problem PDFs: parsed LaTeX JSON, theory + solution + answer + checks, broken equation healed (pdflatex), offline fallback, CLI --pdf (F220)"
+    "note": "topic/problem PDFs: parsed LaTeX JSON, theory + solution + answer + checks, broken equation healed (pdflatex), offline fallback, CLI --pdf (F220)",
+    "checked_at": "2026-10-12T14:08:13+00:00"
   },
   "F221": {
     "status": "PASS",
-    "note": "4 harder problem videos: muons (\u03b3 10.0, 10.1% arrive), quantum dot (659 nm), chaos (split 12.8 s, +7.9 s per 1000\u00d7), coupled pendulums (10.3 s); typeset math with fallback, verified glyphs, routing kept (F221)"
+    "note": "4 harder problem videos: muons (\u03b3 10.0, 10.1% arrive), quantum dot (659 nm), chaos (split 12.8 s, +7.9 s per 1000\u00d7), coupled pendulums (10.3 s); typeset math with fallback, verified glyphs, routing kept (F221)",
+    "checked_at": "2026-10-12T14:08:30+00:00"
+  },
+  "F222": {
+    "status": "PASS",
+    "note": "partial Manim preview covers all sampled events using exclusive end bound",
+    "checked_at": "2026-10-12T14:08:30+00:00"
+  },
+  "F223": {
+    "status": "PASS",
+    "note": "study PDF corrects solar comparison from NASA value and labels other prose unverified (F223)",
+    "checked_at": "2026-10-12T14:08:30+00:00"
+  },
+  "F224": {
+    "status": "PASS",
+    "note": "visual audit tolerates short scene fades and compares normalized deltas only at similar durations (F224)",
+    "checked_at": "2026-10-12T14:08:30+00:00"
+  },
+  "F225": {
+    "status": "PASS",
+    "note": "40 fixed-key questions span all 25 canonical topics; 50-point format and review-pending labels are explicit (F225)",
+    "checked_at": "2026-10-13T05:45:40+00:00",
+    "phase4_status": "PASS"
+  },
+  "F226": {
+    "status": "PASS",
+    "note": "10-question practice and 40-question timed mock start in kk/ru/en; answer feedback and navigation work (F226); 3 explicit locale/mode checks in test_exam_confirmation_localization",
+    "checked_at": "2026-10-13T05:45:41+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "ru/kk practice navigation, answer/check and early finish; ru Tab/Return; ru wrong-answer feedback and kk saved-mistake review; en 40-item mock, 90:00 start, no solution reveal; single/context/multi/matching controls and partial credit (reordered resume fixture); kk whole size field hides; kk exam action buttons localized; native Return keeps timed attempt running",
+      "remaining": "Full-duration timed journeys, all items/locales/viewports, keyboard and physical error recovery",
+      "recorded_at": "2026-10-12T22:05:49+00:00",
+      "evidence_file": "tmp\\native-ui-acceptance-20261013.json",
+      "followup_evidence_file": "tmp\\native-ui-followup-20261013.json",
+      "followup_recorded_at": "2026-10-13T04:26:53+00:00",
+      "timed_evidence_file": "tmp\\native-timed-acceptance-20261013.json",
+      "timed_recorded_at": "2026-10-13T05:08:51+00:00",
+      "solutions_evidence_file": "tmp/native-solutions-acceptance-20261013.json",
+      "solutions_recorded_at": "2026-10-13T05:54:28+00:00"
+    }
+  },
+  "F227": {
+    "status": "PASS",
+    "note": "goals and attempts persist locally; missed items clear on review and completed history omits selected answers (F227); 4 behavioural checks in tests/test_progress_storage_recovery.py: test_mutations_do_not_replace_unreadable_progress, test_goals_save_failure_keeps_draft_and_never_claims_success, test_result_failure_freezes_answers_and_retry_records_once, test_expired_mock_save_failure_stops_timer_and_retries_without_new_answers; 3 behavioural checks in tests/test_progress_read_views.py: test_all_progress_readers_propagate_io_without_changing_bytes, test_practice_unavailable_progress_and_retry_preserve_saved_goals, test_missing_and_malformed_progress_still_recover_as_before; 2 behavioural checks in tests/test_practice_result_consistency.py: test_progress_nonfinite_numbers_do_not_crash_or_turn_into_scores, test_nonfinite_progress_mutation_recovers_points_from_valid_history",
+    "checked_at": "2026-10-13T05:45:42+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "early-finish results saved; 3 unique attempts/4 points retained across restart; wrong/correct review persisted across restart; 5 unique attempts/5 points, queue cleared; timed results 1/50 and 4/50; expired/stale fixtures retained 3 unique attempts and 6 points without duplication",
+      "remaining": "Native goals, physical storage interruption and result retry under file refusal",
+      "recorded_at": "2026-10-12T22:05:49+00:00",
+      "evidence_file": "tmp\\native-ui-acceptance-20261013.json",
+      "followup_evidence_file": "tmp\\native-ui-followup-20261013.json",
+      "followup_recorded_at": "2026-10-13T04:26:53+00:00",
+      "timed_evidence_file": "tmp\\native-timed-acceptance-20261013.json",
+      "timed_recorded_at": "2026-10-13T05:08:51+00:00"
+    }
+  },
+  "F228": {
+    "status": "PASS",
+    "note": "searchable PDF reports preserve prompt, answer key, and NCT attribution in all 3 locales (F228); 6 behavioural checks in tests/test_practice_result_consistency.py: test_early_finish_pdf_totals_equal_screen_and_history, test_empty_practice_pdf_does_not_claim_zero_out_of_selected_set, test_timed_pdf_keeps_unanswered_questions_in_possible_score, test_pdf_contains_rendered_formulas_and_complete_source_block, test_formula_failure_does_not_replace_an_existing_report, test_all_topic_formula_templates_can_be_rendered_for_report; 2 behavioural checks in tests/test_ui_fonts.py: test_fonts_reinstall_for_recreated_application_and_keep_custom_font, test_font_installer_does_not_register_before_application; 7 behavioural checks in tests/test_practice_pdf_transaction.py: test_pdf_export_never_initializes_a_system_printer, test_missing_printer_output_does_not_claim_existing_report, test_partial_printer_output_preserves_existing_report, test_invalid_printer_output_preserves_existing_report, test_denied_replacement_preserves_report_and_cleans_stage, test_textless_pdf_is_rejected_without_replacing_report, test_export_ui_reports_print_failure_and_retry_saves_new_report; 3 explicit locale/mode checks in test_mock_solution_display",
+    "checked_at": "2026-10-13T05:45:50+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "native PDF picker opened/cancelled; score/history unchanged; post-fix native kk PDF save succeeded without printer wait, 3 pages inspected",
+      "remaining": "Native filename/storage-error recovery, other locale/question-kind exports and large sets",
+      "recorded_at": "2026-10-12T22:05:49+00:00",
+      "evidence_file": "tmp\\native-ui-acceptance-20261013.json",
+      "followup_evidence_file": "tmp\\native-ui-followup-20261013.json",
+      "followup_recorded_at": "2026-10-13T04:26:53+00:00"
+    }
+  },
+  "F229": {
+    "status": "PASS",
+    "note": "fixed route retains textbook/NCT page evidence, one answer key, and honest translation-review status (F229)",
+    "checked_at": "2026-10-12T14:09:22+00:00"
+  },
+  "F230": {
+    "status": "PASS",
+    "note": "student home labels and actions follow the selected kk/ru/en locale (F230); 3 behavioural checks in tests/test_progress_read_views.py: test_student_views_retain_snapshot_on_error_and_retry_recovers, test_initial_unavailable_views_do_not_show_zero_or_empty_progress, test_switch_to_unreadable_profile_does_not_show_previous_student_snapshot; 1 behavioural checks in tests/test_practice_result_consistency.py: test_invalid_aggregate_records_do_not_crash_student_views; 9 practice display checks in kk/ru/en: test_perfect_small_sample_does_not_claim_mistakes_or_a_weak_topic, test_cleared_mistakes_do_not_remain_a_dashboard_action, test_mock_mistakes_are_recommended_in_their_topic",
+    "checked_at": "2026-10-13T05:45:55+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "ru/kk home feedback and counters; local progress retained across restart; cleared-topic home recommendation and kk progress view after restart; post-restart kk home includes pending mock IDs in topic review; best score and counters reflect timed history",
+      "remaining": "Native profiles, remaining locale layouts, full-mock recommendation semantics and file-error recovery",
+      "recorded_at": "2026-10-12T22:05:49+00:00",
+      "evidence_file": "tmp\\native-ui-acceptance-20261013.json",
+      "followup_evidence_file": "tmp\\native-ui-followup-20261013.json",
+      "followup_recorded_at": "2026-10-13T04:26:53+00:00",
+      "timed_evidence_file": "tmp\\native-timed-acceptance-20261013.json",
+      "timed_recorded_at": "2026-10-13T05:08:51+00:00"
+    }
+  },
+  "F231": {
+    "status": "PASS",
+    "note": "source browser labels, guidance and entry-point locale propagation pass for kk/ru/en (F231)",
+    "checked_at": "2026-10-12T14:09:23+00:00"
+  },
+  "F232": {
+    "status": "PASS",
+    "note": "2500 stable authored exercise IDs; 100/topic; three locales and unique choices; teacher review pending; 1 behavioural checks in tests/test_ent_practice_mvp.py: test_hydrostatic_practice_converts_pascals_to_kilopascals",
+    "checked_at": "2026-10-12T14:09:24+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F233": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_ui_layout_regressions.py: test_practice_filters_prevent_empty_sets_and_results_save_once, test_cancelled_timed_practice_stops_without_saving_a_result; 1 behavioural checks in tests/test_practice_result_consistency.py: test_unattempted_review_label_does_not_imply_deduction; 6 practice display checks in kk/ru/en: test_feedback_and_review_do_not_expose_latex, test_perfect_small_sample_does_not_claim_mistakes_or_a_weak_topic; 2 behavioural checks in tests/test_practice_explanation_display.py: test_unsupported_or_incomplete_formula_is_not_guessed, test_all_topic_explanations_are_readable_without_changing_questions; 3 behavioural checks in tests/test_mock_solution_display.py: test_every_mock_has_shared_renderable_worked_math, test_numerical_mock_keys_and_worked_answers_match_independent_calculation, test_typeset_failure_keeps_readable_math_and_never_shows_raw_latex; 6 explicit locale/mode checks in test_mock_solution_display",
+    "checked_at": "2026-10-13T05:46:01+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "ru/kk feedback and early finish; final ru readable review, keyboard check; ru incorrect answer and kk correction, final kk readable key and 1/1 recommendation; en result typography and partial-credit review inspected for multi/matching controls; kk completed mock review typesets velocity, freefall and Ohm fractions; review pane scroll inspected",
+      "remaining": "Remaining item/locale/viewport typeset layouts, complete keyboard journeys and storage failure",
+      "recorded_at": "2026-10-12T22:05:49+00:00",
+      "evidence_file": "tmp\\native-ui-acceptance-20261013.json",
+      "followup_evidence_file": "tmp\\native-ui-followup-20261013.json",
+      "followup_recorded_at": "2026-10-13T04:26:53+00:00",
+      "timed_evidence_file": "tmp\\native-timed-acceptance-20261013.json",
+      "timed_recorded_at": "2026-10-13T05:08:51+00:00",
+      "solutions_evidence_file": "tmp/native-solutions-acceptance-20261013.json",
+      "solutions_recorded_at": "2026-10-13T05:54:28+00:00"
+    }
+  },
+  "F234": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_student_profiles.py: test_profiles_keep_practice_goals_and_review_files_separate, test_dashboard_profile_button_opens_profile_flow_and_can_switch, test_main_window_switches_all_student_views_to_the_selected_profile; 3 behavioural checks in tests/test_atomic_json.py: test_profile_save_recovers_from_transient_windows_replace_lock, test_persistent_windows_lock_keeps_original_and_reports_failure, test_other_permission_errors_are_not_retried; 4 behavioural checks in tests/test_profile_read_recovery.py: test_unreadable_existing_registry_is_not_reset_on_open, test_unreadable_registry_cannot_be_overwritten_by_create_or_activation, test_missing_and_malformed_registry_keep_legacy_progress_recovery, test_main_window_profile_read_failure_retains_current_views",
+    "checked_at": "2026-10-12T20:52:04+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F235": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_student_profiles.py: test_profile_names_are_required_unique_and_bounded, test_profile_button_retranslates_without_changing_profile_name; 11 behavioural checks in tests/test_profile_editing.py: test_rejected_identity_change_preserves_saved_avatar, test_registry_failure_preserves_avatar_and_editable_draft, test_new_profile_and_avatar_are_saved_with_one_registry_commit, test_avatar_save_failure_is_localized_and_does_not_save_external_path, test_activation_failure_is_reported_without_accepting_dialog, test_cancel_edits_and_new_profile_preserves_registry, test_deleted_photo_source_does_not_clear_existing_avatar, test_maximum_name_fields_survive_create_update_and_reload, test_new_profile_commit_failure_is_retryable_without_partial_profile, test_photo_picker_cancel_and_invalid_selection_preserve_draft, test_identity_fields_save_in_all_languages_without_rewriting_photo; 5 behavioural checks in tests/test_profile_read_recovery.py: test_profile_refresh_failure_preserves_choices_and_retries, test_profile_selection_failure_cannot_edit_wrong_learner, test_discard_read_failure_retains_draft_until_retry, test_saved_profile_reports_refresh_failure_without_partial_creation, test_unreadable_dialog_initialization_retries_in_all_languages",
+    "checked_at": "2026-10-12T15:23:20+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F236": {
+    "status": "PASS",
+    "note": "5 behavioural checks in tests/test_ai_help_quota.py: test_daily_allowance_counts_attempts_and_resets_by_local_date, test_concurrent_help_requests_cannot_exceed_limit, test_corrupt_counter_recovers_without_granting_negative_quota, test_command_bar_disables_only_ai_actions_at_zero_and_localizes_badge, test_main_window_consumes_quota_for_active_student_profile; 5 behavioural checks in tests/test_ai_quota_io.py: test_unreadable_allowance_never_grants_or_overwrites_used_attempts, test_unknown_allowance_badge_disables_only_ai_and_translates, test_main_window_read_failure_preserves_counter_and_recovers_on_refresh, test_main_window_write_failure_does_not_claim_consumption, test_window_starts_with_unavailable_allowance_and_keeps_practice_enabled",
+    "checked_at": "2026-10-12T15:51:46+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F237": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_ui_layout_regressions.py: test_weekly_mock_day_dashboard_reminds_and_offers_timed_shortcut, test_dashboard_weekly_mock_shortcut_opens_timed_practice",
+    "checked_at": "2026-10-12T14:09:30+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F238": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_exam_resume_and_proctoring.py: test_active_exam_answers_round_trip_and_timer_keeps_running_while_closed, test_full_mock_timer_uses_ninety_minutes_and_resume_keeps_answers; 4 behavioural checks in tests/test_progress_storage_recovery.py: test_autosave_failure_is_visible_and_close_retries_current_answer, test_unreadable_resume_is_not_treated_as_no_attempt, test_pending_result_resumes_frozen_and_stale_session_cannot_duplicate, test_successful_result_with_failed_cleanup_resumes_completed_snapshot; 8 explicit locale/mode checks in test_exam_confirmation_localization; 1 behavioural checks in tests/test_exam_confirmation_localization.py: test_unresumable_question_ids_are_not_silently_discarded",
+    "checked_at": "2026-10-13T05:46:03+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "native_ui_evidence": {
+      "confirmed": true,
+      "scope": "native Escape/Yes resume keeps answers/index and subtracts closed time; default No cancels finish; seeded expired/stale completion returns results without duplicate history; kk Resume Escape preserves exact saved bytes; explicit Resume restores answer/attempt ID and elapsed deadline",
+      "remaining": "Physical close/save failure and crash recovery, every locale, full-duration expiry; prior stale/expired native checks used fixtures",
+      "timed_evidence_file": "tmp\\native-timed-acceptance-20261013.json",
+      "timed_recorded_at": "2026-10-13T05:08:51+00:00",
+      "solutions_evidence_file": "tmp/native-solutions-acceptance-20261013.json",
+      "solutions_recorded_at": "2026-10-13T05:54:28+00:00"
+    }
+  },
+  "F239": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_exam_resume_and_proctoring.py: test_shadow_camera_flags_are_sparse_and_recover_after_face_returns, test_camera_downtime_does_not_count_as_observed_missing_or_multiple_faces, test_attempt_persists_only_allowlisted_camera_event_metadata",
+    "checked_at": "2026-10-12T14:36:01+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F240": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_teacher_review.py: test_local_review_shows_only_school_full_mocks_and_allowlisted_signals, test_camera_event_time_does_not_replace_attempt_completion_time, test_teacher_review_dialog_discloses_local_access_and_camera_flags_are_not_verdicts; 1 behavioural checks in tests/test_school_view_io_recovery.py: test_teacher_review_reports_load_failure_and_retry_restores_scores; 1 behavioural checks in tests/test_progress_read_views.py: test_unreadable_progress_is_not_uploaded_or_hidden_from_school_views",
+    "checked_at": "2026-10-12T21:42:53+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F241": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_school_leaderboard.py: test_local_ranking_groups_by_school_and_only_counts_full_mocks, test_leaderboard_dialog_shows_local_rank_and_each_mock_score; 2 behavioural checks in tests/test_school_view_io_recovery.py: test_local_ranking_reports_initial_and_refresh_failure_without_clearing_scores, test_score_history_clears_empty_placeholder_span_when_changing_student; 2 behavioural checks in tests/test_leaderboard_mode_switch.py: test_clearing_endpoint_restores_local_rows_instead_of_labelling_remote_rows_local, test_clearing_endpoint_with_read_failure_does_not_claim_local_data_loaded",
+    "checked_at": "2026-10-12T21:42:53+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F242": {
+    "status": "PASS",
+    "note": "4 behavioural checks in tests/test_school_leaderboard.py: test_shared_server_merges_scores_across_devices, test_same_username_and_school_id_reuses_remote_student_identity, test_same_username_and_school_id_share_participant_key_on_two_devices, test_school_id_is_not_returned_and_db_stores_only_hmac; 1 behavioural checks in tests/test_school_view_io_recovery.py: test_leaderboard_endpoint_save_error_keeps_draft_and_reports_storage_error; 4 behavioural checks in tests/test_leaderboard_mode_switch.py: test_environment_endpoint_override_is_effective_after_save, test_dialog_explains_active_environment_override_in_each_language, test_invalid_environment_override_blocks_sync_with_configuration_diagnosis, test_sync_uses_and_displays_effective_environment_endpoint; 1 behavioural checks in tests/test_progress_read_views.py: test_sync_progress_error_has_local_diagnosis_and_never_makes_request",
+    "checked_at": "2026-10-12T21:42:54+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F243": {
+    "status": "PASS",
+    "note": "1 behavioural checks in tests/test_school_leaderboard.py: test_server_rejects_invalid_mock_scores_and_remote_http_url",
+    "checked_at": "2026-10-12T14:09:32+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F244": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_gamification_progress.py: test_companion_picker_selects_one_of_three_and_accepts_choice, test_dashboard_companion_button_persists_the_selected_companion, test_legacy_pet_choice_requires_reselection_without_losing_points; 1 behavioural checks in tests/test_progress_storage_recovery.py: test_companion_save_failure_retains_confirmed_choice",
+    "checked_at": "2026-10-12T21:42:58+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F245": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_gamification_progress.py: test_companion_evolves_at_lifetime_point_milestones, test_companion_choice_and_lifetime_points_are_profile_local, test_dashboard_companion_uses_score_not_topic_progress_and_remembers_choice",
+    "checked_at": "2026-10-12T21:42:58+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F246": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_ui_layout_regressions.py: test_topic_search_filter_and_lesson_route_work_together, test_topic_cards_never_show_as_desktop_windows; 2 behavioural checks in tests/test_gamification_progress.py: test_topic_confidence_uses_minimum_sample_and_accuracy_threshold, test_topic_catalog_explains_confidence_state_and_keeps_actions; 2 behavioural checks in tests/test_progress_read_views.py: test_student_views_read_one_consistent_file_per_refresh, test_topic_unknown_state_keeps_learning_actions_and_search",
+    "checked_at": "2026-10-12T21:42:59+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F247": {
+    "status": "PASS",
+    "note": "2 behavioural checks in tests/test_localized_ui_regressions.py: test_library_history_and_settings_follow_the_selected_language, test_command_lab_and_lesson_controls_retranslate_without_losing_values",
+    "checked_at": "2026-10-12T14:09:37+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F248": {
+    "status": "PASS",
+    "note": "3 behavioural checks in tests/test_settings_startup_sync.py: test_saved_high_quality_restored_at_startup, test_missing_saved_quality_falls_back_to_standard, test_invalid_saved_quality_falls_back_to_standard",
+    "checked_at": "2026-10-12T14:09:41+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
+  },
+  "F249": {
+    "status": "PASS",
+    "note": "7 behavioural checks in tests/test_cloud_media_check.py: test_validate_mp4_rejects_non_container, test_container_gate_memory_does_not_scale_with_video_size, test_profile_matches_expected_quality_dims, test_profile_rejects_wrong_resolution, test_profile_rejects_undecodable_with_ftyp, test_profile_refuses_unverified_video_when_decoder_is_missing, test_profile_rejects_metadata_without_a_decodable_frame; 8 behavioural checks in tests/test_cloud_failure_diagnosis.py: test_cloud_dispatch_denied_is_diagnosed_without_local_manim, test_cloud_only_mode_never_falls_back_to_local, test_auto_mode_falls_back_to_local_after_cloud_failure, test_worker_output_failure_overrides_dependency_banners, test_worker_output_excerpt_keeps_the_actual_failure, test_failed_worker_reports_missing_output_without_local_fallback, test_successful_workflow_without_artifact_has_missing_output_kind, test_invalid_artifact_has_validation_kind_not_encoder_kind",
+    "checked_at": "2026-10-12T21:45:00+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS",
+    "live_cloud_evidence": {
+      "confirmed": true,
+      "scope": "Short silent Manim scene: exact worker output, full decode, cache reuse and missing-output refusal; native playback and full narrated lesson not checked",
+      "success_run_id": 38311353505,
+      "failure_run_url": "https://github.com/gopheriv/manim-render-worker/actions/runs/38312254517",
+      "workflow_version": "7",
+      "artifact_sha256": "e7806a21550235dc4a256d559b4ef3840caf418858b10e35acd04ac2c8fe25b0",
+      "cache_hit": true,
+      "evidence_files": [
+        "tmp\\live-cloud-acceptance-20261013\\evidence.json",
+        "tmp\\live-cloud-acceptance-20261013\\evidence-cache.json",
+        "tmp\\live-cloud-acceptance-20261013\\missing-output\\evidence.json"
+      ]
+    }
+  },
+  "F250": {
+    "status": "PASS",
+    "note": "5 behavioural checks in tests/test_lesson_practice_h.py: test_practice_kinds_cover_stage_h, test_practice_numbers_recomputed, test_practice_options_stable_and_unique, test_h1_mirrors_bank_item, test_catalog_serves_anchor_then_practice",
+    "checked_at": "2026-10-12T14:09:42+00:00",
+    "phase2_status": "PASS",
+    "phase4_status": "PASS"
   }
 }

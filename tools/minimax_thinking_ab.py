@@ -2,27 +2,104 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import hashlib
 import json
 import re
+import shutil
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from aetherlab.core.atomic_json import atomic_write_json
 from aetherlab.core.console import configure_utf8_stdio
 from aetherlab.core.models import ProblemRequest, RagResult, SolverResult
 from aetherlab.core.settings import load_settings
 from aetherlab.services.manim_runtime import ManimRuntime
 
+_ACTIVE_AB_RUN: dict[str, object] = {}
+
+
+def _redact(value: object) -> str:
+    text = str(value or "")
+    return re.sub(r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+\S+)", "[redacted]", text)
+
 
 def _safe(value: object) -> str:
-    text = str(value or "")
-    text = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+\S+)", "[redacted]", text)
-    return text[:1000]
+    return _redact(value)[:1000]
 
 
-async def _run_variant(settings, request, solver, rag, *, thinking: bool) -> dict:
+def _persist_scene_artifacts(scene, output_dir: Path, thinking: str, *, stage: str) -> dict[str, str]:
+    """Keep redacted source and diagnostics so an arm can be reproduced."""
+    if thinking not in {"enabled", "disabled"}:
+        raise ValueError(f"unknown thinking arm: {thinking}")
+    if stage not in {"generated", "final"}:
+        raise ValueError(f"unknown scene artifact stage: {stage}")
+    output_dir = output_dir.resolve()
+    stem = f"thinking-{thinking}-{stage}"
+    scene_path = output_dir / "scenes" / f"{stem}.py"
+    diagnostics_path = output_dir / "diagnostics" / f"{stem}.txt"
+    scene_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    source = _redact(scene.code)
+    scene_path.write_text(source, encoding="utf-8", newline="\n")
+    diagnostics = "\n\n".join(_redact(item) for item in scene.diagnostics)
+    diagnostics_path.write_text(diagnostics + ("\n" if diagnostics else ""), encoding="utf-8")
+    return {
+        "scene_path": scene_path.relative_to(output_dir).as_posix(),
+        "scene_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "diagnostics_path": diagnostics_path.relative_to(output_dir).as_posix(),
+    }
+
+
+def _record_interruption(report_path: Path, report: dict, thinking: str) -> None:
+    stopped_at = datetime.now(UTC).isoformat(timespec="seconds")
+    started_at = report.get("current_arm_started_at", "")
+    try:
+        elapsed_seconds = round(
+            (datetime.fromisoformat(str(stopped_at)) - datetime.fromisoformat(str(started_at))).total_seconds(),
+            1,
+        )
+    except ValueError:
+        elapsed_seconds = None
+    report["run_status"] = "interrupted"
+    report["interruption"] = {
+        "arm": thinking,
+        "started_at": started_at,
+        "stopped_at": stopped_at,
+        "elapsed_seconds": elapsed_seconds,
+        "reason": "The active arm was cancelled before it returned a result.",
+    }
+    report["conclusion"] = (
+        "Incomplete: an arm was interrupted before its result was recorded; "
+        "this report does not establish a matched comparison."
+    )
+    report["updated_at"] = stopped_at
+    atomic_write_json(report_path, report)
+    _ACTIVE_AB_RUN.clear()
+
+
+def _persist_video_artifact(video: Path, output_dir: Path, thinking: str) -> dict[str, str]:
+    """Copy a completed arm's MP4 beside the report and bind it by hash."""
+    if thinking not in {"enabled", "disabled"}:
+        raise ValueError(f"unknown thinking arm: {thinking}")
+    output_dir = output_dir.resolve()
+    destination = output_dir / "videos" / f"thinking-{thinking}.mp4"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(video, destination)
+    with destination.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {
+        "video_path": destination.relative_to(output_dir).as_posix(),
+        "video_sha256": digest,
+    }
+
+
+async def _run_variant(
+    settings, request, solver, rag, *, thinking: bool, artifact_dir: Path,
+) -> dict:
     runtime = ManimRuntime(settings)
     generation_started = time.monotonic()
     scene = await runtime.generate_scene_async(
@@ -76,6 +153,7 @@ async def _run_variant(settings, request, solver, rag, *, thinking: bool) -> dic
         ),
         "diagnostics": [_safe(item) for item in scene.diagnostics[-8:]],
     }
+    row.update(_persist_scene_artifacts(scene, artifact_dir, row["thinking"], stage="generated"))
     if scene.used_fallback or curated or not scene.code:
         return row
 
@@ -94,9 +172,11 @@ async def _run_variant(settings, request, solver, rag, *, thinking: bool) -> dic
         bool(re.search(r"(?:Applied|Render) render repair \d+", item))
         for item in scene.diagnostics
     )
+    row.update(_persist_scene_artifacts(scene, artifact_dir, row["thinking"], stage="final"))
     video = Path(scene.video_path) if scene.video_path else None
     row["video_exists"] = bool(video and video.is_file() and video.stat().st_size > 0)
     if row["video_exists"]:
+        row.update(_persist_video_artifact(video, artifact_dir, row["thinking"]))
         from aetherlab.services.scene_critic import critique_video
         from aetherlab.services.voiceover import get_duration
 
@@ -152,38 +232,80 @@ async def run() -> int:
         narration_enabled=False,
         visual_critic_max_passes=0,
     )
-    variants = []
-    for thinking in (False, True):
-        label = "enabled" if thinking else "disabled"
-        print(f"Starting MiniMax thinking={label} variant.", flush=True)
-        variants.append(await _run_variant(
-            experiment_settings, request, solver, rag, thinking=thinking
-        ))
-        print(json.dumps(variants[-1], indent=2), flush=True)
-
-    quality_scores = [row["quality_score"] for row in variants if row["quality_score"] > 0]
+    output = Path(".analysis") / f"minimax-thinking-ab-{datetime.now(UTC):%Y%m%d-%H%M%S}"
+    output.mkdir(parents=True, exist_ok=False)
+    report_path = output / "report.json"
     report = {
         "schema": "aetherlab.minimax_thinking_ab.v1",
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "model": settings.llm_model,
         "sample_count_per_arm": 1,
         "prompt": request.prompt,
-        "variants": variants,
-        "conclusion": (
-            "Pilot only: both arms need a successful AI scene, completed Cloud render, "
-            "and nonzero vision score before comparing latency, quality, and repairs."
-            if len(quality_scores) < 2
-            else "Pilot only: one scene per arm is directional evidence, not a calibrated benchmark."
-        ),
+        "variants": [],
+        "run_status": "in_progress",
+        "conclusion": "Both arms have not completed yet.",
     }
-    output = Path(".analysis") / f"minimax-thinking-ab-{datetime.now(UTC):%Y%m%d-%H%M%S}"
-    output.mkdir(parents=True, exist_ok=False)
-    report_path = output / "report.json"
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(report_path, report)
+    _ACTIVE_AB_RUN.update({"report_path": report_path, "report": report, "arm": None})
+    variants = []
+    for thinking in (False, True):
+        label = "enabled" if thinking else "disabled"
+        print(f"Starting MiniMax thinking={label} variant.", flush=True)
+        report["current_arm"] = label
+        report["current_arm_started_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+        _ACTIVE_AB_RUN["arm"] = label
+        atomic_write_json(report_path, report)
+        try:
+            variant = await _run_variant(
+                experiment_settings, request, solver, rag,
+                thinking=thinking, artifact_dir=output,
+            )
+        except asyncio.CancelledError:
+            _record_interruption(report_path, report, label)
+            raise
+        variants.append(variant)
+        print(json.dumps(variants[-1], indent=2), flush=True)
+        report["variants"] = variants
+        report["current_arm"] = None
+        report.pop("current_arm_started_at", None)
+        _ACTIVE_AB_RUN["arm"] = None
+        report["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+        atomic_write_json(report_path, report)
+
+    quality_scores = [row["quality_score"] for row in variants if row["quality_score"] > 0]
+    report["run_status"] = "complete"
+    report["conclusion"] = (
+        "Pilot only: both arms need a successful AI scene, completed Cloud render, "
+        "and nonzero vision score before comparing latency, quality, and repairs."
+        if len(quality_scores) < 2
+        else "Pilot only: one scene per arm is directional evidence, not a calibrated benchmark."
+    )
+    report["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+    atomic_write_json(report_path, report)
+    _ACTIVE_AB_RUN.clear()
     print(f"A/B report: {report_path}", flush=True)
     return 0 if len(quality_scores) == 2 else 1
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.parse_args(argv)
+    return asyncio.run(run())
+
+
 if __name__ == "__main__":
     configure_utf8_stdio()
-    raise SystemExit(asyncio.run(run()))
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        report_path = _ACTIVE_AB_RUN.get("report_path")
+        report = _ACTIVE_AB_RUN.get("report")
+        arm = _ACTIVE_AB_RUN.get("arm")
+        if (
+            isinstance(report_path, Path)
+            and isinstance(report, dict)
+            and isinstance(arm, str)
+            and report.get("run_status") != "interrupted"
+        ):
+            _record_interruption(report_path, report, arm)
+        raise SystemExit(130)

@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any
 
-
 _LATEX_COMMANDS = {
     "alpha", "beta", "gamma", "delta", "epsilon", "theta", "lambda",
     "mu", "pi", "rho", "sigma", "tau", "phi", "psi", "omega",

@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 
 from aetherlab.services.multibody import integrate_newtonian
+from aetherlab.services.scene_components import _compose_component, compose_scene_code
 from aetherlab.services.scene_components.problems import compose_problem
 from aetherlab.services.scene_components.problems.three_body import check_lines, matches
-from aetherlab.services.scene_components import _compose_component, compose_scene_code
 
 
 def _circular_pair():

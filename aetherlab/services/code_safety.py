@@ -105,6 +105,7 @@ BANNED_IO_ATTRIBUTES: frozenset[str] = frozenset(
         "load",
         "loadtxt",
         "genfromtxt",
+        "dump",
         "memmap",
         "DataSource",
     }

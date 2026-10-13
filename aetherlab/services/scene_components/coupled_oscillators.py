@@ -32,7 +32,7 @@ def params(solver: Any) -> dict[str, float]:
 def build(class_name: str, solver: Any) -> str | None:
     """Return a coupled-oscillator scene, or None if it cannot integrate."""
     try:
-        import numpy as np
+        pass
     except Exception:  # noqa: BLE001
         return None
 

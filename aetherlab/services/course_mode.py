@@ -207,9 +207,14 @@ class CourseProgressStore:
         return mixed[:max(0, int(limit))]
 
     def record_review_result(
-        self, review: dict[str, Any], recalled: bool, *, now: datetime | None = None
+        self,
+        review: dict[str, Any],
+        recalled: bool,
+        *,
+        correct: bool | None = None,
+        now: datetime | None = None,
     ) -> int:
-        """Reschedule a reviewed prompt after the learner self-rates recall."""
+        """Reschedule a prompt and retain self-reported or objective recall evidence."""
         now_dt = _as_utc(now)
         with path_lock(self.path):
             data = self._load()
@@ -240,6 +245,8 @@ class CourseProgressStore:
                 "kind": "spaced_review",
                 "at": now_dt.isoformat(timespec="seconds"),
                 "recalled": bool(recalled),
+                "correct": bool(correct) if isinstance(correct, bool) else None,
+                "recall_mode": "objective_mcq" if isinstance(correct, bool) else "self_reported",
                 "days_since_first_attempt": (
                     round(days_since_first, 4) if days_since_first is not None else None
                 ),

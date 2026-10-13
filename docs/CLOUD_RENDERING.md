@@ -118,12 +118,31 @@ The workflow pins:
 - Python `3.14`
 - `manim==0.21.0`
 - ffmpeg, cairo, pango
+- optional MathTex support: `texlive-latex-extra` and `dvisvgm`. The extra
+  bundle supplies Manim's required `standalone` document class; recommended
+  fonts are omitted to keep the conditional TeX install smaller.
 
 LaTeX is installed only when the app marks a scene as needing `Tex`/`MathTex`.
 AetherLab's default generated and fallback scenes remain Text-first to avoid a
 hard LaTeX dependency.
 
+The dependency step has a seven-minute limit and bounded APT retries/timeouts;
+the whole render job is limited to 15 minutes so a stalled package mirror does
+not leave an orphan worker running for hours.
+
 ## Failure Behavior
+
+The worker publishes only one final MP4 with the requested scene class name,
+excluding partial movie fragments. A missing or ambiguous match fails the job;
+an unrelated larger video is never substituted. Workflow version 7 changes the
+content-addressed job key so older worker outputs cannot satisfy a new request.
+
+The client checks the MP4 container, video stream, positive duration, requested
+dimensions and a decoded frame before presenting the artifact as ready. PyAV
+(`av`) is a base application dependency for this check even in cloud-only mode;
+it does not require local Manim rendering. If the decoder cannot load, the app
+reports a validation failure with a repair hint. This sample is not a full
+decode of every frame or a visual/auditory quality certification.
 
 Cloud failures map back to the normal render contract:
 
@@ -148,8 +167,12 @@ Every cloud render and scene tournament is recorded in a **render-farm ledger**
 `<data_dir>/render_ledger.json`). Open it from **Settings → View render ledger**
 to see, per job:
 
-- the status timeline — `queued → in_progress → completed/failed/cancelled/
-  rate_limited → artifact_downloaded → rendered`, or `fallback_local`;
+- job id, scene/class, quality, FPS, backend, and provider;
+- the status timeline — `queued → in_progress → completed →
+  artifact_downloaded → rendered`, or `failed`, `cancelled`,
+  `action_required`, `rate_limited → in_progress`, and `fallback_local`;
+- safe links to the GitHub Actions run and artifact page. Signed ZIP URLs and
+  URLs with query parameters are never stored;
 - for a tournament, the **per-candidate critic scores with the winner
   highlighted** — i.e. *why* this scene was chosen;
 - a **sanitized failure log tail** (tokens/keys are redacted at write time, so
@@ -159,7 +182,8 @@ to see, per job:
   cloud-only.
 
 The ledger is fail-soft and capped: it never breaks a render and keeps only the
-most recent jobs. Because every free-text field is scrubbed on the way in, no
-credential is ever persisted. To debug a failed cloud render, read its log tail
-and timeline here first; to confirm a tournament, check the candidate scores and
-the winner index.
+most recent jobs. Text fields and diagnostics are scrubbed before display or
+persistence. A missing GitHub token scope appears as `action_required` with a
+short setup hint; a poll rate limit appears in the timeline before polling
+resumes. To debug a failed cloud render, read its log tail and timeline here
+first; to confirm a tournament, check the candidate scores and the winner index.

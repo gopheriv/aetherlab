@@ -9,7 +9,12 @@ from collections import Counter
 
 from aetherlab.core.models import ProblemRequest, SolverResult
 from aetherlab.core.settings import AppSettings
-from aetherlab.services.model_policy import request_temperature
+from aetherlab.services.model_policy import (
+    codegen_request_kwargs,
+    request_temperature,
+    settings_pathway,
+    structured_request_timeout,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +91,13 @@ FALLBACK_EQUATIONS: dict[str, list[str]] = {
 }
 
 
+def _is_timeout_error(exc: Exception) -> bool:
+    return (
+        isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+        or "timeout" in type(exc).__name__.casefold()
+    )
+
+
 class AsyncLLMCoordinator:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -103,7 +115,9 @@ class AsyncLLMCoordinator:
 
         attempts = max(1, int(getattr(self.settings, "solver_attempts", SOLVER_ATTEMPTS)))
         last_exc: Exception | None = None
+        attempts_used = 0
         for attempt in range(attempts):
+            attempts_used = attempt + 1
             try:
                 solver = await self._solve_remote(request)
                 return apply_request_parameters(request, solver)
@@ -114,6 +128,8 @@ class AsyncLLMCoordinator:
                     attempt + 1, attempts, type(exc).__name__, exc,
                 )
                 if attempt < attempts - 1:
+                    if _is_timeout_error(exc) and not settings_pathway(self.settings).retry_on_timeout:
+                        break
                     delay = SOLVER_BACKOFF_SECONDS[min(attempt, len(SOLVER_BACKOFF_SECONDS) - 1)]
                     await asyncio.sleep(delay)
 
@@ -121,12 +137,12 @@ class AsyncLLMCoordinator:
         # loudly rather than letting the canned scaffold pass as a real answer.
         log.error(
             "Solver fell back to the deterministic scaffold after %d failed attempts: %s",
-            attempts, last_exc,
+            attempts_used, last_exc,
         )
         solver = self._fallback(
             request,
             note=(
-                f"Remote model failed after {attempts} attempts; deterministic "
+                f"Remote model failed after {attempts_used} attempt(s); deterministic "
                 f"fallback used (results are a generic scaffold, not solved physics): {last_exc}"
             ),
         )
@@ -197,6 +213,8 @@ class AsyncLLMCoordinator:
                 {"role": "user", "content": request.prompt},
             ],
             temperature=request_temperature(self.settings, 0.2),
+            timeout=structured_request_timeout(self.settings),
+            **codegen_request_kwargs(self.settings, minimax_thinking=False),
         )
         content = response.choices[0].message.content or ""
         payload = self._parse_json(content)

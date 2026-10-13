@@ -320,10 +320,17 @@ def test_command_bar_exposes_only_bounded_duration_choices(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     bar = CommandBar()
     assert bar.get_duration_target() == 30.0
+    assert [bar._duration.itemData(i) for i in range(bar._duration.count())] == [
+        30.0, 60.0, 120.0, 180.0,
+    ]
+    assert [bar._duration.itemText(i) for i in range(bar._duration.count())] == [
+        "30 сек", "1 мин", "2 мин", "3 мин",
+    ]
+    bar.set_language("en")
     assert [bar._duration.itemText(i) for i in range(bar._duration.count())] == [
         "30 sec", "60 sec", "2 min", "3 min",
     ]
-    bar._duration.setCurrentText("2 min")
+    bar._duration.setCurrentIndex(bar._duration.findData(120.0))
     assert bar.get_duration_target() == 120.0
     bar.deleteLater()
     app.processEvents()
@@ -427,8 +434,8 @@ def test_pipeline_resumes_segmented_lesson_instead_of_rerendering_joined_code(tm
     # only the last segment.
     from dataclasses import replace as dc_replace
 
-    from aetherlab.core.settings import load_settings
     from aetherlab.core.cache import SessionCache
+    from aetherlab.core.settings import load_settings
     from aetherlab.services.pipeline import AetherLabPipeline
 
     settings = dc_replace(load_settings(), data_dir=tmp_path, cache_path=tmp_path / "cache.sqlite3",

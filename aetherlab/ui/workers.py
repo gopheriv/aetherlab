@@ -7,7 +7,6 @@ import traceback
 
 from aetherlab.core.cache import SessionCache
 from aetherlab.core.models import (
-    OutputPlan,
     PipelineError,
     PipelineResult,
     ProblemRequest,
@@ -25,9 +24,13 @@ from aetherlab.ui.qt_compat import QtCore, require_qt
 require_qt()
 
 
-class _PipelineCancelled(Exception):
+class _PipelineCancelledError(Exception):
     """Internal sentinel exception for pipeline cancellation (#2)."""
     pass
+
+
+# Keep the former name available for callers that import the sentinel directly.
+_PipelineCancelled = _PipelineCancelledError
 
 
 def _skipped_scene(engine: str) -> SceneBundle:
@@ -77,12 +80,12 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
     def _check_cancelled(self) -> None:
         """Raise if pipeline was cancelled — checked between stages (#2)."""
         if self._cancelled:
-            raise _PipelineCancelled()
+            raise _PipelineCancelledError()
 
     def run(self) -> None:
         try:
             asyncio.run(self._run_async())
-        except _PipelineCancelled:
+        except _PipelineCancelledError:
             self.status.emit("Pipeline cancelled by user.")
         except Exception as exc:
             if self._cancelled:
@@ -271,6 +274,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 brief=self.request.prompt,
                 progress=lambda msg: self.status.emit(str(msg)),
                 cancel_check=lambda: self._cancelled,
+                duration_target_s=self.request.duration_target_s,
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
@@ -306,21 +310,32 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self.progress.emit(100, "Pipeline complete")
 
     async def _ensure_ingested(self) -> None:
-        """Auto-index library files into ChromaDB if empty (#16 — progress emitted)."""
+        """Keep the textbook index current, including curated external references."""
+        try:
+            from aetherlab.services.ingestion import LibraryIngestor
+
+            ingestor = LibraryIngestor(self.settings)
+            pending = ingestor.pending_files()
+        except Exception:  # noqa: BLE001 - generation remains available without RAG
+            ingestor = None
+            pending = []
+
         if self.settings.chroma_path.exists():
             try:
                 import chromadb
                 client = chromadb.PersistentClient(path=str(self.settings.chroma_path))
                 collection = client.get_collection("textbooks")
-                if collection.count() > 0:
+                if collection.count() > 0 and not pending:
                     self.progress.emit(33, f"RAG ready: {collection.count()} chunks indexed")
                     return
             except Exception:
                 pass
 
-        if self.settings.library_path.exists():
+        has_sources = self.settings.library_path.exists() or bool(
+            getattr(self.settings, "reference_sources_path", None)
+        )
+        if has_sources and ingestor is not None:
             try:
-                ingestor = LibraryIngestor(self.settings)
                 count = ingestor.ingest(should_cancel=lambda: self._cancelled)
                 if count > 0:
                     self.status.emit(f"Ingested {count} chunks into ChromaDB.")
@@ -350,11 +365,13 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
     def __init__(self, topic: str, settings: AppSettings, *,
                  audience: str = "undergrad", quality: str = "l",
+                 language: str = "en",
                  regenerate: bool = False) -> None:
         super().__init__()
         self.topic = topic
         self.settings = settings
         self.audience = audience
+        self.language = language
         self.quality = quality
         self.regenerate = regenerate
         import threading
@@ -366,6 +383,22 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
     def run(self) -> None:
         try:
+            try:
+                ingestor = LibraryIngestor(self.settings)
+                pending_sources = ingestor.pending_files()
+                if pending_sources:
+                    self.progress.emit("Indexing textbook references", 0, len(pending_sources))
+
+                    def report_ingest(name: str, done: int, total: int, detail: str) -> None:
+                        self.progress.emit(f"Indexing {name} · {detail}", done + 1, total)
+
+                    ingestor.ingest(
+                        progress=report_ingest,
+                        should_cancel=self._cancel.is_set,
+                    )
+            except Exception:  # noqa: BLE001 - lessons continue if local RAG is unavailable
+                pass
+
             from aetherlab.services.lesson_pipeline import LessonPipeline
 
             pipeline = LessonPipeline(self.settings)
@@ -373,6 +406,7 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
                 pipeline.run(
                     self.topic,
                     audience=self.audience,
+                    language=self.language,
                     quality=self.quality,
                     regenerate=self.regenerate,
                     cancel_check=self._cancel.is_set,

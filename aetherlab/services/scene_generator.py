@@ -334,7 +334,10 @@ HARD CONSTRAINTS (violating any ruins the render):
 20. Never animate a mobject directly while its active updater also changes that
    mobject. Animate the controlling ValueTracker and let its updater update the
    display, or remove the updater before animating. Do not animate the same
-   mobject twice in one self.play call."""
+   mobject twice in one self.play call. Fade in a DecimalNumber/Integer with an
+   updater in a separate self.play call BEFORE animating the ValueTracker that
+   changes it; changing its digit count during FadeIn can crash Manim family
+   interpolation."""
 
 
 TEMPORAL_LAYOUT_CONTRACT = """TIMED DETAIL + CLEAN FRAME CONTRACT
@@ -366,7 +369,8 @@ Transform between temperature states. Keep no more than three live updater or
 always_redraw objects total; animate a small marker directly instead of
 replotting its curve. Never animate a mobject directly in self.play while its
 active updater mutates that mobject; animate the controlling ValueTracker or
-clear the updater first. Keep each marker immediately before its corresponding
+clear the updater first. Fade in a live DecimalNumber/Integer in its own play
+before animating the ValueTracker that changes its digits. Keep each marker immediately before its corresponding
 visual action, and use the scheduled duration for entrances, holds, and exits."""
 
 
@@ -394,7 +398,7 @@ Rules:
 
 
 SCENE_REPAIR_SYSTEM_PROMPT = """You are the AetherLab Manim repair engineer. A Manim Community scene you
-wrote failed at render time. Fix the exact error with the smallest safe edit.
+wrote failed static validation or rendering. Fix the exact issue with the smallest safe edit.
 
 Rules:
 1. Output ONLY valid Python — no markdown fences, no commentary.
@@ -410,17 +414,21 @@ Rules:
    same anchor.
 6. Keep every requested object and visible-motion beat; never repair a crash by
    reducing the scene to static text/axes.
-7. Preserve the storyboard beat markers and their time windows. For an OOM,
+7. Preserve the storyboard beat markers and their time windows. When the repair
+   request supplies the canonical marker list, replace all marker comments with
+   exactly that list, once each and in the listed order. For an OOM,
    simplify each beat's mobject count and sampling density while keeping its
    duration and core physics; do not compress several details into one crowded
    frame.
 8. If a ValueError reports unequal zip lengths inside Animation.interpolate_mobject,
-   check whether a displayed mobject has an updater that changes its family while
-   that same mobject is animated. Animate its controlling ValueTracker instead,
-   or clear its updater before the play; do not drop the visual beat or duration.
+   check for a DecimalNumber/Integer whose updater changes its digit count while
+   that readout is fading/writing/creating and its controlling ValueTracker is
+   animated in the same self.play. Fade in the readout in an earlier play, then
+   animate the tracker. Also check for directly animating an updater-controlled
+   mobject. Do not drop the visual beat or duration.
 """
 
-SCENE_REPAIR_USER_TEMPLATE = """## Render error
+SCENE_REPAIR_USER_TEMPLATE = """## Validation or render issue
 {error}
 
 ## Repair scope: {scope_label}
@@ -1035,61 +1043,90 @@ class SceneGenerator:
                 "Use this seed only to choose a distinct composition/pacing approach; "
                 "do not change the physics."
             )
-        try:
-            client = self._ensure_client()
-            from aetherlab.services.model_policy import system_prompt_message
+        from aetherlab.services.model_policy import system_prompt_message
 
-            response = await client.chat.completions.create(
-                model=self.settings.llm_model,
-                messages=[
+        last_error = ""
+        for attempt in range(2):
+            try:
+                client = self._ensure_client()
+                messages = [
                     system_prompt_message(self.settings, storyboard_system),
                     {"role": "user", "content": user},
-                ],
-                # Ideation runs hot; the codegen pass runs cold. This split is
-                # the whole point of storyboarding separately.
-                temperature=request_temperature(self.settings, temperature),
-                # A reasoning model whose thinking cannot be switched off spends
-                # part of this budget thinking; 4096 cut the JSON mid-string.
-                max_tokens=min(
-                    32768,
-                    max(
-                        16384 if settings_pathway(self.settings).name in {
-                            "reasoning", "kimi-reasoning",
-                        } else 4096,
-                        2048 + beat_max * 256,
+                ]
+                if last_error:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "The previous storyboard could not be used: "
+                            f"{last_error}. Return one complete, syntactically valid "
+                            "JSON object with an `acts` array. Do not omit beats or "
+                            "return Markdown, commentary, or an empty response."
+                        ),
+                    })
+                response = await client.chat.completions.create(
+                    model=self.settings.llm_model,
+                    messages=messages,
+                    # Ideation runs hot; the codegen pass runs cold. This split is
+                    # the whole point of storyboarding separately.
+                    temperature=request_temperature(self.settings, temperature),
+                    # A reasoning model whose thinking cannot be switched off spends
+                    # part of this budget thinking; 4096 cut the JSON mid-string.
+                    max_tokens=min(
+                        32768,
+                        max(
+                            16384 if settings_pathway(self.settings).name in {
+                                "reasoning", "kimi-reasoning",
+                            } else 4096,
+                            2048 + beat_max * 256,
+                        ),
                     ),
-                ),
-                **codegen_request_kwargs(
-                    self.settings, minimax_thinking=self._minimax_thinking
-                ),
-            )
-            content = response.choices[0].message.content or ""
-            board = load_model_json(content)
-            if not isinstance(board, dict) or "acts" not in board:
-                finish = getattr(response.choices[0], "finish_reason", "")
-                log.info(
-                    "Storyboard reply had no acts (%d chars, finish_reason=%s): %r",
-                    len(content), finish, content[:160],
+                    **codegen_request_kwargs(
+                        self.settings, minimax_thinking=self._minimax_thinking
+                    ),
                 )
-                return None
-            beat_count = sum(
-                len(act.get("beats", []))
-                for act in board.get("acts", []) if isinstance(act, dict)
-                and isinstance(act.get("beats", []), list)
-            )
-            if duration_target_s > 45.0 and beat_count < beat_min:
-                log.info(
-                    "Storyboard returned %d beats for a %.1fs explanation; need at least %d.",
-                    beat_count, duration_target_s, beat_min,
+                choices = getattr(response, "choices", None) or []
+                if not choices:
+                    raise ValueError("storyboard response contained no choices")
+                choice = choices[0]
+                message = getattr(choice, "message", None)
+                content = str(getattr(message, "content", "") or "").strip()
+                if not content:
+                    raise ValueError(
+                        "storyboard response was empty "
+                        f"(finish_reason={getattr(choice, 'finish_reason', 'unknown')})"
+                    )
+                board = load_model_json(content)
+                if not isinstance(board, dict) or not isinstance(board.get("acts"), list):
+                    raise ValueError("storyboard JSON must contain an acts array")
+                if not board["acts"] or any(
+                    not isinstance(act, dict)
+                    or not isinstance(act.get("beats"), list)
+                    or not act["beats"]
+                    for act in board["acts"]
+                ):
+                    raise ValueError("storyboard acts must each contain a non-empty beats array")
+                beat_count = sum(
+                    len(act["beats"]) for act in board["acts"]
                 )
+                if duration_target_s > 45.0 and beat_count < beat_min:
+                    raise ValueError(
+                        f"storyboard returned {beat_count} beats; need at least {beat_min}"
+                    )
+                board = schedule_storyboard_timeline(board, duration_target_s)
+                board = await self.fit_board_to_speech(board, duration_target_s)
+                self._last_storyboard = board
+                return board
+            except ValueError as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt == 0:
+                    log.info("Storyboard JSON is unusable; retrying once (%s).", exc)
+                    continue
+                log.info("Storyboard pass failed (%s); using single-call generation.", exc)
                 return None
-            board = schedule_storyboard_timeline(board, duration_target_s)
-            board = await self.fit_board_to_speech(board, duration_target_s)
-            self._last_storyboard = board
-            return board
-        except Exception as exc:  # noqa: BLE001 — storyboard is best-effort
-            log.info("Storyboard pass failed (%s); using single-call generation.", exc)
-            return None
+            except Exception as exc:  # noqa: BLE001 — provider failures stay fail-soft
+                log.info("Storyboard pass failed (%s); using single-call generation.", exc)
+                return None
+        return None
 
     async def _generate_remote(
         self,

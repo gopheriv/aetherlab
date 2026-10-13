@@ -275,3 +275,42 @@ log found that GitHub prefixes each line, preventing the previous anchored regex
 from capturing runner metrics. `_parse_runner_metrics` now accepts prefixed markers;
 the regression test verifies Cloud ledger capture of Manim version, render time,
 and peak memory. Evidence is under `.analysis/manim-parity-20260925/`.
+
+## Manim package-version benchmark - 2026-10-02
+
+`tools/manim_version_benchmark.py` compares the installed Manim 0.21.0 with an
+extracted 0.20.1 wheel without installing or changing either package. It uses
+the same Python 3.14.4 interpreter and installed dependency set for both
+versions, renders the fixed field-lines golden scene with Cairo at 854x480 and
+30 fps, disables Manim caching, alternates run order, and retains every MP4 and
+log. Run it with `python tools/manim_version_benchmark.py --repeats 3`.
+
+Across eight matched pairs, median end-to-end render wall time was 17.804s for
+0.20.1 and 16.681s for 0.21.0 (6.3% lower). The newer version was faster in
+each pair. Timings were noisy: 0.20.1 ranged from 16.965s to 47.387s, and
+0.21.0 ranged from 15.522s to 25.905s. One 47.387s old-version run paired with
+a 16.811s new-version run, so the medians should be read as evidence for this
+scene and machine rather than a general performance guarantee. All videos
+measured 9.2s, 276 frames, 854x480, and 30 fps; sampled frames were pixel
+identical. Evidence, including both reports, all renders, logs, and contact
+sheets, is under `.analysis/manim-version-ab-20261002/benchmark-20261002-160006/`
+and `.analysis/manim-version-ab-20261002/benchmark-20261002-160401/`.
+
+A retained Cloud traceback from the MiniMax A/B probe exposed another Manim
+family-interpolation failure: a `DecimalNumber` updater changed the digit count
+while the readout faded in during the same play as its `ValueTracker`. The new
+`check_dynamic_numeric_fade_conflicts` pre-render gate rejects that same-play
+pattern, and the generation/repair prompts require a separate readout entrance
+before the tracker animation. It flags both affected counters in the captured
+scene. A regression covers the unsafe and split-play forms; the full pytest and
+223-feature harness pass with the gate enabled.
+
+## ЕНТ MVP render defaults - 2026-10-07
+
+The desktop quality selector now starts at Standard (Manim `-qm`: 1280x720 at
+30 fps) instead of Draft. Draft remains available for fast previews, and High
+remains available for 1080p output. Automatic local render tiers keep a stable
+30 fps cadence; users can still explicitly choose the cinematic tier or set
+`AETHERLAB_MANIM_FPS` when a lesson needs 60 fps. The Cairo backend, isolated
+per-render media directory, and disabled Manim cache remain unchanged so render
+quality changes do not reintroduce the prior cache/synchronization collision.

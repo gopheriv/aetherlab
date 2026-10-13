@@ -133,6 +133,11 @@ def effective_llm_timeout(settings: "AppSettings") -> float:
     return max(MIN_LLM_TIMEOUT_SECONDS, min(MAX_LLM_TIMEOUT_SECONDS, value))
 
 
+def structured_request_timeout(settings: "AppSettings", *, cap: float = 180.0) -> float:
+    """Bound JSON-only planning and solving calls independently of scene codegen."""
+    return min(effective_llm_timeout(settings), max(MIN_LLM_TIMEOUT_SECONDS, float(cap)))
+
+
 class PolicyTemperature(float):
     """A temperature pinned by model policy that remembers what was asked for.
 
@@ -283,12 +288,12 @@ def is_hybrid_qwen_model(model: str | None) -> bool:
 def codegen_request_kwargs(
     settings: "AppSettings", *, minimax_thinking: bool | None = None
 ) -> dict[str, Any]:
-    """Per-pathway request kwargs for non-streaming scene codegen.
+    """Per-pathway flags for non-streaming scene code and structured JSON tasks.
 
     MiniMax supports its own nested ``thinking`` toggle; hybrid Qwen models
     use DashScope's ``enable_thinking`` flag. An omitted MiniMax override
-    preserves the provider's existing default; experiments can explicitly
-    enable or disable thinking without changing production behavior.
+    preserves the provider's existing default; compact structured tasks can
+    disable thinking when reasoning tokens were consuming their output budget.
     """
     model = _model_id(settings.llm_model)
     if re.match(r"^minimax-m\d", model):

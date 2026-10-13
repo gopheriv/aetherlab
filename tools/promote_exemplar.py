@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         cand = candidates[idx]
         if args.emit is not None:
-            print(f"# Promote into aetherlab/services/scene_exemplars.py after review:")
+            print("# Promote into aetherlab/services/scene_exemplars.py after review:")
             print(f'_{cand["domain"].upper()}_PROMOTED = """{cand["code"]}"""')
             print(f'# EXEMPLARS["{cand["domain"]}"] = _{cand["domain"].upper()}_PROMOTED')
         else:

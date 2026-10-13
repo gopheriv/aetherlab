@@ -23,6 +23,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aetherlab.core.atomic_json import atomic_write_json, path_lock
 
@@ -69,6 +70,31 @@ def scrub(text: str) -> str:
     return out
 
 
+_SAFE_GITHUB_PATH = re.compile(
+    r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/\d+(?:/artifacts/\d+)?$"
+)
+
+
+def safe_github_url(value: object) -> str:
+    """Return only a credential-free GitHub Actions run/artifact page URL."""
+    candidate = str(value or "")
+    try:
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme == "https"
+            and parsed.netloc.lower() == "github.com"
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+            and _SAFE_GITHUB_PATH.fullmatch(parsed.path)
+        ):
+            return f"https://github.com{parsed.path}"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 @dataclass
 class LedgerEvent:
     status: str
@@ -112,9 +138,20 @@ def _now() -> str:
 
 def _normalise_record(row: dict) -> dict:
     """Make a persisted row safe for mutations and dashboard/report readers."""
-    job_id = str(row.get("job_id", ""))
+    def clean(value):
+        if isinstance(value, str):
+            return scrub(value)
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if isinstance(value, dict):
+            return {scrub(str(key)): clean(item) for key, item in value.items()}
+        return value
+
+    job_id = scrub(str(row.get("job_id", "")))
     defaults = asdict(JobRecord(job_id=job_id, created_at=str(row.get("created_at", ""))))
-    record = {**defaults, **row, "job_id": job_id}
+    record = clean({**defaults, **row, "job_id": job_id})
+    if not isinstance(record.get("status"), str) or record.get("status") not in STATUSES:
+        record["status"] = "failed"
     record["timeline"] = [
         event for event in record.get("timeline", []) if isinstance(event, dict)
     ] if isinstance(record.get("timeline"), list) else []
@@ -122,6 +159,8 @@ def _normalise_record(row: dict) -> dict:
         candidate for candidate in record.get("candidates", []) if isinstance(candidate, dict)
     ] if isinstance(record.get("candidates"), list) else []
     record["metrics"] = dict(record.get("metrics", {})) if isinstance(record.get("metrics"), dict) else {}
+    record["run_url"] = safe_github_url(record.get("run_url"))
+    record["artifact_url"] = safe_github_url(record.get("artifact_url"))
     winner = record.get("winner_index")
     try:
         record["winner_index"] = int(winner) if winner is not None else None
@@ -164,6 +203,7 @@ class RenderJobLedger:
         """Load, find-or-create the job, apply a mutation, and persist. Fail-soft."""
         if not job_id:
             return
+        job_id = scrub(str(job_id))
         try:
             if not self.path:
                 return
@@ -184,8 +224,9 @@ class RenderJobLedger:
               fps: int = 0, backend: str = "", provider: str = "") -> None:
         def _apply(r: dict) -> None:
             r.update({
-                "scene_class": str(scene_class), "quality": str(quality), "fps": int(fps or 0),
-                "backend": str(backend), "provider": str(provider), "status": "queued",
+                "scene_class": scrub(str(scene_class)), "quality": scrub(str(quality)),
+                "fps": int(fps or 0), "backend": scrub(str(backend)),
+                "provider": scrub(str(provider)), "status": "queued",
             })
             # Job ids are content-addressed, so a local and a cloud render of
             # the same scene share a row. Each attempt starts with clean
@@ -195,9 +236,11 @@ class RenderJobLedger:
         self._mutate(job_id, _apply)
 
     def status(self, job_id: str, status: str, detail: str = "") -> None:
+        status = str(status)
+        status = status if status in STATUSES else "failed"
         def _apply(r: dict) -> None:
-            r["status"] = str(status)
-            r["timeline"].append(asdict(LedgerEvent(str(status), _now(), scrub(detail))))
+            r["status"] = status
+            r["timeline"].append(asdict(LedgerEvent(status, _now(), scrub(detail))))
         self._mutate(job_id, _apply)
 
     def candidates(self, job_id: str, entries: list[dict]) -> None:
@@ -206,7 +249,7 @@ class RenderJobLedger:
                 {
                     "index": int(e.get("index", i)),
                     "score": round(float(e.get("score", 0.0) or 0.0), 3),
-                    "verdict": str(e.get("verdict", "")),
+                    "verdict": scrub(str(e.get("verdict", ""))),
                     "breakdown": {str(k): float(v) for k, v in (e.get("breakdown") or {}).items()},
                 }
                 for i, e in enumerate(entries or [])
@@ -261,14 +304,16 @@ class RenderJobLedger:
         the draft->HQ pair (the draft half is candidates[winner_index].score)."""
         def _apply(r: dict) -> None:
             r["winner_hq_score"] = round(float(score or 0.0), 3)
-            r["winner_hq_verdict"] = str(verdict or "")
+            r["winner_hq_verdict"] = scrub(str(verdict or ""))
         self._mutate(job_id, _apply)
 
-    def failure(self, job_id: str, log_tail: str, *, kind: str = "") -> None:
+    def failure(self, job_id: str, log_tail: str, *, kind: str = "", status: str = "failed") -> None:
+        status = str(status)
+        status = status if status in {"failed", "action_required"} else "failed"
         def _apply(r: dict) -> None:
-            r["status"] = "failed"
+            r["status"] = status
             r["log_tail"] = scrub(log_tail)[-_LOG_TAIL_CHARS:]
-            r["timeline"].append(asdict(LedgerEvent("failed", _now(), scrub(kind))))
+            r["timeline"].append(asdict(LedgerEvent(status, _now(), scrub(kind))))
         self._mutate(job_id, _apply)
 
     def fallback(self, job_id: str, reason: str, final_path: str = "") -> None:
@@ -276,24 +321,26 @@ class RenderJobLedger:
             r["status"] = "fallback_local"
             r["fallback_reason"] = scrub(reason)
             if final_path:
-                r["final_path"] = str(final_path)
+                r["final_path"] = scrub(str(final_path))
             r["timeline"].append(asdict(LedgerEvent("fallback_local", _now(), scrub(reason))))
         self._mutate(job_id, _apply)
 
     def finish(self, job_id: str, status: str = "rendered", final_path: str = "") -> None:
+        status = str(status)
+        status = status if status in STATUSES else "failed"
         def _apply(r: dict) -> None:
-            r["status"] = str(status)
+            r["status"] = status
             if final_path:
-                r["final_path"] = str(final_path)
-            r["timeline"].append(asdict(LedgerEvent(str(status), _now())))
+                r["final_path"] = scrub(str(final_path))
+            r["timeline"].append(asdict(LedgerEvent(status, _now())))
         self._mutate(job_id, _apply)
 
     def urls(self, job_id: str, *, run_url: str = "", artifact_url: str = "") -> None:
         def _apply(r: dict) -> None:
             if run_url:
-                r["run_url"] = scrub(run_url)
+                r["run_url"] = safe_github_url(run_url)
             if artifact_url:
-                r["artifact_url"] = scrub(artifact_url)
+                r["artifact_url"] = safe_github_url(artifact_url)
         self._mutate(job_id, _apply)
 
     def list(self, limit: int = 20) -> list[dict]:

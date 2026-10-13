@@ -308,9 +308,8 @@ async def render_segmented_scene(
             "Long-form AI generation requires a configured model; no segmented fallback was substituted.",
             engine=engine,
         )
-    from aetherlab.services.scene_generator import SceneGenerator
-
     from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_generator import SceneGenerator
     from aetherlab.services.voiceover import get_duration
 
     runtime = runtime or ManimRuntime(settings)
@@ -512,6 +511,7 @@ async def render_segmented_scene(
                     brief=f"{request.prompt}\nSegment {index + 1}: {item['beat_ids']}",
                     progress=progress,
                     cancel_check=cancel_check,
+                    duration_target_s=target,
                 )
                 if bundle.status != "rendered" or not bundle.video_path:
                     return _incomplete(
