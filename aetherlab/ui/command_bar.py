@@ -164,6 +164,7 @@ class CommandBar(QtWidgets.QWidget):
         self.run_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.run_button.clicked.connect(self._submit)
         action_row.addWidget(self.run_button)
+        self.input.textChanged.connect(self._apply_ai_quota_enabled_state)
 
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.cancel_button.setObjectName("CancelButton")
@@ -258,10 +259,12 @@ class CommandBar(QtWidgets.QWidget):
         self._ai_quota.setToolTip(str(copy.get(key, "")))
 
     def _apply_ai_quota_enabled_state(self) -> None:
+        from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
+
         remaining = getattr(self, "_ai_quota_remaining", 10)
         allowed = remaining is not None and remaining > 0
         self.run_button.setEnabled(allowed and not self._busy)
-        self.learn_button.setEnabled(allowed and not self._busy)
+        self.learn_button.setEnabled((allowed or is_prebuilt_ent_topic(self.input.text())) and not self._busy)
 
     def set_language(self, language: str) -> None:
         index = self._language.findData(language)

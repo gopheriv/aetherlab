@@ -7,6 +7,14 @@ Writes clips/<frag>_<lang>.mp3 + durations.json (+ fit table vs shot durs).
 Skips fragments whose clip already exists (resume by deleting files).
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 import shutil

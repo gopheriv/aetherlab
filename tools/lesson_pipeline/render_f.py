@@ -4,6 +4,14 @@ The JSON is the single source of truth; the MD is a derived review copy.
 Fails loudly on unknown ID references or non-monotonic block timings.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 from pathlib import Path
 

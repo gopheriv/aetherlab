@@ -5,6 +5,14 @@ Writes output/stage_k_voice/speak.json, clips/<block>_<lang>.mp3,
 samples/<lang>.mp3, timing.json. Fails loudly on missing voices/clips.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 import re

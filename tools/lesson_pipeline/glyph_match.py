@@ -1,6 +1,14 @@
 """Blob-split the Q1 key cell and cross-correlate its glyph vs confident
 same-row letters (A/B/C/D) to identify the letter without trusting OCR."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import re
 import subprocess
 from pathlib import Path

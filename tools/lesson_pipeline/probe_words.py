@@ -5,6 +5,14 @@ Dumps output/stage_k2_fragments/words.json: {frag: {lang: [(word, t0, t1)]}}.
 Retries each stream (edge-tts 403 flap) with backoff; resumes by frag.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 from pathlib import Path

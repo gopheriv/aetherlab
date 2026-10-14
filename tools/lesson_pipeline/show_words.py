@@ -1,4 +1,12 @@
 """Dump word timings for key fragments to place numeric events."""
+
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
 import json
 
 W = json.load(open("output/stage_k2_fragments/words.json", encoding="utf-8"))

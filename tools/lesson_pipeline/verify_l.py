@@ -13,6 +13,14 @@ Usage: python .qwen/tmp/verify_l.py [ru|kk|en]  (default ru)
 Part 2 (cloud previews + frames) is appended after L4/L5 complete.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import ast
 import importlib.util
 import json

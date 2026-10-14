@@ -1,6 +1,14 @@
 """Profile probe: row/column brightness profiles + bright-mass bbox for each
 review frame. Compact ground truth for layout-vs-scenario comparison."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import numpy as np

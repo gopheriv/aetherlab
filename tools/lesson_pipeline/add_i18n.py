@@ -4,6 +4,14 @@ Source texts only — no numbers are invented here; verify_i.py proves digit
 parity across ru/kk/en afterwards. Bumps canonical version 1 -> 2.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 from pathlib import Path
 

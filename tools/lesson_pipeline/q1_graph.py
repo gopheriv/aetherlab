@@ -1,5 +1,13 @@
 """Render Testcenter-3 p2 at 300dpi and OCR the Q1 graph axes region."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import subprocess
 from pathlib import Path
 
@@ -22,6 +30,6 @@ for lang in ("kaz", "kaz+eng"):
     run = subprocess.run(
         ["tesseract", str(TMP / "tc3_p2_q1.png"), "stdout",
          "-l", lang, "--psm", "6"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(f"--- lang={lang} ---")
     print(run.stdout[:1500])

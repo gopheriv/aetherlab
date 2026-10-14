@@ -241,6 +241,13 @@ def audit(
             "Feature harness failures recorded in feature_test_results.json: "
             f"{harness_failures}"
         )
+    pending_retests = {
+        fid for fid, result in results.items()
+        if result.get("status") == "PASS"
+        and result.get("phase4_status") in {"BLOCKED", "PENDING", "PARTIAL", "DEFERRED"}
+    }
+    if include_run_status and pending_retests:
+        issues.append(f"Current-source retests are incomplete: {sorted(pending_retests)}")
 
     errors_text = ERRORS_FOUND.read_text(encoding="utf-8")
     errors_bug_ids = set(re.findall(r"^\|\s*(BUG-\d+)\s*\|", errors_text, re.M))
@@ -267,6 +274,8 @@ def audit(
         defect_status = next((r for r in csv_rows if r["ID"] == fid), {}).get("Status")
         recorded = results.get(fid, {}).get("status")
         expected_status = {"PASS": "FIXED", "FAIL": "REGRESSED"}.get(recorded, "PARTIAL")
+        if fid in pending_retests:
+            expected_status = "PARTIAL"
         if defect_status != expected_status:
             issues.append(f"DEFECTS feature {fid} is {defect_status}, expected {expected_status} for recorded result {recorded}")
         if include_run_status and defect_status == "REGRESSED":

@@ -1,0 +1,179 @@
+1
+00:00:00,300 --> 00:00:04,096
+A car travels at two metres per second and accelerates smoothly.
+
+2
+00:00:10,500 --> 00:00:13,262
+After four seconds it already does fourteen.
+
+3
+00:00:14,300 --> 00:00:15,731
+How many metres did it cover?
+
+4
+00:00:16,300 --> 00:00:19,185
+By the end of the lesson you will find the answer two ways.
+
+5
+00:00:20,300 --> 00:00:25,860
+If speed never changes, motion is uniform: v equals s over t.
+
+6
+00:00:30,300 --> 00:00:33,810
+Here speed grows — but grows by the same amount each second.
+
+7
+00:00:34,300 --> 00:00:40,219
+Every second adds three metres per second — that is what an acceleration of three means.
+
+8
+00:00:40,500 --> 00:00:43,275
+Such motion is called uniformly accelerated.
+
+9
+00:00:44,300 --> 00:00:51,210
+Acceleration measures how fast velocity grows: a equals the change in velocity divided by time.
+
+10
+00:00:51,400 --> 00:00:53,957
+Its unit is the metre per second squared.
+
+11
+00:00:56,300 --> 00:01:01,238
+We point the x axis along the motion: everything forward takes the plus sign.
+
+12
+00:01:10,267 --> 00:01:14,428
+Velocity at any moment is the starting velocity plus the gain.
+
+13
+00:01:14,867 --> 00:01:19,468
+The gain is acceleration times time: v equals v naught plus a t.
+
+14
+00:01:22,267 --> 00:01:27,080
+Plug in our numbers: two plus three times four — fourteen metres per second.
+
+15
+00:01:38,267 --> 00:01:43,279
+Check the units: metres per second squared times seconds gives metres per second.
+
+16
+00:01:43,667 --> 00:01:44,518
+It all fits.
+
+17
+00:01:50,267 --> 00:01:54,005
+Displacement is how far the body shifted from the start.
+
+18
+00:01:54,167 --> 00:01:57,976
+While direction stays the same, it equals the distance travelled.
+
+19
+00:02:02,267 --> 00:02:07,059
+The formula: s equals v naught t plus a t squared over two.
+
+20
+00:02:07,267 --> 00:02:12,856
+The first term is what we would cover without accelerating; the second is the boost from acceleration.
+
+21
+00:02:16,267 --> 00:02:18,454
+Let's compute: two times four is eight,
+
+22
+00:02:19,567 --> 00:02:22,636
+plus three times sixteen over two — twenty-four.
+
+23
+00:02:23,067 --> 00:02:24,689
+Thirty-two metres in total.
+
+24
+00:02:40,267 --> 00:02:44,853
+Let's plot velocity against time: v equals two plus three t.
+
+25
+00:02:45,367 --> 00:02:48,201
+It is a straight line: two at zero,
+
+26
+00:02:49,367 --> 00:02:51,337
+fourteen after four seconds.
+
+27
+00:02:54,267 --> 00:02:59,014
+The slope of the line is the acceleration: the steeper, the larger the a.
+
+28
+00:03:08,267 --> 00:03:13,038
+Remember: the slope of the v–t graph equals the acceleration.
+
+29
+00:03:20,267 --> 00:03:20,948
+Now the check.
+
+30
+00:03:21,567 --> 00:03:25,682
+The area under the velocity graph numerically equals the displacement.
+
+31
+00:03:25,867 --> 00:03:35,041
+We have a trapezoid with bases two and fourteen and height four: half the sum of the bases times the height — eight times four — thirty-two metres.
+
+32
+00:03:36,267 --> 00:03:37,557
+It matches the formula.
+
+33
+00:03:37,967 --> 00:03:39,228
+Two ways, one answer.
+
+34
+00:03:50,267 --> 00:03:50,797
+Now you.
+
+35
+00:03:51,267 --> 00:03:55,650
+A car starts from rest with an acceleration of two metres per second squared.
+
+36
+00:03:55,867 --> 00:03:57,575
+How far does it go in five seconds?
+
+37
+00:04:00,267 --> 00:04:01,835
+Pause the video and solve it.
+
+38
+00:04:12,267 --> 00:04:18,044
+Answer: zero times five plus two times twenty-five over two — twenty-five metres.
+
+39
+00:04:20,267 --> 00:04:21,019
+Two traps.
+
+40
+00:04:21,367 --> 00:04:28,251
+First: plugging the final speed into the uniform-motion formula: fourteen times four is fifty-six.
+
+41
+00:04:28,467 --> 00:04:31,610
+Wrong: the speed was growing, you must take the average.
+
+42
+00:04:34,267 --> 00:04:36,813
+Second: mixing up slope and area.
+
+43
+00:04:37,267 --> 00:04:40,779
+Slope is acceleration; area is displacement.
+
+44
+00:04:43,267 --> 00:04:53,917
+To sum up: v equals v naught plus a t; s equals v naught t plus a t squared over two; the area under the v–t graph is the displacement.
+
+45
+00:04:54,067 --> 00:04:58,279
+Graph-area problems appear in UNT mocks — now you will recognise them.

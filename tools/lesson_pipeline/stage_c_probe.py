@@ -7,6 +7,14 @@ Usage (from project root):
 
 from __future__ import annotations
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 import shutil

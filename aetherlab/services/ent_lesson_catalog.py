@@ -7,7 +7,11 @@ language. Local textbook/test citations are retained on the chapter cards.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
+from pathlib import Path
 
 from aetherlab.core.language import normalize_language
 from aetherlab.core.models import LessonChapter, LessonPlan, LessonQuestion
@@ -547,9 +551,17 @@ def accelerated_motion_plan(language: str = "ru") -> LessonPlan:
 def curated_ent_lesson(topic: str, language: str = "ru") -> LessonPlan | None:
     """Resolve an explicit accelerated-motion topic alias to the curated route."""
     normalized = str(topic or "").strip().casefold().replace("-", " ").replace("_", " ")
+    if is_prebuilt_ent_topic(topic):
+        return accelerated_motion_5min_plan(language)
     if normalized != ACCELERATED_MOTION_ID and not _is_accelerated_motion_topic(topic):
         return None
     return accelerated_motion_plan(language)
+
+
+def is_prebuilt_ent_topic(topic: str) -> bool:
+    """Identify the no-AI packaged route without opening its manifest or media."""
+    normalized = str(topic or "").strip().casefold().replace("-", " ").replace("_", " ")
+    return normalized == ACCELERATED_MOTION_5MIN_ID.replace("_", " ")
 
 
 def route_content(language: str = "ru") -> dict:
@@ -634,3 +646,195 @@ def route_content(language: str = "ru") -> dict:
             ],
         }[lang],
     }
+
+
+# ── 5-minute prebuilt video lesson (v2) ──────────────────────────────────────
+# The v2 lesson reuses this same catalog module and the content/ent/ storage
+# directory: no second lesson database. Its video, subtitles, and study-guide
+# PDF are prebuilt pipeline artifacts (frozen into content/ent/media/ by
+# tools/lesson_pipeline/stage_o_wire.py), so the lesson pipeline serves them
+# directly instead of rendering. The v1 render-on-demand route above is
+# untouched, including its progress keys and tests.
+
+ACCELERATED_MOTION_5MIN_ID = "constant_acceleration_5min"
+ACCELERATED_MOTION_5MIN_VERSION = "physlab-ent-constant-acceleration-5min-v2"
+ACCELERATED_MOTION_5MIN_JSON = (
+    Path(__file__).resolve().parents[2] / "content" / "ent"
+    / "constant_acceleration_5min.json"
+)
+
+class PrebuiltLessonContentError(ValueError):
+    """The explicit packaged lesson cannot be loaded without inventing content."""
+
+    def __init__(self, message: str, code: str = "invalid_manifest") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _load_5min_content() -> dict:
+    """Read and validate the current package; never reuse an old mutable payload."""
+    try:
+        payload = json.loads(ACCELERATED_MOTION_5MIN_JSON.read_text(encoding="utf-8"))
+        _validate_5min_content(payload)
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        code = "missing_manifest" if isinstance(exc, FileNotFoundError) else "unreadable_manifest" if isinstance(exc, OSError) else "invalid_manifest"
+        raise PrebuiltLessonContentError(f"Prebuilt lesson package unavailable: {type(exc).__name__}", code) from exc
+    return payload
+
+
+def _validate_5min_content(payload: dict) -> None:
+    if not isinstance(payload, dict) or payload.get("route_id") != ACCELERATED_MOTION_5MIN_ID:
+        raise ValueError("Invalid package identity")
+    if payload.get("version") != ACCELERATED_MOTION_5MIN_VERSION:
+        raise ValueError("Unsupported package version")
+    duration = payload["duration_seconds"]
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Invalid package duration")
+    offsets = payload["chapter_offsets"]
+    if not isinstance(offsets, list) or not offsets or offsets[0] != 0:
+        raise ValueError("Invalid chapter offsets")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value >= duration for value in offsets):
+        raise ValueError("Invalid chapter offset")
+    if any(a >= b for a, b in zip(offsets, offsets[1:])):
+        raise ValueError("Chapter offsets must increase")
+    reference_ids = None
+    reference_keys = None
+    for language in ("kk", "ru", "en"):
+        meta = payload["meta"][language]
+        for key in ("title", "topic", "misconception"):
+            if not isinstance(meta[key], str):
+                raise ValueError("Invalid lesson metadata")
+        if not meta["title"].strip() or not meta["topic"].strip():
+            raise ValueError("Missing lesson title/topic")
+        for key in ("prerequisites", "objectives"):
+            if not isinstance(meta[key], list) or any(not isinstance(value, str) for value in meta[key]):
+                raise ValueError("Invalid lesson metadata list")
+        chapters = payload["chapters"][language]
+        if not isinstance(chapters, list) or len(chapters) != len(offsets):
+            raise ValueError("Chapter and offset counts differ")
+        ids = []
+        for chapter in chapters:
+            for key in ("id", "title", "goal", "narration"):
+                if not isinstance(chapter[key], str) or not chapter[key].strip():
+                    raise ValueError("Invalid chapter content")
+            ids.append(chapter["id"])
+            if chapter.get("kind", "scene") not in {"scene", "equation_card", "recap"}:
+                raise ValueError("Unsupported prebuilt chapter kind")
+            for key in ("beats", "key_equations", "citations", "key_symbols"):
+                if not isinstance(chapter[key], list) or any(not isinstance(value, str) for value in chapter[key]):
+                    raise ValueError("Invalid chapter list")
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate chapter IDs")
+        if reference_ids is not None and ids != reference_ids:
+            raise ValueError("Chapter order differs across languages")
+        reference_ids = ids
+        questions = payload["questions"][language]
+        if not isinstance(questions, list) or not questions:
+            raise ValueError("Missing practice questions")
+        answer_keys = []
+        for question in questions:
+            if any(not isinstance(question[key], str) or not question[key].strip() for key in ("q", "answer", "why")):
+                raise ValueError("Invalid question content")
+            choices = question["choices"]
+            if not isinstance(choices, list) or any(not isinstance(value, str) for value in choices) or question["answer"] not in choices or len(choices) != len(set(choices)):
+                raise ValueError("Invalid question key/options")
+            answer_keys.append(choices.index(question["answer"]))
+        if reference_keys is not None and answer_keys != reference_keys:
+            raise ValueError("Question count/keys differ across languages")
+        reference_keys = answer_keys
+        for kind in ("video", "srt", "pdf"):
+            entry = payload["media"][language][kind]
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) or not entry["path"].strip():
+                raise ValueError("Invalid media entry")
+    review = payload.get("review_status", {})
+    if not isinstance(review, dict):
+        raise ValueError("Invalid review metadata")
+
+
+def _5min_content_hash(content: dict) -> str:
+    return hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def accelerated_motion_5min_plan(language: str = "ru") -> LessonPlan:
+    """Return the v2 5-minute lesson plan in the requested language."""
+    lang = normalize_language(language, "ru")
+    content = _load_5min_content()
+    meta = content["meta"][lang]
+    chapters = [
+        LessonChapter(
+            id=chapter["id"],
+            title=chapter["title"],
+            goal=chapter["goal"],
+            kind=chapter.get("kind", "scene"),
+            beats=list(chapter["beats"]),
+            narration=chapter["narration"],
+            key_equations=list(chapter["key_equations"]),
+            citations=list(chapter["citations"]),
+            key_symbols=list(chapter["key_symbols"]),
+        )
+        for chapter in content["chapters"][lang]
+    ]
+    plan = LessonPlan(
+        title=meta["title"],
+        topic=meta["topic"],
+        audience="high_school",
+        prerequisites=list(meta["prerequisites"]),
+        objectives=list(meta["objectives"]),
+        misconception=meta["misconception"],
+        chapters=chapters,
+        questions=[
+            LessonQuestion(
+                q=item["q"],
+                answer=item["answer"],
+                why=item["why"],
+                choices=list(item["choices"]),
+            )
+            for item in content["questions"][lang]
+        ],
+        model_name=content["version"],
+        language=lang,
+    )
+    plan.prebuilt_content_hash = _5min_content_hash(content)
+    return plan
+
+
+def prebuilt_5min_media(language: str = "ru", *, expected_content_hash: str | None = None) -> dict:
+    """Resolve v2 media paths; missing files are reported, never invented."""
+    from aetherlab.core.language import normalize_language as _normalize
+
+    lang = _normalize(language, "ru")
+    content = _load_5min_content()
+    if expected_content_hash is not None and _5min_content_hash(content) != expected_content_hash:
+        raise PrebuiltLessonContentError("Prebuilt lesson content changed while loading", "content_changed")
+    base = ACCELERATED_MOTION_5MIN_JSON.parent.resolve()
+    resolved: dict = {
+        "offsets": [float(x) for x in content["chapter_offsets"]],
+        "review_status": dict(content.get("review_status", {})),
+        "missing": [],
+        "invalid": {},
+    }
+    for kind in ("video", "srt", "pdf"):
+        entry = content["media"][lang][kind]
+        resolved[kind] = ""
+        try:
+            relative = Path(entry["path"])
+            path = (base / relative).resolve()
+            if relative.is_absolute() or not path.is_relative_to(base):
+                resolved["invalid"][kind] = "outside_package"
+                continue
+            if not path.is_file() or path.stat().st_size <= 0:
+                resolved["missing"].append(kind)
+                continue
+            expected = str(entry.get("sha256", "")).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected):
+                resolved["invalid"][kind] = "missing_hash"
+                continue
+            with path.open("rb") as source:
+                actual = hashlib.file_digest(source, "sha256").hexdigest()
+            if actual != expected:
+                resolved["invalid"][kind] = "hash_mismatch"
+                continue
+            resolved[kind] = str(path)
+        except (OSError, ValueError):
+            resolved["invalid"][kind] = "file_unavailable"
+    return resolved

@@ -6,6 +6,14 @@ common across languages (see lesson_template.py); only audio offsets differ.
 Writes output/stage_k2_fragments/mux_plan.json.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 from pathlib import Path
 

@@ -1,5 +1,13 @@
 """Diagnose the Q1 key-cell crop: stats plus several tesseract configs."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import subprocess
 from pathlib import Path
 
@@ -30,5 +38,5 @@ for src, psm, lang, extra in [
 ]:
     run = subprocess.run(
         ["tesseract", str(TMP / src), "stdout", "-l", lang, "--psm", psm, *extra],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(f"{src} psm={psm} lang={lang}: {run.stdout.strip()!r} err={run.stderr.strip()[-120:]}")

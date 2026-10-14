@@ -5,6 +5,14 @@ Saves output/stage_l_preview/<Class>.mp4, params.json, frames/<Class>_t<SS>.png.
 Skips classes whose mp4 already exists (re-render by deleting the file).
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 import shutil
@@ -56,7 +64,7 @@ def extract_frames(video: Path, class_name: str) -> list[str]:
         dst = frames_dir / f"{class_name}_t{t:02d}.png"
         cmd = [ffmpeg, "-y", "-ss", str(t), "-i", str(video),
                "-frames:v", "1", str(dst)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         assert proc.returncode == 0, f"ffmpeg t={t}: {proc.stderr[-500:]}"
         assert dst.is_file() and dst.stat().st_size > 0, dst.name
         names.append(dst.name)

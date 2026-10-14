@@ -1,5 +1,13 @@
 """List kk-/ru-/en-neural voices actually offered by edge-tts right now."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 

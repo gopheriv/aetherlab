@@ -337,7 +337,7 @@ class SimulationPanel(QtWidgets.QWidget):
                     break
 
     def _build_video_player(self) -> QtWidgets.QWidget:
-        from PyQt6.QtMultimedia import QMediaPlayer
+        from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
         from PyQt6.QtMultimediaWidgets import QVideoWidget
 
         container = QtWidgets.QWidget()
@@ -468,7 +468,9 @@ class SimulationPanel(QtWidgets.QWidget):
 
         container_layout.addWidget(controls)
 
-        self._player = QMediaPlayer()
+        self._audio_output = QAudioOutput(self)
+        self._player = QMediaPlayer(self)
+        self._player.setAudioOutput(self._audio_output)
         self._player.setVideoOutput(self._video_widget)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.positionChanged.connect(self._on_position_changed)

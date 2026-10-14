@@ -6,6 +6,14 @@ For each first/key/final review PNG, prints:
 Lets a vision-less reviewer verify layout vs the Stage J scenario.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import numpy as np

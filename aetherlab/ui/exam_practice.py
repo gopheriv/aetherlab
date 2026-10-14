@@ -435,6 +435,28 @@ _STORAGE_TEXT = {
 }
 
 
+class _StudyGoalCalendar(QtWidgets.QCalendarWidget):
+    """Browse today's month for an unset date without selecting it silently."""
+
+    def __init__(self, date_edit: QtWidgets.QDateEdit) -> None:
+        super().__init__(date_edit)
+        self._date_edit = date_edit
+        self.setStyleSheet(
+            "QCalendarWidget QWidget { background:#FFFFFF; color:#18283D; }"
+            "QCalendarWidget QAbstractItemView { background:#FFFFFF; color:#18283D; "
+            "selection-background-color:#486A91; selection-color:#FFFFFF; }"
+            "QCalendarWidget QToolButton { background:#E9EFF7; color:#18283D; "
+            "border:none; padding:4px; }"
+            "QCalendarWidget QSpinBox, QCalendarWidget QMenu { background:#FFFFFF; color:#18283D; }"
+        )
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        selected = self._date_edit.date()
+        visible_date = QtCore.QDate.currentDate() if selected == self._date_edit.minimumDate() else selected
+        self.setCurrentPage(visible_date.year(), visible_date.month())
+
+
 class ExamPracticeDialog(QtWidgets.QDialog):
     """Run topic-selected practice from the 2,500-item bank or fixed mock."""
 
@@ -722,7 +744,9 @@ class ExamPracticeDialog(QtWidgets.QDialog):
         goals_grid.addWidget(make_field(self._t["target_score"], self._target_score), 0, 0)
 
         self._exam_date = QtWidgets.QDateEdit()
+        self._exam_date.setLocale(QtCore.QLocale({"kk": "kk_KZ", "ru": "ru_RU", "en": "en_US"}[self._language]))
         self._exam_date.setCalendarPopup(True)
+        self._exam_date.setCalendarWidget(_StudyGoalCalendar(self._exam_date))
         self._exam_date.setDisplayFormat(
             "MMM d, yyyy" if self._language == "en" else "dd.MM.yyyy"
         )
@@ -952,6 +976,7 @@ class ExamPracticeDialog(QtWidgets.QDialog):
             )
         except (OSError, UnicodeError):
             self._storage_status("goals_error")
+            self._topic_hint.setText(self._storage_text["goals_error"])
             return
         self._storage_status(None)
         self._update_dashboard_summary()

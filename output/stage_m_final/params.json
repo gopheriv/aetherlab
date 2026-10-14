@@ -1,0 +1,512 @@
+{
+  "ru": {
+    "BlockB0": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB0.mp4",
+      "bytes": 237907,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 20.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 164.0,
+      "job_id": "8efdc58743213944a9a96479",
+      "attempts": 1,
+      "budget_s": 20,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB0_t02.png",
+        "BlockB0_t14.png",
+        "BlockB0_t19.png"
+      ]
+    },
+    "BlockB1": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB1.mp4",
+      "bytes": 616786,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 49.96666666666667,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 161.2,
+      "job_id": "ca10132394bac05fd6ad6762",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.033,
+      "frames": [
+        "BlockB1_t02.png",
+        "BlockB1_t16.png",
+        "BlockB1_t49.png"
+      ]
+    },
+    "BlockB2": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB2.mp4",
+      "bytes": 368857,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 142.5,
+      "job_id": "d37a0ef7130f2df3d1629ab9",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB2_t02.png",
+        "BlockB2_t20.png",
+        "BlockB2_t39.png"
+      ]
+    },
+    "BlockB3": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB3.mp4",
+      "bytes": 615977,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 50.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 162.4,
+      "job_id": "863292253c232ab28e52967b",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB3_t02.png",
+        "BlockB3_t38.png",
+        "BlockB3_t49.png"
+      ]
+    },
+    "BlockB4": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB4.mp4",
+      "bytes": 398994,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 160.6,
+      "job_id": "4dc26d49501d34bd6438d23f",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB4_t02.png",
+        "BlockB4_t21.png",
+        "BlockB4_t39.png"
+      ]
+    },
+    "BlockB5": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB5.mp4",
+      "bytes": 425751,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 150.1,
+      "job_id": "391853f228ecd9a98bc8138e",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB5_t02.png",
+        "BlockB5_t12.png",
+        "BlockB5_t29.png"
+      ]
+    },
+    "BlockB6": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB6.mp4",
+      "bytes": 344945,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 119.3,
+      "job_id": "9a899637619fd3231d7a12a2",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB6_t02.png",
+        "BlockB6_t16.png",
+        "BlockB6_t29.png"
+      ]
+    },
+    "BlockB7": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\ru\\BlockB7.mp4",
+      "bytes": 548144,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 162.7,
+      "job_id": "710a2d1b2c6349080f1a3c4e",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB7_t02.png",
+        "BlockB7_t20.png",
+        "BlockB7_t39.png"
+      ]
+    }
+  },
+  "kk": {
+    "BlockB0": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB0.mp4",
+      "bytes": 228365,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 20.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 139.7,
+      "job_id": "5cb199a0902d80c82f5d9776",
+      "attempts": 1,
+      "budget_s": 20,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB0_t02.png",
+        "BlockB0_t14.png",
+        "BlockB0_t19.png"
+      ]
+    },
+    "BlockB1": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB1.mp4",
+      "bytes": 604982,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 49.96666666666667,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 164.7,
+      "job_id": "5f8c2b32761ea15f58b1e6dc",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.033,
+      "frames": [
+        "BlockB1_t02.png",
+        "BlockB1_t16.png",
+        "BlockB1_t49.png"
+      ]
+    },
+    "BlockB2": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB2.mp4",
+      "bytes": 368857,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 122.6,
+      "job_id": "d57c5da6964acc569542b17d",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB2_t02.png",
+        "BlockB2_t20.png",
+        "BlockB2_t39.png"
+      ]
+    },
+    "BlockB3": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB3.mp4",
+      "bytes": 592165,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 50.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 139.4,
+      "job_id": "b70a13b9ff950104192b3cc6",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB3_t02.png",
+        "BlockB3_t38.png",
+        "BlockB3_t49.png"
+      ]
+    },
+    "BlockB4": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB4.mp4",
+      "bytes": 399273,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 118.0,
+      "job_id": "622eead5216555ebfb7cf530",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB4_t02.png",
+        "BlockB4_t21.png",
+        "BlockB4_t39.png"
+      ]
+    },
+    "BlockB5": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB5.mp4",
+      "bytes": 424039,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 161.9,
+      "job_id": "44a3ab2df63e04e1bbf456de",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB5_t02.png",
+        "BlockB5_t12.png",
+        "BlockB5_t29.png"
+      ]
+    },
+    "BlockB6": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB6.mp4",
+      "bytes": 326726,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 149.6,
+      "job_id": "49cb06e96fd7083c993289a7",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB6_t02.png",
+        "BlockB6_t16.png",
+        "BlockB6_t29.png"
+      ]
+    },
+    "BlockB7": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\kk\\BlockB7.mp4",
+      "bytes": 549116,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 129.3,
+      "job_id": "04fd437b34ea14fe8cfa98de",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB7_t02.png",
+        "BlockB7_t20.png",
+        "BlockB7_t39.png"
+      ]
+    }
+  },
+  "en": {
+    "BlockB0": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB0.mp4",
+      "bytes": 221087,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 20.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 170.6,
+      "job_id": "ce08eb2a4a66a7cd1d2a05c6",
+      "attempts": 1,
+      "budget_s": 20,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB0_t02.png",
+        "BlockB0_t14.png",
+        "BlockB0_t19.png"
+      ]
+    },
+    "BlockB1": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB1.mp4",
+      "bytes": 572382,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 49.96666666666667,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 173.2,
+      "job_id": "b0c6b5504bc8b404e4eb5302",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.033,
+      "frames": [
+        "BlockB1_t02.png",
+        "BlockB1_t16.png",
+        "BlockB1_t49.png"
+      ]
+    },
+    "BlockB2": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB2.mp4",
+      "bytes": 365894,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 151.6,
+      "job_id": "5ce9968b3c28d99ba8dd1e26",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB2_t02.png",
+        "BlockB2_t20.png",
+        "BlockB2_t39.png"
+      ]
+    },
+    "BlockB3": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB3.mp4",
+      "bytes": 597305,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 50.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 128.9,
+      "job_id": "a192bbce8a13d7dd6f3e224b",
+      "attempts": 1,
+      "budget_s": 50,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB3_t02.png",
+        "BlockB3_t38.png",
+        "BlockB3_t49.png"
+      ]
+    },
+    "BlockB4": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB4.mp4",
+      "bytes": 395980,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 162.9,
+      "job_id": "e706cc043b92aaf1ddc3cdac",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB4_t02.png",
+        "BlockB4_t21.png",
+        "BlockB4_t39.png"
+      ]
+    },
+    "BlockB5": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB5.mp4",
+      "bytes": 416119,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 160.3,
+      "job_id": "633be50edbd393fc4f0b01fb",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB5_t02.png",
+        "BlockB5_t12.png",
+        "BlockB5_t29.png"
+      ]
+    },
+    "BlockB6": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB6.mp4",
+      "bytes": 303087,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 30.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 150.4,
+      "job_id": "6cfaec31af932104dde3041b",
+      "attempts": 1,
+      "budget_s": 30,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB6_t02.png",
+        "BlockB6_t16.png",
+        "BlockB6_t29.png"
+      ]
+    },
+    "BlockB7": {
+      "path": "C:\\Users\\sunak\\Projects\\aetherlab\\output\\stage_m_final\\en\\BlockB7.mp4",
+      "bytes": 529015,
+      "video_streams": 1,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration_s": 40.0,
+      "codec": "h264",
+      "status": "rendered",
+      "wall_s": 162.5,
+      "job_id": "fba6e8245b631abf9d847b83",
+      "attempts": 1,
+      "budget_s": 40,
+      "drift_s": 0.0,
+      "frames": [
+        "BlockB7_t02.png",
+        "BlockB7_t20.png",
+        "BlockB7_t39.png"
+      ]
+    }
+  }
+}

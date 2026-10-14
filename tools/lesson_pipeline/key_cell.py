@@ -1,5 +1,13 @@
 """Locate the Q1 answer-key cell on Testcenter-3 p.37 via hOCR and OCR it standalone."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import re
 import shutil
 import subprocess
@@ -47,5 +55,5 @@ for name, cx in col_centers.items():
     run = subprocess.run(
         ["tesseract", str(path), "stdout", "-l", "kaz",
          "--psm", "10", "-c", "tessedit_char_whitelist=АВСДЕABCDE"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     print(name, "key letter:", repr(run.stdout.strip()))

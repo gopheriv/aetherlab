@@ -87,3 +87,37 @@ This first pass is intentionally small and durable:
   recall plus transfer performance still need to be measured with learners.
 
 It gives future course mode work a stable local progress model to build on.
+
+## Prepared lessons and storage recovery (October 2026)
+
+The prepared five-minute lesson opens without spending AI allowance or indexing
+textbooks. Its header language selects the matching packaged text/media. While
+loading, the latest language choice wins; cancelled loads do not start queued
+replacements or discard a previous valid lesson. Both Qt players own an audio
+output; actual sound/perception still requires a playback/listening check.
+
+Course storage remains bound to the active learner after general settings are
+saved. Profile changes rebuild owned quiz cards/gates, keep old selections out
+of the new learner's view and ignore retired-card signals. Cancel keeps current
+state. Pending grades return only with their original profile/content.
+
+V2 uses one progress identity across three languages. Existing confirmed language
+aliases are projected without rewriting during reads. The next successful
+mutation retains complete legacy snapshots and combines histories. Exact old
+imports do not count twice; changed previously migrated aliases require review
+instead of guessing an overlap. V1 and unrelated records keep their identities.
+
+New generic Unicode topics use identities derived from their complete normalized
+names. Earlier ASCII-stripped totals may mix different topics and cannot safely
+be attributed. Such records are retained with explicit uncertainty and excluded
+from current review/evaluation evidence. Fresh checks establish verified progress.
+
+File IO refusal is not an empty store and must not overwrite history. A graded
+answer keeps its response time, choice and confidence for explicit save retry.
+Operation IDs make retry idempotent when a write may have succeeded before its
+acknowledgment failed. Closing unconfirmed drafts defaults to staying; discard
+is explicit. These drafts are held in memory. Forced termination/crash before a
+successful write does not have a persistent outbox recovery guarantee.
+
+Review callbacks report unavailable storage, use selected MCQ control language,
+and distinguish saved responses from cancellation without a new response.

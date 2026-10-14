@@ -93,15 +93,19 @@ def app_config_path() -> Path:
     return _path_from_env("AETHERLAB_DATA_DIR", _default_data_dir()) / "settings.json"
 
 
-def load_app_config() -> dict[str, str]:
+def load_app_config(*, strict_io: bool = False) -> dict[str, str]:
     """Read the config saved by the in-app Settings dialog (may not exist)."""
     path = app_config_path()
-    if not path.exists():
-        return {}
     with path_lock(path):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            if strict_io:
+                raise
+            return {}
+        except (UnicodeError, json.JSONDecodeError):
             return {}
     if not isinstance(payload, dict):
         return {}
@@ -116,7 +120,9 @@ def save_app_config(values: dict[str, str | None]) -> Path:
     """Persist Settings-dialog values. Empty/None values are dropped."""
     path = app_config_path()
     with path_lock(path):
-        existing = load_app_config()
+        # A missing/corrupt document can recover; an unreadable existing file
+        # must not be mistaken for an empty document during read/modify/write.
+        existing = load_app_config(strict_io=True)
         for key, value in values.items():
             if value is None or not str(value).strip():
                 existing.pop(key, None)
@@ -478,7 +484,7 @@ def load_legacy_env(path: Path | None = None) -> dict[str, str]:
         return {}
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return {}
     result: dict[str, str] = {}
     for line in lines:
@@ -563,7 +569,7 @@ def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
 
     try:
         payload = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
 
     model_name = str(_nested_get(payload, ["model", "name"]) or "")

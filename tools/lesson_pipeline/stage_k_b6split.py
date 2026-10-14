@@ -5,6 +5,14 @@ so the two parts are synthesized separately and the mux gap is computed from
 measured durations. Appends b6_split to timing.json.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import asyncio
 import json
 import re

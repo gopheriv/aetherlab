@@ -10,6 +10,14 @@
    after -i at the key-frame times; differing hashes = mistimed review frames.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import hashlib
 import subprocess
 import sys
@@ -116,10 +124,10 @@ def seek_check(name: str) -> str:
     p1, p2 = tmp / f"{name}_fast.png", tmp / f"{name}_acc.png"
     r1 = subprocess.run([ffmpeg, "-y", "-ss", str(t), "-i", video,
                          "-frames:v", "1", str(p1)],
-                        capture_output=True, text=True, timeout=120)
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     r2 = subprocess.run([ffmpeg, "-y", "-i", video, "-ss", str(t),
                          "-frames:v", "1", str(p2)],
-                        capture_output=True, text=True, timeout=180)
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
     assert r1.returncode == 0 and r2.returncode == 0, (r1.stderr[-300:], r2.stderr[-300:])
     h1 = hashlib.md5(p1.read_bytes()).hexdigest()[:12]
     h2 = hashlib.md5(p2.read_bytes()).hexdigest()[:12]

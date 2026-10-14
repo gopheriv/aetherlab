@@ -737,7 +737,7 @@ FEATURES: list[tuple[str, ...]] = [
      "tools/tracker_integrity_audit.py / build_feature_tracker.py / feature_test_results.json / ERRORS_FOUND.md", "headless", "Documented", ""),
     ("F166", "Export", "Lesson share bundle export",
      "As a student or teacher, I export a completed lesson as one portable package I can hand off or open offline.",
-     "services/share_export.export_lesson_bundle writes a ZIP containing index.html, metadata.json, README.txt, study_guide.tex, media/lesson.mp4, subtitles as SRT plus browser-friendly VTT when available, and per-chapter Manim source files. The metadata is share-safe (relative asset names, no API keys, no app config, no absolute local paths). LessonView exposes an Export bundle button, wired through MainWindow to a ZIP save dialog with status feedback.",
+     "export_lesson_bundle atomically writes portable HTML, metadata, README, study_guide.tex, MP4 and scene sources. Existing optional PDF/SRT/VTT are included; unavailable optional assets have null references. Metadata, page controls, README, school audience and subtitle language follow kk/ru/en. Explicit prebuilt chapter indexes preserve all measured seek offsets. Asset names stay relative without keys, configuration or private paths. LessonView exposes Export bundle through MainWindow's background task and ZIP picker.",
      "services/share_export.py / ui/widgets.py / ui/main_window.py / docs/LESSON_SHARE_EXPORT.md", "headless", "Documented", ""),
     ("F167", "Course", "Course progress from lesson quizzes",
      "As a student, I can use the Submit answer control on lesson quizzes, answer due multiple-choice reviews before feedback, keep open-response recall self-rated, and see my progress shape review recommendations.",
@@ -985,8 +985,8 @@ FEATURES: list[tuple[str, ...]] = [
      "aetherlab/ui/exam_practice.py / aetherlab/ui/command_bar.py / aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py / tests/test_timed_practice_acceptance.py", "gui", "Documented", "Original practice items are not an official NCT variant."),
     ("F227", "ENT Progress", "Local study goals and mistake review",
      "As an ЕНТ student, I want my goals, topic progress, and missed questions to persist locally so I can plan what to review next.",
-     "Goals, bounded attempts, points and mistakes persist locally. IO errors preserve data with unavailable/stale states and retry; unknown goals/mistake actions are disabled. Nonfinite preferences/points and invalid attempt aggregates cannot crash views: invalid records are omitted from calculations, recovery is disclosed and reads preserve file bytes. Draft/result failures permit retry; answers/timer freeze until a confirmed commit. Completed history omits selected answers.",
-     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / aetherlab/ui/progress_notice.py / test_features.py / tests/test_ent_practice_mvp.py / tests/test_progress_storage_recovery.py / tests/test_progress_read_views.py / tests/test_practice_result_consistency.py", "gui", "Documented", ""),
+     "Goals, attempts, points and mistakes persist locally. IO errors preserve data/drafts with unavailable/stale states and retry; unknown controls are disabled. Failed resave replaces old success in both notices. Weekly suffix and calendar follow kk/ru/en. Blank date opens today's month without assignment; saved dates open their month. Calendar uses readable light colors. Invalid numeric records are omitted with a recovery notice; reads preserve bytes. Result retry freezes answers/timer until commit. Completed history omits selected answers.",
+     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / aetherlab/ui/progress_notice.py / test_features.py / tests/test_ent_practice_mvp.py / tests/test_progress_storage_recovery.py / tests/test_progress_read_views.py / tests/test_practice_result_consistency.py / tests/test_profile_goal_acceptance.py", "gui", "Documented", ""),
     ("F228", "Export", "Searchable localized ЕНТ practice PDF",
      "As a student, I want to save a readable report of my practice answers, explanations, and progress in my chosen language.",
      "The Kazakh/Russian/English A4 study report keeps searchable prose, answers, complete study key, terms, progress and NCT links. Scored count/denominator match screen/history: unattempted practice is excluded, timed items count. Shared LaTeX steps are equation images; formula questions/sources have explicit pages. Fonts register per Qt instance. QPdfWriter exports without system-printer discovery. A fresh staged PDF is parsed/text-checked before atomic replacement; failures preserve old reports. Items are authored, not official variants.",
@@ -1023,8 +1023,8 @@ FEATURES.extend([
      "aetherlab/services/student_profiles.py / aetherlab/ui/main_window.py / aetherlab/ui/profile_dialog.py / aetherlab/core/atomic_json.py / tests/test_student_profiles.py / tests/test_atomic_json.py / tests/test_profile_read_recovery.py", "gui", "Documented", ""),
     ("F235", "Profiles", "Edit learner identity and avatar",
      "As a student, I want to save my name, username, class, school code and picture in my local profile.",
-     "StudentProfileDialog edits identity/photo in Kazakh, Russian and English. 40-character name fields reload safely; rejected commits preserve old photos and editable drafts. Read failures retain choices/drafts, disable unconfirmed selection actions and offer Retry. Saved-but-not-reloaded is distinct from a failed save. Cancel preserves saved data; image failures have localized errors. Displayed email is a local label.",
-     "aetherlab/ui/profile_dialog.py / aetherlab/ui/profile_avatar.py / aetherlab/services/student_profiles.py / tests/test_student_profiles.py / tests/test_profile_editing.py / tests/test_profile_read_recovery.py", "gui", "Documented", "File-picker return paths are injected in offscreen checks; native dialog, layout and keyboard acceptance remain open."),
+     "StudentProfileDialog edits identity/photo in Kazakh, Russian and English; username labels/errors and accessible profile/photo hints follow the language while preserving the learner's name. 40-character names reload safely; rejected commits preserve old photos/drafts. Read failures retain choices/drafts, disable unconfirmed actions and offer Retry. Saved-but-not-reloaded differs from failed save. Cancel preserves data; photo errors are localized. Email is a local label.",
+     "aetherlab/ui/profile_dialog.py / aetherlab/ui/profile_avatar.py / aetherlab/services/student_profiles.py / tests/test_student_profiles.py / tests/test_profile_editing.py / tests/test_profile_read_recovery.py / tests/test_profile_goal_acceptance.py", "gui", "Documented", "Native fixture photo selection/cancel and identity creation covered; remaining layouts, keyboard/accessibility and physical registry errors require acceptance."),
     ("F236", "AI Help", "Ten AI help attempts per learner per day",
      "As a student, I want a visible daily help allowance and access to ordinary practice even after using my AI quota.",
      "consume_ai_help atomically counts ten daily attempts per local profile/date. IO failure preserves the counter and launches no request. CommandBar shows confirmed counts or an unknown —/10 badge in Kazakh, Russian and English; unknown/exhausted states disable only AI actions. Practice remains available. Refresh restores confirmed usage and clears the stale file-error message. This is a local allowance, not server enforcement.",
@@ -1072,7 +1072,7 @@ FEATURES.extend([
     ("F247", "Localization", "Settings and shared shell follow the selected language",
      "As a student, I want the settings, empty screens, library and simulation controls to use my language without losing entered values.",
      "Settings, shared empty state, library/history and simulation/lesson controls retranslate into Kazakh, Russian and English. Switching language preserves the current profile, entered prompt, render quality and lesson settings.",
-     "aetherlab/ui/main_window.py / aetherlab/ui/shared_widgets.py / aetherlab/ui/simulation_panel.py / aetherlab/ui/lesson_view.py / aetherlab/ui/library_panel.py / tests/test_localized_ui_regressions.py", "gui", "Documented", ""),
+     "aetherlab/core/lesson_messages.py / aetherlab/ui/main_window.py / aetherlab/ui/shared_widgets.py / aetherlab/ui/simulation_panel.py / aetherlab/ui/lesson_view.py / aetherlab/ui/library_panel.py / tests/test_localized_ui_regressions.py", "gui", "Documented", ""),
     ("F248", "Settings", "Restore saved render quality at startup",
      "As a user, I want the saved render quality to be restored in the command bar when I start PhysLab.",
      "MainWindow synchronizes the command quality with saved default_quality on startup; absent or invalid quality falls back to Standard. This covers persistence and UI synchronization, not a live cloud render.",
@@ -1085,6 +1085,14 @@ FEATURES.extend([
      "As a beginner, I want to practice comprehension, calculations and graph reading after the acceleration example.",
      "The fixed acceleration route serves its anchor and follow-up practice in a stable order with unique options and recomputed answers. The content retains source and pending-review distinctions rather than declaring teacher approval from software tests.",
      "aetherlab/services/ent_lesson_catalog.py / tests/test_lesson_practice_h.py", "headless", "Documented", ""),
+    ("F251", "ENT Lesson", "Prebuilt five-minute acceleration lesson",
+     "As a beginner, I want the prepared acceleration lesson to load in my language without another AI or render request.",
+     "The v2 route reads a fresh validated manifest in kk/ru/en. Chapter order, question counts/keys and timing must agree. A serialized content fingerprint keeps plan/media on one version; media paths/hashes are verified. Missing/corrupt content yields localized package_error without AI or course writes; restoring it permits retry. Unverified media retain the plan with an error. ZIP seeks and separate v1 progress remain. Technical file checks do not establish native playback, listening, cloud origin or teacher review.",
+     "aetherlab/services/ent_lesson_catalog.py / aetherlab/services/lesson_pipeline.py / aetherlab/ui/main_window.py / aetherlab/ui/student_views.py / content/ent/constant_acceleration_5min.json / tests/test_ent_lesson_5min.py", "gui", "Documented", "Source and media packaging, full native playback, missing-content recovery and pedagogical review remain open."),
+    ("F252", "ENT Lesson", "Attached lesson PDF and review status",
+     "As a student, I want to open the current lesson's PDF and see whether its content still needs review.",
+     "LessonView shows the PDF action only for an attached existing file and a localized pending-review badge from the bundle. The action and accessible name follow Kazakh, Russian and English. MainWindow sends the current file to the system viewer, reports refusal or a missing file, and reports dispatch only when accepted. Share export includes an available PDF with subtitles. Native viewer rendering and truthful review provenance require separate acceptance.",
+     "aetherlab/ui/lesson_view.py / aetherlab/ui/main_window.py / aetherlab/services/share_export.py / tests/test_ent_lesson_5min.py / tests/test_lesson_pdf_open.py", "gui", "Documented", "Automated opener checks inject a return value and do not establish that a native PDF viewer displayed the document."),
 ])
 
 BASE_HEADERS = [
@@ -2569,7 +2577,7 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F166": _story_tuple(
         "US-F166: As P5 Returning user, when I export a lesson bundle, I expect a portable ZIP with relative HTML/player media, subtitles, study guide, metadata, and scene source but no secrets or private absolute paths. Preconditions: assembled lesson exists. Steps: 1. Export bundle. 2. Move ZIP/extract folder. 3. Open HTML and inspect metadata.",
         "P5",
-        "`export_lesson_bundle()` atomically writes index.html, metadata.json, README, study_guide.tex, media lesson MP4/SRT/VTT, and chapter scene files using share-safe relative asset names; LessonView/MainWindow wire Export bundle to a save dialog and a non-blocking Exporting lesson bundle `BackgroundTask`. Implementation reference: aetherlab/services/share_export.py / aetherlab/ui/widgets.py / aetherlab/ui/main_window.py.",
+        "`export_lesson_bundle()` atomically writes relative HTML, metadata, README, TeX, MP4 and scene files. Optional PDF/SRT/VTT references match included files. Metadata/page/track language follows kk/ru/en; prebuilt chapter buttons retain measured offsets. MainWindow uses a ZIP picker and non-blocking export task. No keys, configuration or private absolute paths are included.",
         "Missing assembled video or asset failures produce status/errors without writing a misleading share bundle.",
         "harness",
         "FAIL",
@@ -3004,6 +3012,50 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
 # symptoms and fixes live in ERRORS_FOUND.md; this map keeps each logged issue
 # attached to the canonical user story that exercises its behavior.
 ERROR_FEATURE_LINKS: dict[str, tuple[str, str]] = {
+    "BUG-192": ("F215", "parametrized catalog checks shared one monkeypatch lifetime and leaked synthetic manifest state across cases; each explicit case now has its own patch context, covered by a real adapter regression"),
+    "BUG-188": ("F251", "missing/unreadable/corrupt explicit package raised out of lesson resolution; localized package_error now clears stale video, preserves course progress and retries without AI generation"),
+    "BUG-189": ("F251", "global mutable manifest cache hid disk/path changes and leaked caller edits; each request now reads a fresh validated payload and never serves stale cached content after read failure"),
+    "BUG-190": ("F251", "plan and media could use different package versions; serialized content fingerprint refuses changed/missing snapshots and a fresh lesson reload recovers"),
+    "BUG-191": ("F251", "manifest accepted unsupported version/kind, invalid duration/offsets, mismatched chapters/questions and divergent language keys; the fixed prebuilt contract now validates these without claiming physics or teacher approval"),
+    "BUG-195": ("F236", "opening the no-AI prebuilt lesson consumed/required the daily AI allowance and indexed references; explicit prepared routes now bypass both and remain accessible at zero/unknown quota"),
+    "BUG-196": ("F234", "changing student profiles retained the previous learner's locked/revealed lesson answer; fresh owned cards reset answers/gates and ignore retired-card signals while preserving each profile's history"),
+    "BUG-197": ("F251", "header language changed controls but not prepared content/media; the worker loads the selected version, latest choice wins during loading, cancellation suppresses queued reload and an empty cancellation preserves the previous lesson"),
+    "BUG-198": ("F167", "English prebuilt progress used a different identity from Kazakh/Russian; a stable v2 key safely projects old language records and preserves complete snapshots on the next successful mutation"),
+    "BUG-199": ("F167", "course read refusal looked empty and a mutation could overwrite history; IO errors now propagate, GUI review callbacks report failures, and a real Windows lock preserves bytes"),
+    "BUG-200": ("F167", "failed quiz saving locked the answer without retry; per-profile/content drafts keep the grade, retry with durable operation IDs prevents double counts after uncertain acknowledgment, and close requires explicit discard"),
+    "BUG-201": ("F234", "saving ordinary settings rebound another learner's course history to the default profile file; the store now retains the active learner's path"),
+    "BUG-202": ("F251", "inline lesson QMediaPlayer had no audio destination despite voiced MP4s; an owned QAudioOutput now routes audio and honors the narration preference"),
+    "BUG-203": ("F61", "scene QMediaPlayer likewise had no audio output; an owned unmuted QAudioOutput now routes the rendered stream"),
+    "BUG-204": ("F167", "ASCII stripping merged distinct Unicode topics, including common English boilerplate around translated topic names; new Unicode identities separate them and old ambiguous totals are retained with an explicit uncertainty notice"),
+    "BUG-205": ("F167", "cancelling a due review still reported Review saved; the outcome now counts only successful review records and distinguishes no new responses"),
+    "BUG-206": ("F251", "native dashboard/catalog Learn wrapped the explicit prepared ID in a generation prompt and selected v1 with no video; both button signals now resolve directly to the eight-chapter v2 package without AI quota use"),
+    "BUG-207": ("F251", "native lesson success/status remained English and audience exposed high school in kk/ru; ready prose and supported audience labels now follow the content language without internal assembled status"),
+    "BUG-208": ("F251", "a rendering/text-only bundle with no video was announced as a successfully completed lesson; it now reports text availability and pending video separately"),
+    "BUG-209": ("F215", "catalog fixture paths embedded long function names and plain checks reused their previous files; compact per-invocation UUID/index paths avoid the observed Windows path failures and isolate repeated calls"),
+    "BUG-210": ("F167", "course summary overwrote empty-history and missed-concept feedback with Ready for; mutually exclusive feedback states now distinguish no attempts, review and a next step"),
+    "BUG-211": ("F167", "a correct low-confidence answer incremented lesson correctness but not question correctness; scoring is now independent of scheduling confidence, with repair only from complete quiz event history"),
+    "BUG-212": ("F247", "lesson progress, cancellation, save notices and open-recall controls remained English; shared locale copy now covers producers and callbacks while retaining source text and data"),
+    "BUG-213": ("F167", "a removed review target returned zero without a write but was counted as saved; the controller now checks the positive save interval and reports a changed question"),
+    "BUG-214": ("F150", "partial cancelled reload rebuilt answer cards but did not restore their pending save, allowing the visible choice to differ from the retained original grade; matching drafts now restore on this path"),
+    "BUG-215": ("F167", "correct objective spaced review left the concept permanently listed as missed; latest timestamped objective evidence now informs recommendations without changing historical quiz totals or treating self-rating as correctness"),
+    "BUG-216": ("F247", "changing the header language reset generic lesson score to the empty-state sentence; the controller now reloads the existing score in the UI language without regeneration or history writes"),
+    "BUG-217": ("F215", "a historical PASS was still stamped FIXED despite an explicit blocked/incomplete current retest; pending verification now keeps PARTIAL, actual FAIL wins, and the strict gate rejects unfinished retests"),
+    "BUG-218": ("F251", "changing the prepared lesson language unlocked an already graded choice and permitted duplicate grading; the same content snapshot now retains the selected option, confidence, feedback and lock without another write"),
+    "BUG-219": ("F164", "the new shared lesson locale dictionary had no declared tracker source and failed surface coverage; F247 now explicitly identifies lesson_messages with Kazakh, Russian and English scope"),
+    "BUG-193": ("F133", "new lesson scripts omitted UTF-8 pipe decoding and console policy; shared direct/module bootstrap and explicit encoding/errors preserve Kazakh diagnostics"),
+    "BUG-194": ("F166", "Russian/Kazakh portable lesson controls and README stayed English and exposed high_school; localized labels, instructions and school audience now follow the lesson language"),
+    "BUG-184": ("F166", "ZIP metadata advertised missing/empty optional PDF and subtitle assets; asset references now reflect files actually included"),
+    "BUG-185": ("F251", "prebuilt lesson omitted rendered chapter indexes so exported chapter offsets were null and all HTML seek buttons disabled; explicit plan indexes retain measured seeks"),
+    "BUG-186": ("F166", "portable lesson HTML and subtitle track were always marked English; metadata, HTML lang and subtitle language label now match kk/ru/en"),
+    "BUG-187": ("F251", "prebuilt media was served on file existence alone, ignoring recorded hashes and package boundaries; streamed SHA256 and scoped paths reject replaced/unverified/unreadable files with visible error state"),
+    "BUG-182": ("F252", "attached PDF action claimed opened even when QDesktopServices refused dispatch; failure and accepted dispatch now have distinct statuses"),
+    "BUG-183": ("F252", "new PDF status messages and accessible name stayed English in kk/ru; localized messages and action identity now follow the UI language"),
+    "BUG-176": ("F235", "Kazakh username and profile accessibility hints stayed English; localized labels now preserve learner identity and photo names"),
+    "BUG-177": ("F227", "weekly goal suffix stayed Kazakh in Russian/English; rebuilding now uses the selected language and preserves drafts"),
+    "BUG-178": ("F227", "an unset optional exam date opened January 2000; the calendar now browses today's month without assigning a date"),
+    "BUG-179": ("F227", "native calendar dates were unreadable in inherited dark styling; scoped light colors make dates and selection readable"),
+    "BUG-180": ("F227", "failed goal resave retained the old saved footer beneath the error; both locations now state the save failure while preserving the draft"),
+    "BUG-181": ("F227", "calendar months/weekdays used the operating-system language instead of the lesson language; explicit kk/ru/en locale follows language rebuilds"),
     "BUG-173": ("F233", "mock solutions were empty and completed practice/mock review omitted typeset math; all 40 mock items now have shared equations rendered in review and PDF with per-attempt image resources"),
     "BUG-174": ("F226", "Qt stock Yes/No labels remained English in Kazakh/Russian exam prompts; explicit localized Resume, Start again, Cancel, Finish and Continue labels retain safe defaults"),
     "BUG-175": ("F238", "closing or escaping Resume could act as No and discard saved answers; Cancel now preserves exact saved bytes, and incompatible-bank resume diagnoses rather than replacing the attempt"),
@@ -3115,6 +3167,24 @@ for _bug_id, (_feature_id, _evidence) in ERROR_FEATURE_LINKS.items():
         _append_bug_ids(_errors, _bug_id),
         _phase4,
     )
+
+
+STORY_OVERRIDES.update({
+    "F251": _story_tuple(
+        "US-F251: As P1 Student, I want the prepared five-minute acceleration lesson without another generation request. Preconditions: v2 content/media exist. Steps: 1. Click Kinematics Learn on home and in Topics with fresh/exhausted AI allowance. 2. Choose kk/ru/en. 3. Load eight chapters and matching video/PDF. 4. Play start/middle/end and seek chapters. 5. Answer five quizzes. 6. Restart and check v2 progress separately from v1. 7. Repeat with missing media and incomplete-video status.",
+        "P1",
+        "The fresh validated manifest supplies aligned chapters/questions/timing across languages. Serialized plan content hash must match the media manifest; file paths/hashes are checked. Corrupt/unreadable content returns localized package_error without AI or course writes; recovery permits retry. Media refusal retains the plan. ZIP seeks and separate v1 progress are preserved; teacher review remains pending.",
+        "A missing artifact must not become an assembled bundle or leave the previous lesson's video visible. Missing/corrupt content, packaged resources, actual playback and recovery remain separate acceptance cases.",
+        "scripted-ui",
+    ),
+    "F252": _story_tuple(
+        "US-F252: As P1 Student, I want the current lesson's PDF and its review status. Preconditions: a lesson bundle is loaded. Steps: 1. Inspect PDF and review controls in kk/ru/en. 2. Open the current PDF. 3. Repeat after deleting its test fixture or refusing system dispatch. 4. Switch to another lesson. 5. Export the bundle and inspect the available PDF and subtitles.",
+        "P1",
+        "The attached PDF button follows the lesson language in its text and accessible name. MainWindow dispatches the current file through QDesktopServices and reports accepted dispatch, refusal or missing attachment distinctly. A pending-review badge retains actual bundle review state; ZIP includes an available PDF and subtitles. Implementation reference: aetherlab/ui/main_window.py:2240 / aetherlab/ui/lesson_view.py:595.",
+        "A missing PDF launches no opener; a refused dispatch cannot claim that a viewer opened. Real viewer display, inaccessible files, stale lesson switches, review provenance and ZIP metadata need acceptance beyond the injected opener check.",
+        "scripted-ui",
+    ),
+})
 
 
 def _story_fields(row: tuple[str, ...]) -> tuple[str, ...]:
@@ -3413,9 +3483,29 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
                 set_phase4(fid, "FAIL")
             except KeyError:
                 pass
+        elif (res.get("status") == "PASS"
+              and res.get("phase4_status") in {"BLOCKED", "PENDING", "PARTIAL", "DEFERRED"}):
+            # A historical passing result does not certify an edited version.
+            # Keep the real result and its date; expose the unfinished retest.
+            try:
+                pending_info = res.get("pending_validation")
+                reason = pending_info.get("reason") if isinstance(pending_info, dict) else None
+                set_status(fid, "PARTIAL", ("Verification incomplete: " + str(reason or res["phase4_status"]))[:280])
+            except KeyError:
+                pass
     # A harness pass proves only what that check exercises. Keep end-to-end
     # user behaviour separate from software checks and historical phase stamps.
     for index, row in enumerate(FEATURES):
+        revised = {
+            "F61": "SimulationPanel owns QMediaPlayer, QVideoWidget and an unmuted QAudioOutput. Seek, frame step, playback speed and time feedback remain available; missing files fall back to code. Audio routing is verified separately from actual sound quality.",
+            "F167": "CourseProgressStore keeps quizzes and spaced reviews in the active profile. A card grades once; IO or acknowledgment failure preserves its response/time/confidence and offers localized save retry. Durable operation IDs prevent duplicate attempts; closing unconfirmed drafts defaults to staying, with explicit discard. V2 progress has one identity across kk/ru/en, read-only legacy projection and complete snapshots on successful mutation. Unicode generic topics remain distinct; ambiguous old totals are retained without invented attribution. Due reviews distinguish objective MCQ from self-rating and report cancellation without claiming a write. Settings > Learning stores review_intervals_days: presets 1,3,7,14 / 1,2,4,8 / 1,7,14 / 1, or up to eight intervals of 1–365 days. Confidence affects scheduling. Study analysis uses recorded evidence, not collected learner outcomes.",
+            "F234": "Profiles keep practice/goals, course history and AI allowance separate. Switching learner rebuilds owned lesson cards/gates and restarts playback; cancelled/same-profile selection keeps state. Retired card signals cannot grade a replacement. Pending saves remain with their original profile/content. Saving general settings retains the active student's course path.",
+            "F236": "Ten AI attempts are reserved atomically per profile/local date. IO failure preserves the counter and blocks AI requests, with a localized unknown badge and recovery on refresh. Practice and explicit no-AI prebuilt lessons remain available at zero/unknown allowance; prepared worker loading performs no reference ingestion. AI-generating topics remain metered. This is local, not server enforcement.",
+            "F251": "Dashboard and Topics Learn send the prepared ID directly, without AI quota use or reference indexing. V2 validates kk/ru/en chapters/questions and media paths/hashes against its content fingerprint. Package failure is localized, preserves progress and permits recovery; media refusal keeps text/questions. Ready messages and audience labels follow content language; incomplete video is not announced as finished. Header language loads matching content/video/PDF; latest choice wins, cancellation suppresses queued reload and retains prior valid content. Owned audio output honors narration preference; real streams load in Qt without playback. One v2 progress identity preserves old aliases. ZIP seeks and v1 progress remain distinct. Native playback/listening, cloud origin and teacher review need separate evidence.",
+        }.get(row[0])
+        if revised:
+            row = row[:4] + (revised,) + row[5:]
+            FEATURES[index] = row
         res = passed.get(row[0], {})
         checked = str(res.get("checked_at") or "Not recorded (historical result)")
         scope = {
@@ -3423,9 +3513,20 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
             "gui": "Offscreen widget and signal checks; no native UI journey",
             "headless": "Automated service/harness checks; see result note",
         }.get(row[6], "Automated harness only")
+        pending = res.get("pending_validation")
+        pending = pending if isinstance(pending, dict) else {}
+        if (res.get("status") == "PASS"
+                and res.get("phase4_status") in {"BLOCKED", "PENDING", "PARTIAL", "DEFERRED"}):
+            scope += "; current validation: " + str(pending.get("scope") or pending.get("reason") or res["phase4_status"])
         live_evidence = res.get("live_cloud_evidence")
         if isinstance(live_evidence, dict) and live_evidence.get("confirmed"):
             scope += "; live GitHub v7: 4s 720p30 fully decoded, cache reuse and missing-output refusal"
+        media_evidence = res.get("media_file_evidence")
+        if isinstance(media_evidence, dict) and media_evidence.get("confirmed"):
+            scope += "; media files: " + str(media_evidence.get("scope", "see recorded evidence"))
+        portable_evidence = res.get("portable_browser_evidence")
+        if isinstance(portable_evidence, dict) and portable_evidence.get("confirmed"):
+            scope += "; browser: " + str(portable_evidence.get("scope", "see recorded evidence"))
         native_evidence = res.get("native_ui_evidence")
         if isinstance(native_evidence, dict) and native_evidence.get("confirmed"):
             scope = scope.replace("; no native UI journey", "")
@@ -3454,10 +3555,21 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
             remaining = "Native cloud setup and permission recovery; ambiguous remote outputs and full lesson playback"
         elif row[0] == "F249":
             remaining = "Live cloud artifact delivery, packaged decoder availability, full playback and visual/audio review"
+        elif row[0] == "F251":
+            remaining = "Native complete playback/seek/quiz/restart in all languages; missing/corrupt manifest and packaged resources, cloud origin and teacher review"
+        elif row[0] == "F166":
+            remaining = "Native ZIP picker/cancel/write refusal and extracted HTML playback/seek/subtitles/PDF in all languages; concurrent export and missing-asset recovery"
+            if isinstance(portable_evidence, dict) and portable_evidence.get("confirmed"):
+                remaining = str(portable_evidence.get("remaining") or remaining)
+        elif row[0] == "F252":
+            remaining = "Native PDF viewer success/refusal/missing/inaccessible-file recovery, lesson switches, review provenance and ZIP metadata"
         elif row[6] == "gui":
             remaining = "Native UI journey, layout, persisted state and failure paths"
         if isinstance(native_evidence, dict) and native_evidence.get("confirmed") and native_evidence.get("remaining"):
             remaining = str(native_evidence["remaining"])
+        if (res.get("status") == "PASS"
+                and res.get("phase4_status") in {"BLOCKED", "PENDING", "PARTIAL", "DEFERRED"}):
+            remaining += "; current code: " + str(pending.get("remaining") or pending.get("reason") or res["phase4_status"])
         FEATURES[index] = row[:17] + (checked, scope, behaviour, remaining)
 
 

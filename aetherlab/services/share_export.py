@@ -19,6 +19,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from aetherlab import __version__
+from aetherlab.core.language import LANGUAGE_NAMES, normalize_language
 from aetherlab.services.pdf import export_lesson_study_guide
 from aetherlab.services.scene_specification import public_scene_spec
 
@@ -40,6 +41,11 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
     video = Path(str(getattr(bundle, "video_path", "") or ""))
     if not video.is_file() or video.stat().st_size <= 0:
         raise FileNotFoundError("Lesson video is missing; build the lesson before exporting.")
+    # Prebuilt lessons (v2 5-minute) ship a typeset study-guide PDF; render
+    # path lessons only have the generated .tex source.
+    study_pdf = Path(str(getattr(bundle, "pdf_path", "") or ""))
+    if not study_pdf.is_file() or study_pdf.stat().st_size <= 0:
+        study_pdf = None
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,11 +62,12 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
         with TemporaryDirectory(prefix="aetherlab_share_") as tmp_name:
             tmp = Path(tmp_name)
             study_guide = export_lesson_study_guide(bundle.plan, tmp / "study_guide.tex")
-            metadata = _metadata(bundle)
             srt = _subtitle_path(bundle, video)
             vtt_text = _srt_to_vtt(srt.read_text(encoding="utf-8")) if srt else ""
-            html_text = _html_player(bundle, metadata, has_track=bool(vtt_text))
-            readme_text = _readme(bundle, bool(srt))
+            metadata = _metadata(bundle, has_srt=bool(srt), has_vtt=bool(vtt_text), has_pdf=study_pdf is not None)
+            html_text = _html_player(bundle, metadata, has_track=bool(vtt_text),
+                                     has_pdf=study_pdf is not None)
+            readme_text = _readme(bundle, bool(srt), has_pdf=study_pdf is not None)
 
             with zipfile.ZipFile(staging, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 _writestr(zf, entries, f"{root}/README.txt", readme_text)
@@ -72,6 +79,8 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
                     json.dumps(metadata, indent=2, ensure_ascii=False),
                 )
                 _write(zf, entries, study_guide, f"{root}/study_guide.tex")
+                if study_pdf is not None:
+                    _write(zf, entries, study_pdf, f"{root}/study_guide.pdf")
                 _write(zf, entries, video, f"{root}/media/lesson.mp4", zipfile.ZIP_STORED)
                 if srt:
                     _write(zf, entries, srt, f"{root}/media/lesson.srt")
@@ -106,7 +115,7 @@ def export_lesson_bundle(bundle: Any, output_path: Path) -> LessonBundleExport:
     )
 
 
-def _metadata(bundle: Any) -> dict[str, Any]:
+def _metadata(bundle: Any, *, has_srt: bool = False, has_vtt: bool = False, has_pdf: bool = False) -> dict[str, Any]:
     plan = bundle.plan
     offsets = [float(x) for x in getattr(bundle, "chapter_offsets", []) or []]
     rendered = list(getattr(bundle, "rendered_chapter_indexes", []) or [])
@@ -153,6 +162,7 @@ def _metadata(bundle: Any) -> dict[str, Any]:
         "title": str(getattr(plan, "title", "")),
         "topic": str(getattr(plan, "topic", "")),
         "audience": str(getattr(plan, "audience", "")),
+        "language": normalize_language(getattr(plan, "language", "en")),
         "status": str(getattr(bundle, "status", "")),
         "objectives": [str(x) for x in getattr(plan, "objectives", [])],
         "prerequisites": [str(x) for x in getattr(plan, "prerequisites", [])],
@@ -169,9 +179,10 @@ def _metadata(bundle: Any) -> dict[str, Any]:
         ],
         "assets": {
             "video": "media/lesson.mp4",
-            "subtitles_srt": "media/lesson.srt",
-            "subtitles_vtt": "media/lesson.vtt",
+            "subtitles_srt": "media/lesson.srt" if has_srt else None,
+            "subtitles_vtt": "media/lesson.vtt" if has_vtt else None,
             "study_guide": "study_guide.tex",
+            "study_guide_pdf": "study_guide.pdf" if has_pdf else None,
             "evidence_specs": evidence_specs,
         },
     }
@@ -205,8 +216,12 @@ def _scene_filename(bundle: Any, render_index: int) -> str:
     return f"chapter_{plan_index + 1:02d}_{_slug(title)}.py"
 
 
-def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> str:
-    title = html.escape(metadata["title"] or "AetherLab lesson")
+def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool,
+                 has_pdf: bool = False) -> str:
+    language = normalize_language(metadata.get("language", getattr(bundle.plan, "language", "en")))
+    labels = _portable_labels(language)
+    language_label = html.escape(LANGUAGE_NAMES[language])
+    title = html.escape(metadata["title"] or labels["lesson"])
     chapters = []
     for chapter in metadata["chapters"]:
         offset = chapter["offset_seconds"]
@@ -217,7 +232,7 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
             f"{chapter['index']}. {html.escape(chapter['title'])}</button>"
         )
     track = (
-        '<track default kind="subtitles" src="media/lesson.vtt" srclang="en" label="English">'
+        f'<track default kind="subtitles" src="media/lesson.vtt" srclang="{language}" label="{language_label}">'
         if has_track
         else ""
     )
@@ -225,8 +240,16 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
         f"<li>{html.escape(item)}</li>"
         for item in metadata.get("objectives", [])
     )
+    guide_link = (
+        f'<p><a href="study_guide.pdf">{labels["pdf"]}</a> · '
+        f'<a href="study_guide.tex">{labels["source"]}</a></p>'
+        if has_pdf else
+        f'<p><a href="study_guide.tex">{labels["source_only"]}</a></p>'
+    )
+    audience = metadata.get("audience", "")
+    audience_label = labels["school"] if audience == "high_school" else str(audience)
     return f"""<!doctype html>
-<html lang="en">
+<html lang="{language}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -248,13 +271,13 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
 <body>
   <main>
     <h1>{title}</h1>
-    <div class="meta">{html.escape(metadata.get("audience", ""))} · exported by AetherLab {html.escape(__version__)}</div>
+    <div class="meta">{html.escape(audience_label)} · {labels["exported"]} PhysLab {html.escape(__version__)}</div>
     <video id="lesson" controls preload="metadata" src="media/lesson.mp4">{track}</video>
     <div class="chapters">{''.join(chapters)}</div>
     <section>
-      <h2>Objectives</h2>
+      <h2>{labels["objectives"]}</h2>
       <ul>{objectives}</ul>
-      <p><a href="study_guide.tex">Open study guide source</a></p>
+      {guide_link}
     </section>
   </main>
   <script>
@@ -271,18 +294,64 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
 """
 
 
-def _readme(bundle: Any, has_srt: bool) -> str:
-    title = getattr(bundle.plan, "title", "AetherLab lesson")
-    subtitle_note = "Subtitles are included as media/lesson.srt and media/lesson.vtt." if has_srt else "No subtitle file was available for this export."
+def _readme(bundle: Any, has_srt: bool, *, has_pdf: bool = False) -> str:
+    labels = _portable_labels(normalize_language(getattr(bundle.plan, "language", "en")))
+    title = getattr(bundle.plan, "title", "") or labels["lesson"]
+    subtitle_note = labels["subtitles"] if has_srt else labels["no_subtitles"]
+    guide_note = labels["pdf_note"] if has_pdf else labels["tex_note"]
     return (
         f"{title}\n"
         f"{'=' * len(str(title))}\n\n"
-        "Open index.html in a browser to watch the lesson locally.\n"
-        "The MP4 is stored at media/lesson.mp4.\n"
+        f'{labels["open"]}\n'
+        f'{labels["video"]}\n'
         f"{subtitle_note}\n"
-        "study_guide.tex contains the printable study guide source.\n"
-        "scenes/ contains generated Manim source for rendered chapters.\n"
+        f"{guide_note}\n"
+        f'{labels["scenes"]}\n'
     )
+
+
+def _portable_labels(language: str) -> dict[str, str]:
+    return {
+        "ru": {
+            "lesson": "Урок PhysLab", "objectives": "Цели урока",
+            "pdf": "Открыть конспект (PDF)", "source": "Исходник (.tex)",
+            "source_only": "Открыть исходник конспекта", "school": "Для школьников",
+            "exported": "Экспортировано из",
+            "open": "Откройте index.html в браузере для просмотра урока на своём устройстве.",
+            "video": "Видео MP4 находится в media/lesson.mp4.",
+            "subtitles": "Субтитры находятся в media/lesson.srt и media/lesson.vtt.",
+            "no_subtitles": "При экспорте файл субтитров отсутствовал.",
+            "pdf_note": "study_guide.pdf — конспект для печати; study_guide.tex — его исходник.",
+            "tex_note": "study_guide.tex содержит исходник конспекта для печати.",
+            "scenes": "В scenes/ находятся исходники Manim отрендеренных глав.",
+        },
+        "kk": {
+            "lesson": "PhysLab сабағы", "objectives": "Сабақ мақсаттары",
+            "pdf": "Конспектіні ашу (PDF)", "source": "Бастапқы файл (.tex)",
+            "source_only": "Конспектінің бастапқы файлын ашу", "school": "Оқушыларға арналған",
+            "exported": "Экспорт көзі:",
+            "open": "Сабақты өз құрылғыңызда көру үшін браузерде index.html файлын ашыңыз.",
+            "video": "MP4 бейнесі media/lesson.mp4 файлында орналасқан.",
+            "subtitles": "Субтитрлер media/lesson.srt және media/lesson.vtt файлдарында орналасқан.",
+            "no_subtitles": "Экспорт кезінде субтитр файлы болмады.",
+            "pdf_note": "study_guide.pdf — басып шығарылатын конспект; study_guide.tex — оның бастапқы файлы.",
+            "tex_note": "study_guide.tex басып шығарылатын конспектінің бастапқы файлын қамтиды.",
+            "scenes": "scenes/ бумасында дайын тараулардың Manim бастапқы коды орналасқан.",
+        },
+        "en": {
+            "lesson": "PhysLab lesson", "objectives": "Objectives",
+            "pdf": "Open study guide (PDF)", "source": "source (.tex)",
+            "source_only": "Open study guide source", "school": "For school students",
+            "exported": "exported by",
+            "open": "Open index.html in a browser to watch the lesson locally.",
+            "video": "The MP4 is stored at media/lesson.mp4.",
+            "subtitles": "Subtitles are included as media/lesson.srt and media/lesson.vtt.",
+            "no_subtitles": "No subtitle file was available for this export.",
+            "pdf_note": "study_guide.pdf is the printable study guide (study_guide.tex is its source).",
+            "tex_note": "study_guide.tex contains the printable study guide source.",
+            "scenes": "scenes/ contains generated Manim source for rendered chapters.",
+        },
+    }[language]
 
 
 def _srt_to_vtt(text: str) -> str:

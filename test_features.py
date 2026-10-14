@@ -1772,7 +1772,7 @@ def t_f61():
     assert "1:05" in sp._time_label.text()
     assert _frame_step_ms_for_video(_TMP / "missing.mp4") == 33
     sp.close()
-    return "video player + time label formatting"
+    return "video player + time label formatting; " + _story_checks("test_lesson_audio_output", ("test_scene_video_player_has_an_owned_unmuted_audio_output",))
 
 
 def t_f62():
@@ -3068,7 +3068,7 @@ def t_f133():
     cp1251.write("revision → θ")
     cp1251.flush()
     assert raw.getvalue().decode("utf-8") == "revision → θ"
-    return "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133)"
+    return "xplat subprocesses + whole-tree UTF-8 file/pipe/console audit (BUG-39, F133); " + _story_checks("test_lesson_tool_console")
 
 
 def t_f134():
@@ -3865,7 +3865,10 @@ def t_f150():
                 pass
         assert destination.read_bytes() == b"prior-good-output"
         assert not list(_TMP.glob(f".{destination.stem}.*.tmp{destination.suffix}"))
-    return "Learn cancellation reaches active render, narration, and assembly (BUG-56/106)"
+    return "Learn cancellation reaches active render, narration, and assembly (BUG-56/106); " + _lesson_feedback_checks((
+        "test_cancelled_lesson_messages_follow_the_requested_language",
+        "test_partial_cancelled_reload_restores_the_original_pending_answer",
+    ))
 
 
 def t_f151():
@@ -5140,7 +5143,7 @@ def t_f166():
         probe = getattr(mw, "_ollama_probe", None)
         if probe and probe.isRunning():
             probe.wait(5000)
-    return "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166)"
+    return "lesson share bundle zip contains html, mp4, subtitles, study guide, metadata, scene code (F166); " + _story_checks("test_lesson_share_acceptance")
 
 
 def t_f167():
@@ -5229,6 +5232,7 @@ def t_f167():
 
     mw = MainWindow(_settings())
     try:
+        mw.command_bar.set_language("en")  # this fixture's plan and assertions are English
         mw._last_lesson = LessonBundle(plan=plan)
         mw.course_progress = CourseProgressStore(_TMP / "main_course_progress.json")
         mw._record_lesson_quiz_answer(0, False, wrong)
@@ -5240,7 +5244,7 @@ def t_f167():
         if probe and probe.isRunning():
             probe.wait(5000)
     assert Path("docs/COURSE_MODE.md").read_text(encoding="utf-8")
-    return "course progress scores due MCQ recall separately from open-response self-ratings and updates recommendations (F167)"
+    return "course progress scores due MCQ recall separately from open-response self-ratings and updates recommendations (F167); " + _course_save_recovery_checks() + "; " + _course_feedback_checks()
 
 
 def t_f168():
@@ -7220,7 +7224,19 @@ def t_f215():
     return (
         f"gate fails loudly: exit code follows the run; {defect_fid} REGRESSED not FIXED; "
         f"Phase-4 overridden to FAIL; audit rejects failing results (F215)"
-    )
+    ) + "; " + _story_checks("test_story_fixture_isolation") + "; " + _story_checks("test_story_path_isolation", (
+        "test_plain_story_invocations_do_not_reuse_previous_state",
+    )) + "; " + _explicit_practice_checks("test_story_path_isolation", [
+        ("test_catalog_fixture_paths_do_not_embed_long_test_names", {"adapter_name": name})
+        for name in ("_story_checks", "_explicit_practice_checks")
+    ]) + "; " + _story_checks("test_tracker_pending_verification", (
+        "test_actual_failure_wins_over_a_pending_retest_marker",
+        "test_successful_retest_supersedes_the_preserved_pending_marker",
+    )) + "; " + _explicit_practice_checks("test_tracker_pending_verification", [
+        ("test_old_pass_with_explicit_pending_retest_is_not_marked_fixed", {"phase": phase, "with_reason": with_reason})
+        for phase in ("BLOCKED", "PENDING", "PARTIAL", "DEFERRED")
+        for with_reason in (False, True)
+    ])
 
 
 def t_f216():
@@ -7960,7 +7976,21 @@ def t_f227():
         "test_progress_nonfinite_numbers_do_not_crash_or_turn_into_scores",
         "test_nonfinite_progress_mutation_recovers_points_from_valid_history",
     ))
-    return "goals and attempts persist locally; missed items clear on review and completed history omits selected answers (F227); " + recovery + "; " + reading + "; " + numeric
+    import pytest
+
+    with pytest.MonkeyPatch.context() as patch:
+        localized = _explicit_practice_checks("test_profile_goal_acceptance", [
+            (name, {"language": language, **({"monkeypatch": patch} if "resave" in name else {})})
+            for name in (
+                "test_goal_suffix_follows_language_and_preserves_unsaved_values",
+                "test_unset_exam_calendar_opens_today_without_assigning_a_goal_date",
+                "test_exam_calendar_has_readable_text_and_selection_colors",
+                "test_failed_goal_resave_replaces_old_success_and_preserves_draft",
+                "test_goal_calendar_uses_selected_language_after_rebuild",
+            )
+            for language in ("kk", "ru", "en")
+        ])
+    return "goals and attempts persist locally; missed items clear on review and completed history omits selected answers (F227); " + recovery + "; " + reading + "; " + numeric + "; " + localized
 
 
 def t_f228():
@@ -8097,6 +8127,7 @@ def _story_checks(module_name: str, names: tuple[str, ...] = ()) -> str:
     not converted into a pass, and fixtures are undone between checks.
     """
     import importlib.util
+    import uuid
 
     import pytest
 
@@ -8107,9 +8138,10 @@ def _story_checks(module_name: str, names: tuple[str, ...] = ()) -> str:
     spec.loader.exec_module(module)
     checks = names or tuple(name for name in vars(module) if name.startswith("test_"))
     assert checks, f"No behavioural checks selected for {module_name}"
-    for name in checks:
+    invocation = uuid.uuid4().hex
+    for index, name in enumerate(checks):
         fn = getattr(module, name)
-        folder = _TMP / "stories" / module_name / name
+        folder = _TMP / "s" / invocation / str(index)
         folder.mkdir(parents=True, exist_ok=True)
         with pytest.MonkeyPatch.context() as patch:
             available = {"tmp_path": folder, "monkeypatch": patch}
@@ -8167,15 +8199,23 @@ def t_f233():
 
 def _explicit_practice_checks(module_name: str, cases: list[tuple[str, dict]]) -> str:
     """Expand these Qt parametrizations without weakening the fixture adapter."""
+    import inspect
     import runpy
     import uuid
 
     namespace = runpy.run_path(str(Path(__file__).parent / "tests" / f"{module_name}.py"))
     invocation = uuid.uuid4().hex
     for index, (name, arguments) in enumerate(cases):
-        folder = _TMP / "stories" / module_name / invocation / str(index)
+        folder = _TMP / "s" / invocation / str(index)
         folder.mkdir(parents=True, exist_ok=True)
-        namespace[name](tmp_path=folder, **arguments)
+        supplied = dict(arguments)
+        if "tmp_path" in inspect.signature(namespace[name]).parameters:
+            supplied["tmp_path"] = folder
+        if "monkeypatch" in arguments:
+            with arguments["monkeypatch"].context() as case_patch:
+                namespace[name](**{**supplied, "monkeypatch": case_patch})
+        else:
+            namespace[name](**supplied)
     return f"{len(cases)} explicit locale/mode checks in {module_name}"
 
 
@@ -8195,9 +8235,9 @@ def _practice_display_checks(names: tuple[str, ...] = ()) -> str:
         "test_feedback_and_review_do_not_expose_latex",
         "test_perfect_small_sample_does_not_claim_mistakes_or_a_weak_topic",
     )
-    for name in checks:
+    for index, name in enumerate(checks):
         for language in ("kk", "ru", "en"):
-            folder = _TMP / "stories" / module_name / invocation / name / language
+            folder = _TMP / "s" / invocation / str(index) / language
             folder.mkdir(parents=True, exist_ok=True)
             namespace[name](language, folder)
     return f"{len(checks) * 3} practice display checks in kk/ru/en: {', '.join(checks)}"
@@ -8226,11 +8266,24 @@ def t_f235():
         "test_discard_read_failure_retains_draft_until_retry",
         "test_saved_profile_reports_refresh_failure_without_partial_creation",
         "test_unreadable_dialog_initialization_retries_in_all_languages",
+    )) + "; " + _explicit_practice_checks("test_profile_goal_acceptance", [
+        ("test_profile_accessible_labels_follow_ui_language_and_identity", {"language": language})
+        for language in ("kk", "ru", "en")
+    ]) + "; " + _student_route_checks((
+        "test_switching_profile_rebuilds_lesson_answers_for_the_new_student",
+        "test_cancel_profile_dialog_keeps_current_lesson_selection",
+        "test_settings_save_keeps_course_progress_bound_to_the_active_student",
+        "test_stale_question_card_cannot_record_an_answer_for_another_lesson",
     ))
 
 
 def t_f236():
-    return _story_checks("test_ai_help_quota") + "; " + _story_checks("test_ai_quota_io")
+    return _story_checks("test_ai_help_quota") + "; " + _story_checks("test_ai_quota_io") + "; " + _student_route_checks((
+        "test_prebuilt_lesson_does_not_consume_or_depend_on_ai_allowance",
+        "test_command_bar_allows_only_explicit_prebuilt_route_without_ai_quota",
+        "test_visible_kinematics_buttons_select_the_prepared_package",
+        "test_real_prebuilt_worker_never_indexes_references_or_generates_content",
+    ))
 
 
 def t_f237():
@@ -8351,7 +8404,10 @@ def t_f247():
     return _story_checks("test_localized_ui_regressions", (
         "test_library_history_and_settings_follow_the_selected_language",
         "test_command_lab_and_lesson_controls_retranslate_without_losing_values",
-    ))
+    )) + "; " + _student_route_checks((
+        "test_header_language_switch_selects_matching_prebuilt_content_and_media",
+        "test_language_changes_during_loading_use_only_the_latest_choice",
+    )) + "; " + _lesson_feedback_checks()
 
 
 def t_f248():
@@ -8365,6 +8421,232 @@ def t_f249():
 
 def t_f250():
     return _story_checks("test_lesson_practice_h")
+
+
+def t_f251():
+    return _story_checks("test_ent_lesson_5min", (
+        "test_v2_plan_all_languages", "test_v2_questions_match_practice_key",
+        "test_v2_narrations_match_canonical_voiceovers", "test_v2_offsets_are_measured_cumsum",
+        "test_v2_progress_keys_do_not_collide_with_v1", "test_prebuilt_bundle_ready_and_error_states",
+        "test_v1_plan_untouched",
+    )) + "; " + _story_checks("test_lesson_share_acceptance", (
+        "test_prebuilt_export_keeps_all_rendered_chapter_seek_offsets",
+    )) + "; " + _story_checks("test_prebuilt_media_integrity", (
+        "test_media_path_cannot_resolve_outside_the_package",
+        "test_media_without_a_manifest_hash_is_not_certified",
+        "test_unreadable_media_reports_access_failure_without_serving_it",
+        "test_lesson_error_explains_missing_and_unverified_media_in_each_language",
+    )) + "; " + _prebuilt_hash_checks() + "; " + _prebuilt_content_checks() + "; " + _lesson_translation_checks()
+
+
+def _lesson_translation_checks():
+    import pytest
+
+    with pytest.MonkeyPatch.context() as patch:
+        return _explicit_practice_checks("test_lesson_language_answer_retention", [
+            ("test_translation_keeps_graded_choice_and_does_not_add_an_attempt",
+             {"language": language, "target": target, "correct": correct, "monkeypatch": patch})
+            for language, target in (("kk", "ru"), ("ru", "en"), ("en", "kk"))
+            for correct in (True, False)
+        ] + [
+            ("test_fresh_lesson_attempt_is_not_locked_by_translation_restore",
+             {"reload_kind": kind, "monkeypatch": patch})
+            for kind in ("same_language", "changed_content")
+        ])
+
+
+def _prebuilt_hash_checks():
+    import pytest
+
+    with pytest.MonkeyPatch.context() as patch:
+        return _explicit_practice_checks("test_prebuilt_media_integrity", [
+            ("test_replaced_media_is_not_served_as_the_manifest_artifact", {"kind": kind, "monkeypatch": patch})
+            for kind in ("video", "srt", "pdf")
+        ])
+
+
+def _prebuilt_content_checks():
+    import pytest
+
+    module = "test_prebuilt_content_recovery"
+    plain = _story_checks(module, (
+        "test_package_path_changes_do_not_reuse_other_package_data",
+        "test_manifest_refresh_and_readers_cannot_pollute_other_requests",
+        "test_plan_and_media_must_use_one_content_snapshot",
+        "test_prebuilt_snapshot_hash_survives_plan_roundtrip",
+        "test_unreadable_manifest_does_not_use_warm_content",
+        "test_package_error_clears_video_without_touching_course_progress",
+        "test_legacy_prebuilt_plan_without_snapshot_requires_reload",
+    ))
+    with pytest.MonkeyPatch.context() as patch:
+        expanded = _explicit_practice_checks(module, [
+            ("test_package_failure_returns_localized_error_and_recovers", {"failure": failure, "monkeypatch": patch})
+            for failure in ("missing", "bad_json", "incomplete")
+        ] + [
+            ("test_manifest_contract_rejects_malformed_input", {"damage": damage, "monkeypatch": patch})
+            for damage in ("root", "version", "offsets", "duration", "chapter_count", "question_key", "media_entry", "kind", "chapter_order", "question_count", "language_key")
+        ])
+    return plain + "; " + expanded + "; " + _student_route_checks() + "; " + _lesson_audio_checks()
+
+
+def _student_route_checks(names: tuple[str, ...] = ()) -> str:
+    import pytest
+
+    module = "test_prebuilt_student_routes"
+    parameterized = (
+        "test_prebuilt_lesson_does_not_consume_or_depend_on_ai_allowance",
+        "test_switching_profile_rebuilds_lesson_answers_for_the_new_student",
+        "test_cancel_profile_dialog_keeps_current_lesson_selection",
+        "test_header_language_switch_selects_matching_prebuilt_content_and_media",
+        "test_command_bar_allows_only_explicit_prebuilt_route_without_ai_quota",
+        "test_visible_kinematics_buttons_select_the_prepared_package",
+        "test_prepared_lesson_success_and_audience_are_localized",
+        "test_incomplete_video_is_not_announced_as_a_completed_lesson",
+    )
+    plain = (
+        "test_prebuilt_progress_has_one_identity_in_all_languages",
+        "test_real_prebuilt_worker_never_indexes_references_or_generates_content",
+        "test_stale_question_card_cannot_record_an_answer_for_another_lesson",
+        "test_settings_save_keeps_course_progress_bound_to_the_active_student",
+        "test_language_changes_during_loading_use_only_the_latest_choice",
+        "test_empty_cancelled_load_preserves_the_previous_lesson_and_its_answers",
+    )
+    wanted = set(names or parameterized + plain)
+    assert wanted <= set(parameterized + plain)
+    pieces = []
+    selected = tuple(name for name in plain if name in wanted)
+    if selected:
+        pieces.append(_story_checks(module, selected))
+    with pytest.MonkeyPatch.context() as patch:
+        cases = []
+        for name in parameterized:
+            if name not in wanted:
+                continue
+            for language in ("kk", "ru", "en"):
+                arguments = {"language": language}
+                if "command_bar" not in name:
+                    arguments["monkeypatch"] = patch
+                if name == "test_visible_kinematics_buttons_select_the_prepared_package":
+                    cases.extend((name, {**arguments, "entry": entry, "allowance": allowance})
+                                 for entry in ("dashboard", "catalog") for allowance in ("fresh", "exhausted"))
+                elif name == "test_incomplete_video_is_not_announced_as_a_completed_lesson":
+                    cases.extend((name, {**arguments, "status": status}) for status in ("rendering", "text_only"))
+                elif "allowance" in name:
+                    cases.extend((name, {**arguments, "allowance": allowance}) for allowance in ("fresh", "exhausted", "unreadable"))
+                else:
+                    cases.append((name, arguments))
+        if cases:
+            pieces.append(_explicit_practice_checks(module, cases))
+    return "; ".join(pieces)
+
+
+def _lesson_audio_checks() -> str:
+    return _story_checks("test_lesson_audio_output", ("test_inline_lesson_player_has_an_owned_unmuted_audio_output",)) + "; " + _explicit_practice_checks("test_lesson_audio_output", [
+        ("test_real_lesson_audio_stream_loads_without_starting_playback", {"language": language})
+        for language in ("kk", "ru", "en")
+    ])
+
+
+def _course_save_recovery_checks() -> str:
+    import pytest
+
+    identity_names = (
+        "test_legacy_language_histories_merge_on_read_without_rewriting_bytes",
+        "test_first_successful_write_preserves_legacy_records_and_does_not_double_count",
+        "test_unrelated_v1_and_ambiguous_topic_records_are_not_relabelled",
+        "test_failed_migration_save_keeps_original_language_files",
+        "test_unreadable_course_history_never_looks_empty_or_gets_overwritten",
+        "test_unreadable_course_write_preserves_the_complete_old_history",
+        "test_reintroduced_exact_old_alias_does_not_count_history_twice",
+        "test_changed_previously_migrated_alias_requires_review_without_writing",
+    )
+    plain = _story_checks("test_prebuilt_course_identity", identity_names) + "; " + _story_checks("test_generic_course_topic_identity") + "; " + _story_checks("test_course_answer_save_recovery", (
+        "test_operation_identity_rejects_a_changed_retry_without_an_extra_attempt",
+        "test_review_read_failure_is_reported_without_escaping_a_qt_callback",
+        "test_pending_grade_stays_with_its_profile_and_restores_on_return",
+        "test_cancelled_due_review_does_not_claim_a_saved_response",
+    ))
+    with pytest.MonkeyPatch.context() as patch:
+        cases = [("test_failed_answer_save_keeps_grade_and_retries_exactly_once", {"language": language, "failure": failure, "monkeypatch": patch})
+                 for language in ("kk", "ru", "en") for failure in ("write", "acknowledgment")]
+        cases += [("test_pending_answers_block_unconfirmed_close_and_allow_explicit_discard", {"language": language, "monkeypatch": patch}) for language in ("kk", "ru", "en")]
+        expanded = _explicit_practice_checks("test_course_answer_save_recovery", cases)
+    return plain + "; " + expanded
+
+
+def _course_feedback_checks() -> str:
+    plain = _story_checks("test_course_feedback_state", (
+        "test_low_confidence_changes_review_schedule_without_erasing_a_correct_answer",
+        "test_lesson_message_catalog_has_the_same_keys_and_preserves_literal_titles",
+    ))
+    cases = [(name, {"language": language}) for name in (
+        "test_empty_course_does_not_claim_readiness_or_a_scored_attempt",
+        "test_wrong_answer_recommends_review_instead_of_readiness",
+        "test_correct_answer_has_localized_followup_without_losing_totals",
+        "test_summary_language_override_does_not_write_or_change_the_plan",
+    ) for language in ("kk", "ru", "en")]
+    cases += [("test_question_counters_repair_only_when_the_full_quiz_history_is_available", {"complete": complete}) for complete in (False, True)]
+    cases += [("test_review_feedback_uses_latest_objective_evidence_only", {"mode": mode})
+              for mode in ("objective_correct", "self_reported", "objective_wrong")]
+    return plain + "; " + _explicit_practice_checks("test_course_feedback_state", cases)
+
+
+def _lesson_feedback_checks(names: tuple[str, ...] = ()) -> str:
+    import pytest
+
+    module = "test_lesson_feedback_localization"
+    plain = (
+        "test_header_language_change_retains_generic_lesson_score_without_regeneration",
+        "test_missing_review_target_is_not_reported_as_a_saved_response",
+        "test_partial_cancelled_reload_restores_the_original_pending_answer",
+    )
+    parameterized = (
+        "test_cancelled_lesson_messages_follow_the_requested_language",
+        "test_saved_answer_and_course_io_notice_are_localized",
+        "test_empty_review_notice_is_localized",
+        "test_open_review_controls_are_localized_and_do_not_self_rate_on_dismissal",
+        "test_pipeline_progress_localizes_chapter_lifecycle_without_claiming_a_video",
+    )
+    wanted = set(names or plain + parameterized)
+    assert wanted <= set(plain + parameterized)
+    pieces = []
+    selected = tuple(name for name in plain if name in wanted)
+    if selected:
+        pieces.append(_story_checks(module, selected))
+    with pytest.MonkeyPatch.context() as patch:
+        cases = []
+        for name in parameterized:
+            if name not in wanted:
+                continue
+            for language in ("kk", "ru", "en"):
+                args = {"language": language, "monkeypatch": patch}
+                if name == "test_cancelled_lesson_messages_follow_the_requested_language":
+                    cases.extend((name, {**args, "partial": partial}) for partial in (False, True))
+                else:
+                    cases.append((name, args))
+        if cases:
+            pieces.append(_explicit_practice_checks(module, cases))
+    return "; ".join(pieces)
+
+
+def t_f252():
+    import pytest
+
+    with pytest.MonkeyPatch.context() as patch:
+        dispatch = _explicit_practice_checks("test_lesson_pdf_open", [
+            ("test_study_pdf_reports_real_dispatch_outcome", {"language": language, "accepted": accepted, "monkeypatch": patch})
+            for language in ("kk", "ru", "en") for accepted in (False, True)
+        ] + [
+            ("test_missing_study_pdf_does_not_launch_an_opener", {"language": language, "monkeypatch": patch})
+            for language in ("kk", "ru", "en")
+        ] + [
+            ("test_study_pdf_accessible_label_matches_visible_action", {"language": language})
+            for language in ("kk", "ru", "en")
+        ])
+    return dispatch + "; " + _story_checks("test_ent_lesson_5min", (
+        "test_lesson_view_v2_surface_and_quiz_progress",
+        "test_share_export_includes_pdf_and_subtitles",
+    ))
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

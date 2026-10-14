@@ -1,0 +1,193 @@
+{
+ "versions": {
+  "stage": "M-final",
+  "quality": "h",
+  "fps": 30,
+  "langs": [
+   "ru",
+   "kk",
+   "en"
+  ],
+  "manim_pin": "manim==0.21.0",
+  "workflow_version": "7",
+  "content": {
+   "canonical": "7d85de57a9d59d861f718d05e784be520efeb4fca82c7c2faa4af8ca9bc42c84",
+   "shots": "e3995e2580ea0034fbefb584d659bef02ea56ac9bee101086259998d5779a95c",
+   "fragments": "27e5c725c737e36e7de2ac234ac9a3c0ed8d017d5bf02d8ded1cc8a9a9e54cbf",
+   "durations": "7bc777c4a1e083b77841ac3cc1ee99e0a7119b92f9b6369cc4adc2881a4bb07a",
+   "mux_plan": "a0f32da60b44d148e3d847da6798d31d89f661b0fc92b2c83d9f7735f22d178e",
+   "clips_sha256": "36b89f1941754300287b48c96f6333b7fb3025f0747006cf8d7aeee8f5e499ae"
+  },
+  "scenes": {
+   "ru": "1711cfc17ffbd67c56a1c82e0dd14f01f78ced4f69d9bb170a7bab45391b37c9",
+   "kk": "f4474c5a06b5e2038401f2da514197c959de6175a40c5dc6eb856dd555a63442",
+   "en": "e9a880e5a775f90ee952fbe3cf5e7a9e3eebb118a8e53d3ac0fe2ece63580267"
+  },
+  "started_at": "2026-10-13T13:04:09"
+ },
+ "langs": {
+  "ru": {
+   "segments": {
+    "BlockB0": {
+     "job_id": "8efdc58743213944a9a96479",
+     "duration_s": 20.0,
+     "attempts": 1
+    },
+    "BlockB1": {
+     "job_id": "ca10132394bac05fd6ad6762",
+     "duration_s": 49.96666666666667,
+     "attempts": 1
+    },
+    "BlockB2": {
+     "job_id": "d37a0ef7130f2df3d1629ab9",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB3": {
+     "job_id": "863292253c232ab28e52967b",
+     "duration_s": 50.0,
+     "attempts": 1
+    },
+    "BlockB4": {
+     "job_id": "4dc26d49501d34bd6438d23f",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB5": {
+     "job_id": "391853f228ecd9a98bc8138e",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB6": {
+     "job_id": "9a899637619fd3231d7a12a2",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB7": {
+     "job_id": "710a2d1b2c6349080f1a3c4e",
+     "duration_s": 40.0,
+     "attempts": 1
+    }
+   },
+   "total_s": 299.967,
+   "final": "lesson_ru.mp4",
+   "final_sha256": "39f749b73e5dfdc9cd1f6c42084550c85d1e45b5e32d77c5862a39a1351215e6",
+   "final_bytes": 7000449,
+   "srt": "lesson_ru.srt",
+   "srt_entries": 45,
+   "first_speech_s": 0.327,
+   "speech_coverage_s": 148.6
+  },
+  "kk": {
+   "segments": {
+    "BlockB0": {
+     "job_id": "5cb199a0902d80c82f5d9776",
+     "duration_s": 20.0,
+     "attempts": 1
+    },
+    "BlockB1": {
+     "job_id": "5f8c2b32761ea15f58b1e6dc",
+     "duration_s": 49.96666666666667,
+     "attempts": 1
+    },
+    "BlockB2": {
+     "job_id": "d57c5da6964acc569542b17d",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB3": {
+     "job_id": "b70a13b9ff950104192b3cc6",
+     "duration_s": 50.0,
+     "attempts": 1
+    },
+    "BlockB4": {
+     "job_id": "622eead5216555ebfb7cf530",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB5": {
+     "job_id": "44a3ab2df63e04e1bbf456de",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB6": {
+     "job_id": "49cb06e96fd7083c993289a7",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB7": {
+     "job_id": "04fd437b34ea14fe8cfa98de",
+     "duration_s": 40.0,
+     "attempts": 1
+    }
+   },
+   "total_s": 299.967,
+   "final": "lesson_kk.mp4",
+   "final_sha256": "0e8b646596a7f9e92346294779f02fc6baab1583e63a581fffcf62284015e1e4",
+   "final_bytes": 6999794,
+   "srt": "lesson_kk.srt",
+   "srt_entries": 45,
+   "first_speech_s": 0.329,
+   "speech_coverage_s": 148.3
+  },
+  "en": {
+   "segments": {
+    "BlockB0": {
+     "job_id": "ce08eb2a4a66a7cd1d2a05c6",
+     "duration_s": 20.0,
+     "attempts": 1
+    },
+    "BlockB1": {
+     "job_id": "b0c6b5504bc8b404e4eb5302",
+     "duration_s": 49.96666666666667,
+     "attempts": 1
+    },
+    "BlockB2": {
+     "job_id": "5ce9968b3c28d99ba8dd1e26",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB3": {
+     "job_id": "a192bbce8a13d7dd6f3e224b",
+     "duration_s": 50.0,
+     "attempts": 1
+    },
+    "BlockB4": {
+     "job_id": "e706cc043b92aaf1ddc3cdac",
+     "duration_s": 40.0,
+     "attempts": 1
+    },
+    "BlockB5": {
+     "job_id": "633be50edbd393fc4f0b01fb",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB6": {
+     "job_id": "6cfaec31af932104dde3041b",
+     "duration_s": 30.0,
+     "attempts": 1
+    },
+    "BlockB7": {
+     "job_id": "fba6e8245b631abf9d847b83",
+     "duration_s": 40.0,
+     "attempts": 1
+    }
+   },
+   "total_s": 299.967,
+   "final": "lesson_en.mp4",
+   "final_sha256": "fe478d574b89d3bdfebf498e3cf54ee4511a0eb96a8e55e307ef9d349dc344b3",
+   "final_bytes": 7101198,
+   "srt": "lesson_en.srt",
+   "srt_entries": 45,
+   "first_speech_s": 0.327,
+   "speech_coverage_s": 146.0
+  }
+ },
+ "gate": {
+  "missing": [],
+  "repeated": [],
+  "foreign": [],
+  "clipped_words": [],
+  "timeline": "measured-cumsum"
+ }
+}

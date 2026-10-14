@@ -21,6 +21,10 @@ _COPY = {
         "empty": "Тақырып енгізіп, «Оқу» түймесін бассаңыз, сабақ жасалады.", "video_unavailable": "Бұл нұсқада бейне ойнатқыш қолжетімсіз.",
         "video_empty": "Бұл сабақтың бейнесі әлі жасалмаған.",
         "no_citations": "Дереккөздер көрсетілмеген.", "chapter_not_rendered": "Бұл бөлім рендерленбеді. Сабақ қолжетімді бөлімдермен жалғасады.",
+        "pdf": "PDF конспектіні ашу", "needs_review": "Мазмұнды тексеру қажет: тілдік түзету мұғалімнің қарауында.",
+        "pdf_missing": "Бұл сабаққа PDF конспект тіркелмеген.",
+        "pdf_open_failed": "PDF конспектіні ашу мүмкін болмады. PDF қарау бағдарламасын тексеріп, қайта көріңіз.",
+        "pdf_dispatched": "Конспект қарау бағдарламасына жіберілді: {name}.",
         "play": "Ойнату", "pause": "Кідірту", "stop": "Тоқтату",
         "confidence_low": "Сенімділік: төмен", "confidence_medium": "Сенімділік: орташа", "confidence_high": "Сенімділік: жоғары",
         "confidence_tip": "Жауапты тексермес бұрын өз сенімділігіңізді белгілеңіз.", "reveal": "Жауапты көрсету", "correct": "✓ Дұрыс", "wrong": "✗ Дұрыс емес. Жауабы:", "answer": "Үлгі жауап:",
@@ -38,6 +42,10 @@ _COPY = {
         "empty": "Введите тему и нажмите «Изучить», чтобы создать урок.", "video_unavailable": "В этой сборке видеоплеер недоступен.",
         "video_empty": "Видео этого урока ещё не создано.",
         "no_citations": "Источники не указаны.", "chapter_not_rendered": "Этот раздел не был обработан. Урок продолжится с доступными разделами.",
+        "pdf": "Открыть конспект PDF", "needs_review": "Требуется проверка содержания: формулировки на рецензии у учителя.",
+        "pdf_missing": "К этому уроку не прикреплён конспект PDF.",
+        "pdf_open_failed": "Не удалось открыть конспект PDF. Проверьте программу просмотра PDF и попробуйте снова.",
+        "pdf_dispatched": "Конспект передан программе просмотра: {name}.",
         "play": "Воспроизвести", "pause": "Пауза", "stop": "Остановить",
         "confidence_low": "Уверенность: низкая", "confidence_medium": "Уверенность: средняя", "confidence_high": "Уверенность: высокая",
         "confidence_tip": "Оцените уверенность до проверки ответа.", "reveal": "Показать ответ", "correct": "✓ Верно", "wrong": "✗ Неверно. Ответ:", "answer": "Пример ответа:",
@@ -55,6 +63,10 @@ _COPY = {
         "empty": "Enter a topic and press Learn to generate a lesson.", "video_unavailable": "Video playback is unavailable in this build.",
         "video_empty": "This lesson does not have a rendered video yet.",
         "no_citations": "No citations available.", "chapter_not_rendered": "This chapter did not render; the lesson continues with available chapters.",
+        "pdf": "Open study-guide PDF", "needs_review": "Needs content review: wording is pending teacher review.",
+        "pdf_missing": "No study-guide PDF is attached to this lesson.",
+        "pdf_open_failed": "Could not open the study-guide PDF. Check your PDF viewer and try again.",
+        "pdf_dispatched": "Study guide sent to the viewer: {name}.",
         "play": "Play", "pause": "Pause", "stop": "Stop",
         "confidence_low": "Confidence: low", "confidence_medium": "Confidence: medium", "confidence_high": "Confidence: high",
         "confidence_tip": "Rate your confidence before checking the answer.", "reveal": "Reveal answer", "correct": "✓ Correct", "wrong": "✗ Not quite. Answer:", "answer": "Model answer:",
@@ -71,6 +83,7 @@ class _QuestionCard(QtWidgets.QFrame):
     question that reveals a model answer."""
 
     answer_recorded = QtCore.pyqtSignal(bool, str)
+    save_retry_requested = QtCore.pyqtSignal()
 
     def __init__(self, index: int, question, language: str = "kk", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -117,6 +130,16 @@ class _QuestionCard(QtWidgets.QFrame):
             self._reveal.clicked.connect(self._reveal_open)
             layout.addWidget(self._reveal)
             layout.addWidget(self._feedback)
+        self._save_status = QtWidgets.QLabel("")
+        self._save_status.setWordWrap(True)
+        self._save_status.setStyleSheet("color: #AC4055; font-size: 12px;")
+        self._save_status.hide()
+        self._save_retry = QtWidgets.QPushButton()
+        self._save_retry.setObjectName("SecondaryButton")
+        self._save_retry.clicked.connect(self.save_retry_requested.emit)
+        self._save_retry.hide()
+        layout.addWidget(self._save_status)
+        layout.addWidget(self._save_retry)
         self.set_language(self._language)
 
     def set_language(self, language: str) -> None:
@@ -128,6 +151,21 @@ class _QuestionCard(QtWidgets.QFrame):
             self._confidence.setToolTip(text["confidence_tip"])
         if hasattr(self, "_reveal"):
             self._reveal.setText(text["reveal"])
+        labels = {
+            "kk": ("Сақтауды қайталау", "Жауап тексерілді. Прогрестің сақталғанын растау мүмкін болмады. Қайта сақтап көріңіз."),
+            "ru": ("Повторить сохранение", "Ответ проверен. Не удалось подтвердить сохранение прогресса. Повторите сохранение."),
+            "en": ("Retry saving", "The answer was checked. Progress saving could not be confirmed. Retry saving."),
+        }[self._language]
+        self._save_retry.setText(labels[0])
+        self._save_retry.setAccessibleName(labels[0])
+        if self._save_status.text():
+            self._save_status.setText(labels[1])
+
+    def set_save_pending(self, pending: bool) -> None:
+        self._save_retry.setVisible(pending)
+        self._save_status.setVisible(pending)
+        self._save_status.setText("pending" if pending else "")
+        self.set_language(self._language)
 
     def _answer_mcq(self, choice: str) -> None:
         # BUG-27: only the first selection counts. toggled fires on every
@@ -275,7 +313,9 @@ class LessonView(QtWidgets.QWidget):
     chapter_seek_requested = QtCore.pyqtSignal(float)  # seconds
     export_requested = QtCore.pyqtSignal()
     share_bundle_requested = QtCore.pyqtSignal()
+    study_pdf_requested = QtCore.pyqtSignal()  # open the prebuilt study-guide PDF
     quiz_answered = QtCore.pyqtSignal(int, bool, str)  # question index, correct, choice
+    quiz_save_retry_requested = QtCore.pyqtSignal(int)
     review_due_clicked = QtCore.pyqtSignal()
     regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
 
@@ -320,7 +360,24 @@ class LessonView(QtWidgets.QWidget):
         self._bundle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._bundle_btn.clicked.connect(self.share_bundle_requested.emit)
         header.addWidget(self._bundle_btn)
+        self._pdf_btn = QtWidgets.QPushButton()
+        self._pdf_btn.setObjectName("SecondaryButton")
+        self._pdf_btn.setAccessibleName("Open study-guide PDF")
+        self._pdf_btn.setIcon(icons.icon("file-text", 13, "#65758A"))
+        self._pdf_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._pdf_btn.clicked.connect(self.study_pdf_requested.emit)
+        self._pdf_btn.hide()
+        header.addWidget(self._pdf_btn)
         layout.addLayout(header)
+        self._review_badge = QtWidgets.QLabel()
+        self._review_badge.setObjectName("ContentReviewBadge")
+        self._review_badge.setWordWrap(True)
+        self._review_badge.setStyleSheet(
+            "color: #7A5C00; font-size: 12px; padding: 7px 10px; "
+            "border: 1px solid #E3C878; border-radius: 8px; background: #FFF6DE;"
+        )
+        self._review_badge.hide()
+        layout.addWidget(self._review_badge)
 
         self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self._outline = QtWidgets.QListWidget()
@@ -416,7 +473,7 @@ class LessonView(QtWidgets.QWidget):
         self._video_control_buttons: list[tuple[QtWidgets.QPushButton, str]] = []
         self._video_unavailable_label = None
         try:
-            from PyQt6.QtMultimedia import QMediaPlayer
+            from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
             from PyQt6.QtMultimediaWidgets import QVideoWidget
 
             stage = QtWidgets.QWidget()
@@ -444,7 +501,9 @@ class LessonView(QtWidgets.QWidget):
                 self._video_empty_overlay, 0, 0, QtCore.Qt.AlignmentFlag.AlignCenter
             )
             v.addWidget(stage, 1)
-            self._player = QMediaPlayer()
+            self._audio_output = QAudioOutput(self)
+            self._player = QMediaPlayer(self)
+            self._player.setAudioOutput(self._audio_output)
             self._player.setVideoOutput(self._video_widget)
 
             controls = QtWidgets.QHBoxLayout()
@@ -480,6 +539,9 @@ class LessonView(QtWidgets.QWidget):
         self._export_btn.setText(text["guide"])
         self._bundle_btn.setText(text["bundle"])
         self._bundle_btn.setToolTip(text["bundle_tip"])
+        self._pdf_btn.setText(text["pdf"])
+        self._pdf_btn.setAccessibleName(text["pdf"])
+        self._review_badge.setText(text["needs_review"])
         for index, key in enumerate(("video", "transcript", "terms", "questions", "references", "explore")):
             self._tabs.setTabText(index, text[key])
         self._course_status.setText(text["course_status"])
@@ -501,11 +563,15 @@ class LessonView(QtWidgets.QWidget):
         """Load the assembled lesson MP4 into the inline player."""
         if not self._player:
             return
-        if not path or not Path(path).exists():
-            self._video_empty_overlay.show()
-            return
         from PyQt6.QtCore import QUrl
 
+        if not path or not Path(path).exists():
+            # Never leave a stale clip from a previous lesson behind the
+            # overlay: an error bundle must look like an error bundle.
+            self._player.stop()
+            self._player.setSource(QUrl())
+            self._video_empty_overlay.show()
+            return
         self._video_empty_overlay.hide()
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         self._tabs.setCurrentIndex(0)  # Video tab
@@ -513,6 +579,18 @@ class LessonView(QtWidgets.QWidget):
     def _set_populated(self, populated: bool) -> None:
         self._split.setVisible(populated)
         self._empty.setVisible(not populated)
+
+    def restart_for_student(self) -> None:
+        """A learner switch starts playback at the beginning of shared content."""
+        if self._player is not None:
+            self._player.pause()
+            self._player.setPosition(0)
+
+    def set_audio_enabled(self, enabled: bool) -> None:
+        """Apply the lesson's narration preference to playback, not OS volume."""
+        audio = getattr(self, "_audio_output", None)
+        if audio is not None:
+            audio.setMuted(not enabled)
 
     def set_lesson(self, bundle) -> None:
         """Populate the view from a LessonBundle (plan + rendered chapters)."""
@@ -528,9 +606,20 @@ class LessonView(QtWidgets.QWidget):
             "ru": "Казахские термины",
             "en": "Kazakh terms",
         }[language])
-        self._audience.setText(
-            f"{plan.audience.replace('_', ' ')} · {LANGUAGE_NAMES[language]}"
-        )
+        audience = {
+            "kk": {"high_school": "Мектеп оқушысына", "undergrad": "Студентке", "ap": "Тереңдетілген мектеп деңгейі"},
+            "ru": {"high_school": "Для школьника", "undergrad": "Для студента", "ap": "Углублённый школьный уровень"},
+            "en": {"high_school": "For school students", "undergrad": "For university students", "ap": "Advanced school level"},
+        }[language].get(plan.audience, plan.audience.replace("_", " "))
+        self._audience.setText(f"{audience} · {LANGUAGE_NAMES[language]}")
+        pdf_path = str(getattr(bundle, "pdf_path", "") or "")
+        self._pdf_btn.setVisible(bool(pdf_path and Path(pdf_path).is_file()))
+        review = getattr(bundle, "review_status", None) or {}
+        needs_review = any(
+            "review" in str(value).casefold() or "pending" in str(value).casefold()
+            for value in review.values()
+        ) if isinstance(review, dict) else False
+        self._review_badge.setVisible(bool(needs_review))
         terms = getattr(plan, "kazakh_terms", []) or []
         if not terms and plan.model_name != "localized-offline-notice":
             from aetherlab.services.ent_physics_bank import glossary_for_language
@@ -622,10 +711,10 @@ class LessonView(QtWidgets.QWidget):
         for i, q in enumerate(plan.questions, 1):
             card = _QuestionCard(i, q, language)
             self._question_cards.append(card)
+            card.save_retry_requested.connect(lambda idx=i - 1: self.quiz_save_retry_requested.emit(idx))
             card.answer_recorded.connect(
-                lambda correct, choice, idx=i - 1, question_card=card: self._on_quiz_answer(
-                    idx, correct, choice, question_card.confidence_level()
-                )
+                lambda correct, choice, idx=i - 1, question_card=card:
+                self._on_card_quiz_answer(idx, question_card, correct, choice)
             )
             self._questions_layout.insertWidget(self._questions_layout.count() - 1, card)
 
@@ -650,6 +739,50 @@ class LessonView(QtWidgets.QWidget):
 
     def set_course_summary(self, message: str) -> None:
         self._course_status.setText(message)
+
+    def _on_card_quiz_answer(self, index: int, card, correct: bool, choice: str) -> None:
+        if 0 <= index < len(self._question_cards) and self._question_cards[index] is card:
+            self._on_quiz_answer(index, correct, choice, card.confidence_level())
+
+    def set_question_save_pending(self, index: int, pending: bool) -> None:
+        if 0 <= index < len(self._question_cards):
+            self._question_cards[index].set_save_pending(pending)
+
+    def restore_pending_question(self, index: int, choice_index: int, confidence: str) -> None:
+        self.restore_question_answer(index, choice_index, confidence, save_pending=True)
+
+    def question_answer_state(self) -> dict[int, dict]:
+        """Capture this displayed attempt before replacing its translation."""
+        answers = {}
+        for index, card in enumerate(self._question_cards):
+            if not card._answered or not hasattr(card, "_group"):
+                continue
+            buttons = card._group.buttons()
+            selected = next((i for i, button in enumerate(buttons) if button.isChecked()), None)
+            if selected is not None:
+                answers[index] = {
+                    "choice_index": selected,
+                    "confidence": card.confidence_level(),
+                    "save_pending": not card._save_retry.isHidden(),
+                }
+        return answers
+
+    def restore_question_answer(
+        self, index: int, choice_index: int, confidence: str, *, save_pending: bool = False,
+    ) -> None:
+        """Rebuild translated feedback without emitting a second grading event."""
+        if not 0 <= index < len(self._question_cards):
+            return
+        card = self._question_cards[index]
+        buttons = card._group.buttons() if hasattr(card, "_group") else []
+        if 0 <= choice_index < len(buttons):
+            if card._confidence is not None:
+                selected = card._confidence.findData(confidence)
+                card._confidence.setCurrentIndex(selected if selected >= 0 else 1)
+            with QtCore.QSignalBlocker(card):
+                buttons[choice_index].setChecked(True)
+            self._quiz_confidence[index] = card.confidence_level()
+            card.set_save_pending(save_pending)
 
     def set_due_review_count(self, count: int) -> None:
         count = max(0, int(count))

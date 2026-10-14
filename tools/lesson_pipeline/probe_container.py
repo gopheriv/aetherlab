@@ -1,6 +1,14 @@
 """Container-level sync probe: exact frame counts, PTS start/monotonicity/gaps,
 keyframe interval, stream params. Any deviation = real render sync defect."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import av

@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from aetherlab.core.language import normalize_language
+from aetherlab.core.lesson_messages import lesson_message
 from aetherlab.core.models import (
     PipelineError,
     PipelineResult,
@@ -991,6 +992,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history_panel = HistoryPanel()
         self.lesson_view = LessonView()
         self.lesson_worker: LessonWorker | None = None
+        self._pending_lesson_answers: dict = {}
 
         # ── Solve page: derivation | references ──
         solve_page = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -1161,7 +1163,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
         self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
+        self.lesson_view.study_pdf_requested.connect(self._open_study_pdf)
         self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
+        self.lesson_view.quiz_save_retry_requested.connect(self._retry_lesson_quiz_answer)
         self.lesson_view.review_due_clicked.connect(self._review_due_questions)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
@@ -1273,14 +1277,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         model = self._ollama_models[0] if self._ollama_models else ""
-        save_app_config(
-            {
-                "provider_preset": "ollama",
-                "model": model,
-                "base_url": OLLAMA_OPENAI_BASE_URL,
-                "api_key": "ollama",
-            }
-        )
+        try:
+            save_app_config(
+                {
+                    "provider_preset": "ollama",
+                    "model": model,
+                    "base_url": OLLAMA_OPENAI_BASE_URL,
+                    "api_key": "ollama",
+                }
+            )
+        except (OSError, ValueError):
+            self._report_settings_save_failure()
+            return
         self.settings = load_settings()
         self._refresh_empty_status()
         self.toast.show_message(
@@ -1364,12 +1372,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.topic_catalog.set_language(language)
         self.progress_overview.set_language(language)
         self.empty_view.set_language(language)
+        if getattr(self, "_last_lesson", None) is not None:
+            self._refresh_course_summary(self._last_lesson)
+        self._refresh_prebuilt_lesson_language(language)
+
+    def _refresh_prebuilt_lesson_language(self, language: str) -> None:
+        """Select packaged content in the header language without an AI request."""
+        from aetherlab.services.ent_lesson_catalog import (
+            ACCELERATED_MOTION_5MIN_ID,
+            ACCELERATED_MOTION_5MIN_VERSION,
+            is_prebuilt_ent_topic,
+        )
+
+        worker = self.lesson_worker
+        if worker and worker.isRunning():
+            if is_prebuilt_ent_topic(getattr(worker, "topic", "")):
+                self._pending_prebuilt_language = language
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        bundle = getattr(self, "_last_lesson", None)
+        route_known = is_prebuilt_ent_topic(getattr(self, "_last_lesson_topic", ""))
+        if (bundle is not None and (route_known or bundle.plan.model_name == ACCELERATED_MOTION_5MIN_VERSION)
+                and bundle.plan.language != language):
+            self.start_lesson(ACCELERATED_MOTION_5MIN_ID, language=language)
 
     def _manage_student_profiles(self) -> None:
         from aetherlab.services.course_mode import CourseProgressStore
         from aetherlab.ui.profile_dialog import _COPY, StudentProfileDialog
 
         language = self.command_bar.get_language()
+        previous_profile_id = self.active_student_profile.id
         dialog = None
         try:
             # Read before opening a modal dialog, so an inaccessible registry
@@ -1406,6 +1439,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.topic_catalog.refresh()
         self.progress_overview.refresh()
         if getattr(self, "_last_lesson", None) is not None:
+            if profile.id != previous_profile_id:
+                # Public lesson content can be shared; selected answers,
+                # confidence and completed gates belong to the learner.
+                self.lesson_view.set_lesson(self._last_lesson)
+                self.lesson_view.restart_for_student()
+                self._restore_pending_lesson_answers()
             self._refresh_course_summary(self._last_lesson)
         if quota_ready:
             self.statusBar().showMessage(profile.name)
@@ -1624,15 +1663,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_export_task("Converting video to GIF…", export_gif)
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = getattr(self, "_settings_save_draft", None)
+        if dialog is None:
+            dialog = SettingsDialog(self.settings, self)
         dialog.set_language(self.command_bar.get_language())
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             vals = dialog.get_settings()
 
             # Persist to the app config so the values survive restarts.
             from aetherlab.core.settings import load_settings, save_app_config
-            save_app_config(
-                {
+            try:
+                save_app_config({
                     "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
                     "llm_timeout_seconds": vals["llm_timeout_seconds"],
@@ -1655,8 +1696,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
                     "review_intervals_days": vals["review_intervals_days"],
-                }
-            )
+                })
+            except (OSError, ValueError):
+                self._settings_save_draft = dialog
+                self._report_settings_save_failure(reopen=True)
+                return
+            self._settings_save_draft = None
 
             # Re-resolve the just-saved config through the canonical precedence
             # chain. Direct replacement made a saved key appear active until
@@ -1667,7 +1712,7 @@ class MainWindow(QtWidgets.QMainWindow):
             from aetherlab.services.course_mode import CourseProgressStore
 
             self.course_progress = CourseProgressStore(
-                self.settings.data_dir / "course_progress.json",
+                self.active_student_profile.course_progress_path,
                 review_intervals_days=self.settings.review_intervals_days,
             )
             self.library_panel.set_settings(self.settings)
@@ -1680,6 +1725,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.settings.llm_model if self.settings.openai_api_key else "No API key"
             )
             self.statusBar().showMessage(f"Settings saved · {provider_note}")
+        else:
+            self._settings_save_draft = None
+
+    def _report_settings_save_failure(self, *, reopen: bool = False) -> None:
+        message, retry = {
+            "kk": ("Баптауларды сақтау мүмкін болмады. Баптаулар папкасына қолжетімділікті тексеріңіз.",
+                   "Енгізілген мәндер сақталды. Қайталау үшін баптауларды қайта ашыңыз."),
+            "ru": ("Не удалось сохранить настройки. Проверьте доступ к папке настроек.",
+                   "Введённые значения сохранены. Откройте настройки снова, чтобы повторить."),
+            "en": ("Could not save settings. Check access to the settings folder.",
+                   "Your entries are retained. Open Settings again to retry."),
+        }[normalize_language(self.command_bar.get_language(), "kk")]
+        if reopen:
+            message += " " + retry
+        self.statusBar().showMessage(message)
+        self.toast.show_message("warning", message)
 
     def _apply_reference_sources_settings(self, settings) -> None:
         """Apply a folder chosen from either the library or ENT practice UI."""
@@ -1714,6 +1775,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.toast.show_message("warning", "Cancelling lesson…")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        if self._pending_lesson_answers and not self._confirm_discard_pending_lesson_answers():
+            self._close_pending = False
+            event.ignore()
+            return
+        self._pending_lesson_answers.clear()
         probe = getattr(self, "_ollama_probe", None)
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
@@ -1742,7 +1808,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._close_pending = False
         super().closeEvent(event)
 
+    def _confirm_discard_pending_lesson_answers(self) -> bool:
+        language = self.command_bar.get_language()
+        title, message, discard_text, keep_text = {
+            "kk": ("Жауаптар әлі расталмады", "Кейбір жауаптардың сақталғаны расталмады. Барлық профильдердің расталмаған жауаптарын сақтамай жабу керек пе?", "Сақтамай жабу", "Қосымшада қалу"),
+            "ru": ("Сохранение ответов не подтверждено", "Для некоторых ответов сохранение не подтверждено. Закрыть приложение без сохранения этих ответов во всех профилях?", "Закрыть без сохранения", "Остаться в приложении"),
+            "en": ("Answer saving is unconfirmed", "Some answer saves could not be confirmed. Close without saving these answers in all profiles?", "Close without saving", "Stay in the app"),
+        }[language]
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setWindowTitle(title)
+        dialog.setText(message)
+        discard = dialog.addButton(discard_text, QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        keep = dialog.addButton(keep_text, QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(keep)
+        dialog.setEscapeButton(keep)
+        dialog.exec()
+        return dialog.clickedButton() is discard
+
     def _close_when_idle(self) -> None:
+        if not self._close_pending:
+            return
         threads = [
             getattr(self, "_ollama_probe", None),
             self.worker,
@@ -1771,7 +1856,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker and self.worker.isRunning():
             self.statusBar().showMessage("Finish or cancel the current run first.")
             return
-        if not self._try_consume_ai_help():
+        from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
+
+        if not is_prebuilt_ent_topic(topic) and not self._try_consume_ai_help():
             return
 
         self._last_lesson_topic = topic
@@ -1846,18 +1933,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress_overview.refresh()
 
     def _start_ent_topic_lesson(self, topic: str) -> None:
+        from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
+
         language = self.command_bar.get_language()
         normalized = str(topic or "").casefold().replace("_", " ").replace("-", " ")
-        if normalized == "constant acceleration":
+        if is_prebuilt_ent_topic(topic) or normalized == "constant acceleration":
             self.start_lesson(
-                "constant_acceleration", language=language,
+                "constant_acceleration_5min", language=language,
                 voiceover=self.command_bar.get_voiceover_enabled(),
             )
             return
         if "кинематик" in normalized or "kinematic" in normalized or "кинематика" in normalized:
-            # The initial curated lesson covers this specific kinematics unit.
+            # The prebuilt 5-minute lesson covers this specific kinematics unit.
             self.start_lesson(
-                "constant_acceleration", language=language,
+                "constant_acceleration_5min", language=language,
                 voiceover=self.command_bar.get_voiceover_enabled(),
             )
             return
@@ -1873,42 +1962,73 @@ class MainWindow(QtWidgets.QMainWindow):
         # Bound method (not a lambda) so a QThread finishing after the window
         # is destroyed cannot touch the deleted command bar.
         self.command_bar.set_busy(False)
+        pending = getattr(self, "_pending_prebuilt_language", "")
+        self._pending_prebuilt_language = ""
+        cancel = getattr(self.lesson_worker, "_cancel", None)
+        if pending and not (cancel is not None and cancel.is_set()):
+            self._refresh_prebuilt_lesson_language(self.command_bar.get_language())
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
-        self.statusBar().showMessage(f"Lesson · {message}")
+        language = getattr(getattr(self, "lesson_worker", None), "language", self.command_bar.get_language())
+        self.statusBar().showMessage(f"{lesson_message(language, 'lesson')} · {message}")
 
     def on_lesson_ready(self, bundle) -> None:
         self.command_bar.set_busy(False)
         self.stepper.set_cancellable(False)
+        previous = getattr(self, "_last_lesson", None)
+        previous_hash = getattr(getattr(previous, "plan", None), "prebuilt_content_hash", "")
+        # A translation is the same attempt. Only a validated shared content
+        # snapshot permits choice-index mapping; new lessons and explicit
+        # same-language restarts keep their normal fresh-question behaviour.
+        translated_answers = (
+            self.lesson_view.question_answer_state()
+            if previous_hash
+            and previous_hash == getattr(bundle.plan, "prebuilt_content_hash", "")
+            and previous.plan.language != bundle.plan.language
+            else {}
+        )
 
         # A cancelled lesson may have partial/no video — never dump the student
         # on a blank page with no explanation.
         if bundle.status == "cancelled":
-            self._last_lesson = bundle
             if bundle.video_path:
+                self._last_lesson = bundle
                 self.lesson_view.set_lesson(bundle)
+                self.lesson_view.set_audio_enabled(getattr(self, "_last_lesson_voiceover", True))
+                self._restore_pending_lesson_answers()
                 self._refresh_course_summary(bundle)
                 self.lesson_view.set_video(bundle.video_path)
                 self._workspace.setCurrentIndex(PAGE_LESSON)
                 self.toast.show_message(
                     "warning",
-                    "Lesson cancelled — showing the chapters that finished. "
-                    "Press Learn again to build the rest.",
+                    lesson_message(bundle.plan.language, "cancel_partial"),
                 )
             else:
-                self._workspace.setCurrentIndex(PAGE_LESSON if self._last_lesson else PAGE_EMPTY)
+                self._workspace.setCurrentIndex(PAGE_LESSON if getattr(self, "_last_lesson", None) else PAGE_EMPTY)
                 self.toast.show_message(
-                    "warning", "Lesson cancelled before any chapter finished.",
+                    "warning", lesson_message(bundle.plan.language, "cancel_empty"),
                 )
-            self.statusBar().showMessage("Lesson cancelled.")
+            self.statusBar().showMessage(lesson_message(bundle.plan.language, "stage_cancelled"))
             return
 
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
+        self.lesson_view.set_audio_enabled(getattr(self, "_last_lesson_voiceover", True))
+        for index, answer in translated_answers.items():
+            self.lesson_view.restore_question_answer(index, **answer)
+        self._restore_pending_lesson_answers()
+        if bundle.status == "package_error":
+            self.lesson_view.set_video("")
+            self._workspace.setCurrentIndex(PAGE_LESSON)
+            note = str(bundle.package_error_message)
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
         self._refresh_course_summary(bundle)
-        if bundle.video_path:
-            self.lesson_view.set_video(bundle.video_path)
+        # Always refresh the player: a lesson without video must clear a stale
+        # clip from the previous lesson, not keep playing it.
+        self.lesson_view.set_video(bundle.video_path or "")
         self._workspace.setCurrentIndex(PAGE_LESSON)
         if bundle.status == "offline_practice_available":
             note = bundle.plan.chapters[0].goal if bundle.plan.chapters else "Offline practice is available."
@@ -1920,122 +2040,213 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(note)
             self.toast.show_message("warning", note)
             return
-        note = bundle.status
-        self.statusBar().showMessage(
-            f"Lesson ready · {len(bundle.plan.chapters)} chapters · {note}"
-        )
-        self.toast.show_message(
-            "success",
-            f"Lesson '{bundle.plan.title}' built ({note}). "
-            "Watch it, read the transcript, or try the questions.",
-        )
+        if bundle.status == "error":
+            missing = getattr(bundle, "missing_media", None)
+            invalid = getattr(bundle, "invalid_media", None)
+            media_copy = {
+                "kk": ("Сабақ файлдары жоқ: {files}.", "Сабақ файлдарын растау мүмкін болмады: {files}.", "Сабақ медиасын жүктеу мүмкін болмады.", "Мәтін, тапсырмалар және дереккөздер қолжетімді."),
+                "ru": ("Отсутствуют файлы урока: {files}.", "Не удалось подтвердить файлы урока: {files}.", "Не удалось загрузить медиа урока.", "Текст, задания и источники доступны."),
+                "en": ("Lesson files are missing: {files}.", "Could not verify lesson files: {files}.", "Could not load lesson media.", "Transcript, questions and references remain available."),
+            }[normalize_language(self.command_bar.get_language(), "kk")]
+            parts = []
+            if missing:
+                parts.append(media_copy[0].format(files=", ".join(missing)))
+            if invalid:
+                parts.append(media_copy[1].format(files=", ".join(invalid)))
+            note = " ".join((parts or [media_copy[2]]) + [media_copy[3]])
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
+        language = normalize_language(getattr(bundle.plan, "language", "en"))
+        ready, watch, text_ready, video_pending = {
+            "kk": ("Сабақ дайын · {count} бөлім", "Бейнені көріңіз, мәтінді оқыңыз немесе тапсырмаларды орындаңыз.", "Сабақ мәтіні дайын · {count} бөлім", "Бейне әлі дайын емес. Мәтін мен тапсырмалар қолжетімді."),
+            "ru": ("Урок готов · {count} разделов", "Посмотрите видео, прочитайте текст или решите задания.", "Текст урока готов · {count} разделов", "Видео ещё не готово. Текст и задания доступны."),
+            "en": ("Lesson ready · {count} chapters", "Watch the video, read the transcript, or try the questions.", "Lesson text ready · {count} chapters", "The video is not ready yet. Transcript and questions are available."),
+        }[language]
+        video_ready = bundle.status == "assembled" and bool(bundle.video_path)
+        note = (ready if video_ready else text_ready).format(count=len(bundle.plan.chapters))
+        self.statusBar().showMessage(note)
+        self.toast.show_message("success" if video_ready else "info", f"{note}. {watch if video_ready else video_pending}")
 
     def _refresh_course_summary(self, bundle) -> None:
         try:
-            summary = self.course_progress.summary(bundle.plan)
-            self.lesson_view.set_course_summary(
-                f"{summary.message} Next: {summary.next_topic}"
-            )
+            summary = self.course_progress.summary(bundle.plan, language=self.command_bar.get_language())
+            self.lesson_view.set_course_summary(summary.message)
             self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
         except Exception:  # noqa: BLE001
             self.lesson_view.set_course_summary(
-                "Course progress is unavailable for this lesson."
+                lesson_message(self.command_bar.get_language(), "course_unavailable")
             )
 
     def _record_lesson_quiz_answer(
         self, question_index: int, correct: bool, choice: str
     ) -> None:
         bundle = getattr(self, "_last_lesson", None)
-        if not bundle:
+        if not bundle or not 0 <= int(question_index) < len(bundle.plan.questions):
             return
+        from uuid import uuid4
+
+        key = self._lesson_answer_draft_key(bundle.plan, question_index)
+        draft = self._pending_lesson_answers.get(key)
+        if draft is None:
+            from datetime import datetime, timezone
+
+            question = bundle.plan.questions[int(question_index)]
+            draft = {
+                "plan": bundle.plan, "correct": bool(correct), "choice": str(choice),
+                "choice_index": question.choices.index(str(choice)) if str(choice) in question.choices else -1,
+                "confidence": self.lesson_view.confidence_for_question(question_index),
+                "operation_id": uuid4().hex,
+                "answered_at": datetime.now(timezone.utc),
+            }
+            self._pending_lesson_answers[key] = draft
         try:
             summary = self.course_progress.record_quiz_answer(
-                bundle.plan, int(question_index), bool(correct), str(choice),
-                confidence_level=self.lesson_view.confidence_for_question(question_index),
+                draft["plan"], int(question_index), draft["correct"], draft["choice"],
+                confidence_level=draft["confidence"], operation_id=draft["operation_id"],
+                now=draft["answered_at"],
             )
-        except Exception as exc:  # noqa: BLE001
-            self.statusBar().showMessage(f"Could not save course progress: {exc}")
+        except Exception:  # noqa: BLE001 - preserve the draft for an explicit retry
+            self.lesson_view.set_question_save_pending(int(question_index), True)
+            self.statusBar().showMessage(self.lesson_view._question_cards[int(question_index)]._save_status.text())
             return
-        self.lesson_view.set_course_summary(
-            f"{summary.message} Next: {summary.next_topic}"
-        )
-        self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
+        self._pending_lesson_answers.pop(key, None)
+        self.lesson_view.set_question_save_pending(int(question_index), False)
+        self._refresh_course_summary(bundle)
         self.statusBar().showMessage(
-            f"Course progress saved · {summary.correct}/{summary.attempts}"
+            lesson_message(self.command_bar.get_language(), "course_saved", correct=summary.correct, attempts=summary.attempts)
         )
 
+    def _lesson_answer_draft_key(self, plan, question_index: int) -> tuple:
+        import hashlib
+        import json
+
+        identity = getattr(plan, "prebuilt_content_hash", "") or hashlib.sha256(
+            json.dumps(plan.to_json(), ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return self.active_student_profile.id, identity, int(question_index)
+
+    def _retry_lesson_quiz_answer(self, question_index: int) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if bundle is None:
+            return
+        draft = self._pending_lesson_answers.get(self._lesson_answer_draft_key(bundle.plan, question_index))
+        if draft:
+            self._record_lesson_quiz_answer(question_index, draft["correct"], draft["choice"])
+
+    def _restore_pending_lesson_answers(self) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if bundle is None:
+            return
+        for index, _question in enumerate(bundle.plan.questions):
+            draft = self._pending_lesson_answers.get(self._lesson_answer_draft_key(bundle.plan, index))
+            if draft:
+                self.lesson_view.restore_pending_question(index, draft["choice_index"], draft["confidence"])
+
     def _review_due_questions(self) -> None:
+        try:
+            self._run_due_question_reviews()
+        except (OSError, ValueError):
+            message = {
+                "kk": "Қайталау тарихын оқу немесе сақтау мүмкін болмады. Тарихқа қолжетімділікті тексеріп, қайта көріңіз.",
+                "ru": "Не удалось прочитать или сохранить историю повторения. Проверьте доступ к истории и попробуйте снова.",
+                "en": "Review history could not be read or saved. Check access to the history and retry.",
+            }[self.command_bar.get_language()]
+            self.statusBar().showMessage(message)
+            self.lesson_view.set_course_summary(message)
+            self.toast.show_message("warning", message)
+
+    def _run_due_question_reviews(self) -> None:
         """Run due retrieval prompts, objectively scoring multiple-choice items."""
         from aetherlab.ui.widgets import _LessonCheckDialog
 
         reviews = self.course_progress.due_reviews(limit=20)
         if not reviews:
             self.lesson_view.set_due_review_count(0)
-            self.statusBar().showMessage("No review questions are due right now.")
+            self.statusBar().showMessage(lesson_message(self.command_bar.get_language(), "review_none"))
             return
+        saved_count = 0
+        stale_review = False
+        language = self.command_bar.get_language()
         for item in reviews:
             choices = item.get("choices")
             answer = str(item.get("answer", "")).strip()
             if isinstance(choices, list) and choices and answer:
                 question = {
-                    "q": str(item.get("prompt") or "Review this concept"),
+                    "q": str(item.get("prompt") or lesson_message(language, "review_prompt")),
                     "choices": choices,
                     "answer": answer,
                     "why": str(item.get("why", "")),
                 }
-                dialog = _LessonCheckDialog(question, "spaced_review", self)
+                dialog = _LessonCheckDialog(question, "spaced_review", self,
+                                            language=self.command_bar.get_language())
                 if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                     break
                 if not dialog.answer_submitted or dialog.answer_correct is None:
                     break
                 correct = dialog.answer_correct
-                self.course_progress.record_review_result(
+                interval = self.course_progress.record_review_result(
                     item, correct, correct=correct
                 )
+                if interval <= 0:
+                    stale_review = True
+                    break
+                saved_count += 1
                 continue
 
             # Open responses cannot be reliably auto-graded. Keep them separate
             # as self-reported recall rather than counting them as objective accuracy.
             ask = QtWidgets.QMessageBox(self)
-            ask.setWindowTitle("Spaced review")
-            ask.setText(str(item.get("prompt") or "Review this concept"))
+            ask.setWindowTitle(lesson_message(language, "review_title"))
+            ask.setText(str(item.get("prompt") or lesson_message(language, "review_prompt")))
             ask.setInformativeText(
-                f"{item.get('lesson_title', 'Lesson')} · {item.get('concept', '')}\n\n"
-                "Try to recall the answer before revealing it."
+                f"{item.get('lesson_title') or lesson_message(language, 'lesson')} · {item.get('concept', '')}\n\n"
+                + lesson_message(language, "review_hint")
             )
-            reveal = ask.addButton("Reveal answer", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-            ask.addButton("Finish later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            reveal = ask.addButton(lesson_message(language, "review_reveal"), QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            later = ask.addButton(lesson_message(language, "review_later"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            ask.setDefaultButton(later)
+            ask.setEscapeButton(later)
             ask.exec()
             if ask.clickedButton() is not reveal:
                 break
 
             answer_box = QtWidgets.QMessageBox(self)
-            answer_box.setWindowTitle("Check your recall")
+            answer_box.setWindowTitle(lesson_message(language, "review_self_title"))
             answer_box.setText(
-                str(item.get("answer") or "Open response: compare with your lesson notes.")
+                str(item.get("answer") or lesson_message(language, "review_open"))
             )
             explanation = str(item.get("why", "")).strip()
             answer_box.setInformativeText(explanation or str(item.get("concept", "")))
             recalled = answer_box.addButton(
-                "I recalled it", QtWidgets.QMessageBox.ButtonRole.YesRole
+                lesson_message(language, "review_recalled"), QtWidgets.QMessageBox.ButtonRole.YesRole
             )
             missed = answer_box.addButton(
-                "Needs another review", QtWidgets.QMessageBox.ButtonRole.NoRole
+                lesson_message(language, "review_missed"), QtWidgets.QMessageBox.ButtonRole.NoRole
             )
-            skip = answer_box.addButton("Stop", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            skip = answer_box.addButton(lesson_message(language, "review_stop"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            answer_box.setDefaultButton(skip)
+            answer_box.setEscapeButton(skip)
             answer_box.exec()
             selected = answer_box.clickedButton()
             if selected is skip or selected not in {recalled, missed}:
                 break
-            self.course_progress.record_review_result(item, selected is recalled)
+            interval = self.course_progress.record_review_result(item, selected is recalled)
+            if interval <= 0:
+                stale_review = True
+                break
+            saved_count += 1
 
         count = self.course_progress.due_review_count()
         self.lesson_view.set_due_review_count(count)
         if getattr(self, "_last_lesson", None):
             self._refresh_course_summary(self._last_lesson)
-        self.statusBar().showMessage(
-            f"Review saved · {count} question{'s' if count != 1 else ''} due"
-        )
+        message = lesson_message(language, "review_changed") if stale_review else {
+            "kk": f"Сақталған қайталау жауаптары: {saved_count}. Қайталау керек сұрақтар: {count}." if saved_count else "Қайталау жаңа жауаптарсыз аяқталды.",
+            "ru": f"Сохранено ответов повторения: {saved_count}. Осталось вопросов: {count}." if saved_count else "Повторение завершено без новых ответов.",
+            "en": f"Review responses saved: {saved_count}. Questions still due: {count}." if saved_count else "Review ended without new responses.",
+        }[self.command_bar.get_language()]
+        self.statusBar().showMessage(message)
 
     def _export_study_guide(self) -> None:
         bundle = getattr(self, "_last_lesson", None)
@@ -2051,6 +2262,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         export_lesson_study_guide(bundle.plan, Path(path))
         self.statusBar().showMessage(f"Study guide exported: {path}")
+
+    def _open_study_pdf(self) -> None:
+        from aetherlab.ui.lesson_view import _COPY
+
+        language = normalize_language(self.command_bar.get_language(), "kk")
+        copy = _COPY[language]
+        bundle = getattr(self, "_last_lesson", None)
+        pdf = Path(str(getattr(bundle, "pdf_path", "") or "")) if bundle else Path()
+        if not pdf.is_file():
+            self.statusBar().showMessage(copy["pdf_missing"])
+            return
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf))):
+            self.statusBar().showMessage(copy["pdf_open_failed"])
+            return
+        self.statusBar().showMessage(copy["pdf_dispatched"].format(name=pdf.name))
 
     def _export_lesson_bundle(self) -> None:
         bundle = getattr(self, "_last_lesson", None)

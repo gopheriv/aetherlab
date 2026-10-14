@@ -156,7 +156,7 @@ def test_topic_search_filter_and_lesson_route_work_together(tmp_path) -> None:
     view.learn_topic_requested.connect(destinations.append)
     card = view.rows.itemAt(0).widget()
     next(button for button in card.findChildren(QtWidgets.QPushButton) if button.text() == "Study").click()
-    assert destinations == ["constant_acceleration"]
+    assert destinations == ["constant_acceleration_5min"]
     view.filter.setCurrentIndex(view.filter.findData("new"))
     assert view.rows.count() == 0
     view.search.clear()

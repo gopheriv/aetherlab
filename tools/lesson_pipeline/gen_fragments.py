@@ -7,6 +7,14 @@
   calibrated chars/sec; writes fragments.json.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 import re
 from pathlib import Path

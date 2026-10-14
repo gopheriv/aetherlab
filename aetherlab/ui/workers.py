@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import traceback
 
 from aetherlab.core.cache import SessionCache
+from aetherlab.core.lesson_messages import lesson_message
 from aetherlab.core.models import (
     PipelineError,
     PipelineResult,
@@ -384,18 +386,22 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
     def run(self) -> None:
         try:
             try:
-                ingestor = LibraryIngestor(self.settings)
-                pending_sources = ingestor.pending_files()
-                if pending_sources:
-                    self.progress.emit("Indexing textbook references", 0, len(pending_sources))
+                from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
 
-                    def report_ingest(name: str, done: int, total: int, detail: str) -> None:
-                        self.progress.emit(f"Indexing {name} · {detail}", done + 1, total)
+                if not is_prebuilt_ent_topic(self.topic):
+                    ingestor = LibraryIngestor(self.settings)
+                    pending_sources = ingestor.pending_files()
+                    if pending_sources:
+                        self.progress.emit(lesson_message(self.language, "stage_index"), 0, len(pending_sources))
 
-                    ingestor.ingest(
-                        progress=report_ingest,
-                        should_cancel=self._cancel.is_set,
-                    )
+                        def report_ingest(name: str, done: int, total: int, detail: str) -> None:
+                            logging.getLogger(__name__).debug("Preparing reference %s: %s", name, detail)
+                            self.progress.emit(lesson_message(self.language, "stage_index_file", name=name), done + 1, total)
+
+                        ingestor.ingest(
+                            progress=report_ingest,
+                            should_cancel=self._cancel.is_set,
+                        )
             except Exception:  # noqa: BLE001 - lessons continue if local RAG is unavailable
                 pass
 

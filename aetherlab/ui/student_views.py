@@ -387,7 +387,7 @@ class StudentDashboard(QtWidgets.QWidget):
         self.hero_learn_button = _button("")
         self.hero_learn_button.clicked.connect(
             lambda: self.learn_topic_requested.emit(
-                "constant_acceleration"
+                "constant_acceleration_5min"
                 if self._hero_topic_id == "kinematics"
                 else self.hero_topic.text()
             )
@@ -1068,7 +1068,7 @@ class TopicCatalogView(QtWidgets.QWidget):
             box.addWidget(bar)
             actions = QtWidgets.QHBoxLayout()
             learn = _button(text["learn"])
-            target = "constant_acceleration" if topic_id == "kinematics" else name
+            target = "constant_acceleration_5min" if topic_id == "kinematics" else name
             learn.clicked.connect(lambda _checked=False, value=target: self.learn_topic_requested.emit(value))
             drill = _button(text["drill"], True)
             drill.clicked.connect(lambda _checked=False, value=topic_id: self.practice_topic_requested.emit(value))

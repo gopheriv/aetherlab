@@ -4,6 +4,14 @@ Reports mean/max gray values in small regions where B2/B5 stamps, B7 bridge
 check, B1 plus must be visible, plus dark/bright controls. Presence = max>>30.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import numpy as np

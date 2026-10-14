@@ -1,4 +1,12 @@
 """One-off: which BlockB2 event exceeds its literal run_time?"""
+
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
 import sys
 from pathlib import Path
 

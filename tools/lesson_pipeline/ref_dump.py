@@ -1,5 +1,13 @@
 """Dump the key reference pages to text files for Stage D term extraction."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import fitz

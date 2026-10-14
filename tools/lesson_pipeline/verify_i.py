@@ -10,6 +10,14 @@ Checks:
     belongs to the lesson's closed number set (no leaked/rogue figures).
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 import re
 from pathlib import Path

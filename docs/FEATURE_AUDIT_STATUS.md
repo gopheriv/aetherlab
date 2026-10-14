@@ -1,9 +1,53 @@
-# PhysLab feature audit — 12 October 2026
+# PhysLab feature audit — 14 October 2026
 
 The active objective remains: inventory every feature, derive user stories and
 expected behaviour from code, maintain one canonical spreadsheet, test all
 stories, document errors, fix logistical/UX defects, and retest the behaviours.
 The full objective is not yet proven complete.
+
+## Latest verified state: translation answer lock
+
+The catalog contains **252 stories** and **219 logged bugs**. BUG-218 was
+reproduced through the native UI: changing only the lesson language unlocked a
+graded answer and allowed the same answer to count twice. Six locale/correctness
+baseline cases failed. The fix retains the displayed attempt's choice,
+confidence, translated feedback and lock only for a shared validated content
+snapshot; a genuinely new content snapshot and explicit same-language restart
+remain fresh attempts. Profile changes remain isolated.
+
+The focused UI/storage/route group completed **67 passed**, exit 0, in 339.85
+seconds (`tmp/language-answer-postfix-20261014.log`). The later two fresh-attempt
+boundary tests are included in the new full run, not retroactively counted in
+that focused result. Native post-fix acceptance also passed KK → RU → EN with
+result 1/1, selected locked answer and localized feedback throughout. Progress
+bytes were identical at all observations in
+`tmp/native-translation-postfix-20261014.json`. The owned window was closed;
+other app windows and user data remain intact. This does not prove human
+listening, a complete watch, every failure path or camera acceptance.
+
+BUG-219 records the missing tracker source for the new shared locale dictionary.
+Adding its actual module to F247 makes **91/91 current surfaces** covered.
+
+The preceding full regression completed **625 passed**, exit 0, with one upstream
+warning; a new acceptance tool changed during that run. The preceding full
+catalog completed **250/252**, exit 1: F164 omitted that source declaration;
+F251 returned a blank AssertionError. A direct isolated F251 retry passed;
+the original failure remains recorded without an invented diagnosis.
+
+The new source-bound suite completed **633 passed**, exit 0, one upstream
+warning, in 1103.61 seconds with no recorded source/resource changes during
+the run (`tmp/translation-lock-final-full-20261014-evidence.json`). This includes
+the two added fresh-attempt boundaries. It does not erase the separate F133
+source-audit failure or establish complete story acceptance.
+`tmp/catalog-translation-lock-final-20261014.log` is still active. The canonical workbook now
+shows **84 FIXED / 159 PASS / 7 PARTIAL / 2 REGRESSED** scoped software checks;
+the last failed F251 catalog check is retained while its new retest runs.
+F133 now also retains the newly detected BUG-193 encoding regression in the
+added acceptance tool: two text subprocess captures omit UTF-8/error handling.
+That tool is preserved during the current frozen-source runs and needs a
+targeted repair/retest afterward.
+Complete behaviour acceptance is **250 PARTIAL / 2 FAIL**, not a global pass.
+All required remaining acceptance stays open and the overall goal is active.
 
 ## Canonical tracking
 
@@ -13,11 +57,12 @@ generated mirror; `build_feature_tracker.py` owns the catalog and consumes
 workbook. Artifact tooling may apply the exact generated matrix while preserving
 formatting; the integrity gate compares all rows and columns after export.
 
-The catalog now contains 250 features/stories, including F232–F250 for topic
+The catalog now contains 252 features/stories, including F232–F250 for topic
 exercise volume, partial practice, local profiles, profile editing, daily AI
 allowance, weekly mocks, resume, optional camera hints, teacher review, local and
 shared school rankings, server CLI, companions, confidence/search, localization,
 startup quality persistence, media validation and acceleration follow-up practice.
+F251/F252 cover the prepared five-minute route and attached lesson PDF/review provenance.
 
 The worksheet adds the check time in UTC, verification scope, behaviour status
 and remaining verification. Native filters and frozen ID/category/feature
@@ -781,3 +826,554 @@ profile/goal flows, broad review/PDF layouts, actual storage interruption and
 crash recovery, camera permissions/recovery, deployed school workflows and a
 complete narrated cloud lesson through playback. Teacher and language-editor
 sign-off is still pending. Automated passes do not close those behaviours.
+
+## Profile, study-plan and newly added lesson actions (2026-10-13)
+
+This goal cycle made progress: native profile/goals acceptance, eight
+localized/status/calendar repairs (BUG-176–183), two new catalog stories,
+and a complete regression of the current source version. The full objective
+remains active. Software passes do not establish complete user acceptance.
+
+### Profile and study-plan repairs
+
+- **BUG-176 / F235:** Kazakh username labels/errors and accessible profile/photo
+  hints now follow kk/ru/en and preserve the learner's name.
+- **BUG-177 / F227:** weekly target suffix now follows the selected language;
+  language rebuilding retains the draft value.
+- **BUG-178 / F227:** a blank optional exam date browses today's month without
+  assigning a date. A selected date browses its saved month.
+- **BUG-179 / F227:** scoped light calendar colors fix the unreadable Windows
+  dates and selection. The native symptom and offscreen palette checks are
+  distinct evidence: the palette baseline only failed selection color.
+- **BUG-180 / F227:** actual Windows file refusal exposed an old successful
+  footer below the error. Both notices now report failure; entered goals remain
+  editable, old file bytes remain intact and retry recovers the success state.
+- **BUG-181 / F227:** the calendar uses the selected kk_KZ/ru_RU/en_US locale
+  instead of the operating-system language, including after language rebuilding.
+
+Earlier baseline logs and test-authoring qualifications are recorded beside
+the defects in `ERRORS_FOUND.md`. The final profile/recovery/calendar focused
+group passed **37**. Intermediate full runs passed 428, 434, 437 and 440 on
+their respective versions; they do not cover subsequent new lesson changes.
+
+### Native acceptance and source-version boundaries
+
+Computer Use operated only the owned `PhysLab profile audit 20261013` window
+with synthetic data in `tmp/feature-native-profile-20261013`. The user's
+original PhysLab windows and other work were preserved.
+
+The native journey created **Audit Alpha**, username `audit.alpha`, class
+`11 A`, synthetic school `QA-SCHOOL`. Cancelling the native photo picker kept
+the draft; selecting a generated blue/green PNG copied it into app-owned avatar
+storage. Editing the first name and pressing Cancel preserved exact registry
+and avatar hashes. Profile activation updated the header identity and picture.
+
+Russian goal entry saved 45/50, 80/week, Monday and no exam date. An owned
+PowerShell process opened the existing isolated progress file with
+`FileShare.None`. Saving draft 90 was actually refused, preserving old 80
+bytes. Retry after releasing the handle saved 90. This found BUG-180.
+
+On the final profile/calendar build, native Kazakh calendar showed a readable
+**October 2026** with Kazakh month/day labels. Clicking outside left the date
+blank. A second actual lock refused draft 100, retained old 90 and displayed
+the localized failure in both notices. The before/after-refusal SHA256 was
+`81c2260cc2ff155841e304e05c4bec3e88a67155254e13a94c7cee45e8becdcd`.
+The holder's exact session ended with exit 0. Retry saved 100 without retyping;
+the dashboard then showed 45/50 and 0/100.
+
+Switching to default **Audit learner** showed no target/week goal/schedule
+and default initials; Alpha's progress hash stayed unchanged. Switching back
+restored Alpha's identity/avatar/targets. Final normal close and relaunch
+restored Alpha, 45/50, 100/week and the Monday reminder. Owned native launches
+closed normally. No exam or camera capture was started in this journey.
+
+`tmp/native-profile-goal-acceptance-20261013.json` stores observed actions,
+physical-refusal evidence, persisted values, source hashes and boundaries.
+Creation/photo/cancel and initial ru entry used earlier builds before the
+calendar/locale/footer repairs. Final hashes support the later calendar,
+physical refusal/retry, switch and restart; they are not a claim that every
+earlier path was rerun on final code. Native final layout inspection was kk;
+ru/en have automated coverage and initial ru entry, not full final acceptance.
+
+Computer Use returned stale element indexes, transient modal geometry and
+screenshots of occluding foreground apps. Reobservation of the owned target
+recovered them. These tool failures are not product defects. One incidental
+opt-in checkbox toggle was not followed by exam/camera start; the final test
+build's checkbox remained off.
+
+### Concurrent lesson additions and PDF repairs
+
+The current worktree gained a prebuilt five-minute v2 lesson, three-language
+media/PDF and new lesson-view actions during the cycle. These changes were
+preserved and inspected. **F251** tracks the prebuilt route, eight chapters,
+five fixed-key questions, existing media resolution, missing-media error
+bundle and separate v1/v2 progress. **F252** tracks the attached-PDF action,
+review badge and export inclusion. Both have concrete steps, expected/failure
+behaviour and implementation references in the same canonical workbook.
+
+Inspection found **BUG-182:** PDF dispatch ignored `openUrl(False)` and always
+said opened. The action now reports refusal or accepted dispatch distinctly.
+Accepted dispatch does not establish that the external viewer rendered a PDF.
+**BUG-183:** its statuses and accessible name stayed English in kk/ru. Visible
+text, accessibility and missing/refused/accepted messages now follow the UI
+language. User lesson changes remain intact.
+
+The initial PDF regression had 10 failures/2 passes; six dispatch cases failed
+first on a slash-sensitive Windows path comparison. That test-authoring error
+was corrected to compare Path objects. The baseline therefore did not prove
+those six outcome assertions. Ignored-return evidence came from source
+inspection; the other four baseline failures covered localization/accessibility.
+The corrected combined profile/lesson/PDF group passed **39** in
+`tmp/profile-lesson-focused2-20261013.log`. Opener results are injected and URL
+fixtures are deliberately not real documents; native viewer rendering remains
+unverified. New lesson tests also check ready/error bundles, measured chapter
+offsets, fixed keys, shared narration, PDF/subtitle ZIP inclusion and offscreen
+quiz progress; they do not certify full media quality or cloud origin.
+
+### Final current-source checks and canonical tracker
+
+The final complete run passed **461 tests**, one upstream ChromaDB warning,
+exit 0, **173.70 seconds**, in
+`tmp/current-profile-lesson-full-20261013.log`. Exact before/after hashes of
+all app and test Python sources are retained in
+`tmp/current-profile-lesson-full-evidence-20261013.json`; no source changed
+during the run, and the final readback confirmed those hashes still matched.
+This hash boundary covers Python sources, not every external media resource.
+
+Seven catalog stories F227/F230/F234/F235/F237/F251/F252 passed in
+`tmp/profile-lesson-final-stories-20261013.log`, serially merged without losing
+unrelated dates, live-cloud evidence or earlier native observations.
+
+The same canonical XLSX now contains **252 stories**, **90 FIXED / 162 PASS
+scoped software checks**, and **252 PARTIAL full user behaviours**. All
+**183 numbered bugs** are linked. CSV remains a generated mirror. Artifact
+Tool preserved Features/Summary, 21 columns, typed UTC check dates, typed
+summary date and freeze D2; the existing table was extended to **A1:U253**.
+Read-only export inspection and all-row integrity passed. The formula-error
+scan found no matching cells. Changed profile/goal and new-lesson story,
+expectation/scope ranges were rendered and inspected.
+
+The first surface gate reported profile localization uncovered because the
+rewritten row used kk/ru/en and the heuristic matches full language names.
+Restoring explicit Kazakh/Russian/English in that row resolved the diagnostic;
+the gate now reports **90/90** surfaces. This is a lexical coverage guard, not
+proof that all user journeys work. Ruff F/I, compileall and focused CRLF-aware
+diff checks passed.
+
+### Remaining acceptance
+
+Next work includes native full v2 playback/seek/quiz/PDF and restart in every
+language; resource packaging/hash validation and missing/corrupt-content
+recovery; PDF opener refusal/inaccessible-file recovery and ZIP metadata;
+all student-pane/profile isolation; physical registry/avatar/result failures
+and crash recovery; remaining locale/viewport/keyboard/accessibility journeys;
+camera permissions/hardware recovery; deployed school workflows; and verified
+full narrated cloud delivery. Teacher/language-editor sign-off remains pending.
+No new lesson or camera behaviour was marked fully accepted from automated
+passes alone. The goal remains active.
+
+## Prebuilt lesson portability and file identity (2026-10-13)
+
+This goal turn made progress: four reproduced export/package defects were
+fixed, actual ZIP structure and package identity were checked, the full
+current-source regression completed, and the same workbook was updated.
+Native lesson playback remains unverified; the goal remains active.
+
+### Repairs
+
+- **BUG-184 / F166:** ZIP metadata advertised optional assets that were not
+  included, including absent/empty PDF and subtitles. References now derive
+  from the actual selected PDF/SRT/VTT; unavailable optional assets are null.
+  HTML PDF links agree with the entries.
+- **BUG-185 / F251:** prebuilt bundles had no rendered chapter indexes.
+  ZIP metadata therefore marked all eight chapters unrendered, lost their
+  measured offsets and disabled every HTML seek button. Explicit indexes
+  now preserve the eight starts when a video is available.
+- **BUG-186 / F166:** page and subtitle track were always marked English.
+  Metadata, HTML lang and track language/name now match kk/ru/en. This fixes
+  language identification; it does not claim that every exported UI label
+  has been translated.
+- **BUG-187 / F251:** an existing nonempty file was accepted without checking
+  its recorded hash or whether it was inside the lesson package. Streaming
+  SHA256 now compares the actual file with the manifest, and resolved paths
+  must remain in the package. Replacement video/SRT/PDF, missing hash,
+  outside-package path and unavailable reads are refused. The bundle retains
+  the plan, classifies missing versus unverified files and gives localized
+  guidance. An unavailable video is cleared from the player.
+
+### Evidence and qualifications
+
+`tests/test_lesson_share_acceptance.py` physically opens exported ZIPs and
+compares asset references with included entries, optional PDF links, all eight
+chapter offsets/buttons and kk/ru/en page/track metadata. Its small video/PDF
+fixtures establish structure rather than valid audiovisual/PDF contents.
+The prebuilt export case uses actual existing lesson assets.
+
+The first ZIP baseline hit sandbox temporary-directory access/cleanup errors;
+it is an environment failure, not the product baseline. The permitted retry
+reproduced three product failures in
+`tmp/share-baseline-permitted-20261013.log`. The identity baseline reproduced
+five failures in `tmp/media-hash-baseline-20261013.log`.
+
+`tests/test_prebuilt_media_integrity.py` uses isolated synthetic packages to
+verify replacements, absent hash, outside path and simulated read refusal.
+It checks localized missing/unverified notices and clearing of the old video.
+Existing real ready-bundle checks also verify the nine packaged file hashes.
+Matching a manifest does not establish file decodability, cloud origin,
+physics correctness, teacher approval or language/audio quality.
+
+Final focused group: **31 passed**, exit 0, in
+`tmp/prebuilt-integrity-focused-final-20261013.log`.
+Final complete regression: **471 passed**, one upstream ChromaDB warning,
+exit 0, **234.45 seconds**, in `tmp/prebuilt-share-full-20261013.log`.
+Exact before/after app/test Python hashes in
+`tmp/prebuilt-share-full-evidence-20261013.json` showed no changes during the
+run. Export readback confirmed those hashes still matched at the final gate;
+this source boundary does not hash every external resource during the run.
+
+Five catalog checks F166/F229/F247/F251/F252 passed in
+`tmp/prebuilt-share-final-stories-20261013.log` and were serially merged.
+Unrelated dates, previous native observations and live-cloud evidence remain
+intact. F251 explicitly runs all three replacement-media cases, using the
+fixture adapter without treating parametrized tests as zero-argument checks.
+
+### Native attempt: no acceptance claim
+
+A dedicated owned `PhysLab lesson audit 20261013` launch used isolated data
+and empty provider keys. The Windows tool returned the intended window but
+activation/state capture reported `no monitor found for window`. Fresh
+enumeration/rehydration and a capture retry failed with the same message.
+There was no displayed LockApp window; a locked desktop was not assumed.
+
+The exact exec session was polled and remained live. Permitted process
+inspection confirmed the owned Python command was responding. Its command
+identity was revalidated before targeted cleanup. Only that process was
+terminated; the session then ended with exit 1. This was deliberate cleanup,
+not normal app closure, a product failure, a successful lesson journey or
+a reason to relaunch blindly. User applications were preserved. No lesson
+control, native PDF or ZIP picker, camera/auth/privacy action occurred.
+
+`tmp/native-lesson-attempt-20261013.json` records the tool error, handle,
+process identity and the absence of native acceptance. Relevant result rows
+retain an unsuccessful attempt record without creating confirmed evidence.
+The complete playback/PDF/portable-browser path stays open.
+
+### Canonical workbook and remaining work
+
+The same XLSX now has **252 stories**, **91 FIXED / 161 PASS scoped software
+checks**, **252 PARTIAL full user behaviours**, and **187 linked numbered
+bugs**. The generated CSV matches it. Artifact Tool preserved the two tabs,
+21 columns, typed check/summary dates, freeze D2 and table **A1:U253**.
+Changed export/package expectation, story and evidence ranges were rendered
+and visually reviewed. Formula-error scan found no matching cells.
+All-row integrity and lexical surface checks passed (**90/90** surfaces).
+Ruff F/I, compileall and focused CRLF-aware diff checks passed. These guards
+do not replace full user-story acceptance.
+
+Next acceptance includes native v2 playback/seek/quiz/PDF and restart in all
+languages, extracted ZIP/browser playback and optional-asset recovery,
+missing/corrupt-manifest/cache recovery, packaged runtime/resources, complete
+media visual/audio review and verified full cloud delivery. Broad profile,
+camera, school-service and remaining desktop journeys also remain open.
+Teacher/editor sign-off is pending. The complete original goal is active.
+
+## Prepared lesson content recovery and catalog isolation (2026-10-13)
+
+This goal turn made progress. BUG-188–192 are logged and linked to the existing
+stories F251 and F215; the full objective remains active.
+
+### Changes and evidence
+
+- Missing, unreadable, malformed and incomplete explicit manifests now produce
+  a localized `package_error`. Stale video is cleared, no AI request or course
+  progress refresh occurs, and restoring the file allows retry.
+- Every request reads a fresh validated manifest. Caller mutation, path changes
+  and a warmed cache cannot serve stale content after a read failure.
+- A semantic content fingerprint survives plan serialization and must match
+  before media assembly. A changed manifest or legacy prebuilt plan without a
+  fingerprint is refused until a fresh load; existing text/progress is retained.
+- Package validation covers version, duration, offsets, chapter kinds/order,
+  question structure/counts and correct-answer positions across ru/kk/en.
+  Structural agreement does not prove physical or linguistic correctness.
+- Explicit catalog cases now have separate monkeypatch lifetimes. The first
+  F251 catalog failure after passing independent tests exposed the harness leak;
+  the failing log remains available instead of being overwritten.
+
+The corrected original baseline had 13 failures. A subsequently introduced
+serialization gap failed once and was repaired. Four alignment cases and one
+fixture-isolation case also failed before repair. Final focused group:
+**53 passed**, exit 0. Final full regression: **493 passed**, one upstream
+ChromaDB warning, exit 0, **136.55 seconds**. The six scoped checks
+F166/F215/F229/F247/F251/F252 passed. Logs are named in `ERRORS_FOUND.md`.
+`tmp/content-recovery-final-full-evidence-20261013.json` confirms unchanged
+app/test Python, root harness, lesson manifest and all nine media hashes at
+both boundaries; readback confirmed the same files still matched.
+
+### Existing media technical review
+
+`tmp/content-media-acceptance-20261013/evidence.json` records full mapped
+video/audio decode of all three existing videos, each exit 0. All are
+1920×1080, 30 fps, 299.966667 seconds, H.264/AAC at 48 kHz. Measured mean/peak
+audio levels in dB were ru -26.0/-6.3, kk -27.6/-6.5 and en -26.6/-5.6.
+This confirms a non-silent signal, not intelligibility or natural pronunciation.
+
+Fifteen frames at 70/80/160/180/290 seconds were inspected. The 70/160-second
+samples are chapter transitions, while samples inside scenes display formulas,
+localized graphs and recap text. This is sampled inspection, not a complete
+visual/pedagogical review. No new render was performed. Human listening,
+native playback, complete UI recovery, cloud provenance and teacher/editor
+acceptance remain unconfirmed. No new native launch was attempted in this turn.
+
+### Canonical status
+
+Artifact Tool updated the single canonical XLSX and the generated CSV matches.
+Readback and integrity gates passed: **252 stories**, **91 FIXED / 161 PASS**
+scoped software checks, **252 PARTIAL** full user behaviours and **192 linked
+numbered bugs**. The two tabs, 21 columns, typed dates, freeze D2 and table
+**A1:U253** remain. Changed expectation/story/evidence ranges were rendered and
+visually reviewed; the formula error scan matched no cells. Lexical surface
+coverage passed **90/90**; it does not establish complete user acceptance.
+
+Next work is a fresh run of all 252 existing catalog probes with preserved
+historical/live/native evidence, followed by any failures and stronger native
+and external-service acceptance. Full lesson/audio, profile, camera, school
+service and remaining desktop journeys are still open. The goal is not complete.
+
+## Whole-catalog retest and portable browser follow-up (2026-10-13)
+
+This goal turn made further progress: the single canonical workbook was
+aligned with recovery evidence, the entire catalog was rerun, two newly
+observed defects were repaired, and both test layers were repeated.
+
+### Complete existing catalog, before and after
+
+The first fresh run completed **251/252 PASS**, exit 1. F133 found eight
+new lesson-tool text subprocess calls without UTF-8/replacement and 39
+printing scripts without console configuration. Its failed evidence remains
+in `tmp/catalog-all-20261013.log` and `tmp/catalog-all-20261013/evidence.json`.
+That snapshot covered app/tests/harness/generator and lesson resources, but
+did not include tool sources; the subsequent snapshot includes them.
+
+BUG-193 explicitly decodes those pipes and adds a shared bootstrap that calls
+the existing app console policy in direct-file and package modes. User tool
+logic and generated lesson assets were preserved. The new regression executes
+the actual console prefixes of every printing lesson tool under cp1251, in
+both modes; it deliberately does not execute their content/OCR/cloud jobs.
+
+BUG-194 was observed in the real Russian portable page and reproduced by an
+export regression: English controls/instructions and the internal high_school
+label remained. Controls, README, school audience and fallback title now
+follow ru/kk/en, including PDF and source-only paths. The language editor
+status is not promoted by these technical checks.
+
+Post-fix focused export/console tests: **5 passed**, exit 0. Seven scoped
+catalog probes F133/F166/F215/F229/F247/F251/F252 passed. Then the entire
+existing catalog completed **252/252 PASS**, exit 0, in
+`tmp/catalog-all-postfix-20261013.log`; no app/test/tool/packaging/harness/
+generator/manifest/nine-media hashes changed during the run.
+`tmp/catalog-all-postfix-20261013/evidence.json` retains the exact boundary.
+
+The final full test suite completed **495 passed**, one upstream ChromaDB
+deprecation warning, exit 0, **168.52 seconds**. Evidence:
+`tmp/catalog-portable-final-full-20261013.log` and
+`tmp/catalog-portable-final-full-evidence-20261013.json`, again unchanged at
+both source/resource boundaries. All-catalog probes still include static,
+service and offscreen GUI checks; this is not all native user behaviours.
+
+### Browser acceptance of actual extracted ZIPs
+
+All three real prebuilt bundles were exported and safely extracted in an
+isolated temporary folder, then loaded in the in-app browser from an owned
+loopback server. The first SimpleHTTP server could play but had no HTTP Range
+support, so seeking initially failed; this was a fixture limitation. After
+Range support, all **24 chapter clicks** landed within one second of their
+measured starts and started playback without a media error. Each video loaded
+at 1920×1080 with duration 299.966667 seconds. Pause via the video keyboard
+control worked; English End moved to the duration while paused. The End check
+does not establish a complete uninterrupted watch or natural ended event.
+
+Localized pages were observed and screenshot files inspected. Each video
+exposed one subtitle track with its matching language. This establishes track
+presence/language, not actual subtitle display or full speech quality.
+The Russian PDF link navigated to the correct PDF URL, but repeated viewer
+capture remained blank grey; PDF viewing is unconfirmed, without attributing
+the cause to the application. Browser observations and source/ZIP hashes are
+in `tmp/portable-browser-20261013/browser-observations.json` and `evidence.json`.
+No file://, native application ZIP picker, human listening or full lesson
+watch is claimed. The owned server/browser are cleaned up after verification.
+
+### Tracker and remaining acceptance
+
+The same canonical XLSX now tracks **252 stories**, **91 FIXED / 161 PASS**
+scoped checks, **194 linked numbered bugs**, and **252 PARTIAL** full user
+behaviours. The browser evidence is attached to F166 with explicit remaining
+work; historical failed runs and live/native evidence are preserved.
+Complete native journeys, external school service, camera, packaged runtime,
+PDF viewing, full audio/visual review and teacher/editor approval still need
+acceptance. The full objective remains active.
+
+Final tracker readback confirmed typed dates, two tabs, 21 columns, freeze D2
+and table A1:U253. All-row integrity and lexical surface gates passed (90/90
+surfaces). The changed F133/F166 expectation and evidence ranges were rendered
+and visually inspected; formula-error scan matched no cells. Ruff F/I passed
+for the changed exporter, shared bootstrap, new tests and tracker generator;
+compileall passed for all lesson tools, and focused CRLF-aware diff checks
+passed. These checks retain their stated scope.
+
+Cleanup closed only the audit-created browser tab and terminated only the
+exact owned Range server command, PID 9948, after identity validation. Its exec
+session became terminal with exit 1 due to deliberate cleanup, not a product
+failure. Browser seek/navigation can cancel in-flight HTTP transfers; the
+temporary server logged connection resets, without a browser media error in
+the recorded 24 checks. No user application window or original lesson asset
+was removed.
+
+## Prepared learner routes and native entry repair (2026-10-14)
+
+The current canonical workbook retains 252 stories, 21 columns and the
+existing Features/Summary tabs. It links 209 numbered defects, with
+92 FIXED / 160 PASS scoped software checks and 252 PARTIAL full behaviours.
+PARTIAL remains deliberate: an offscreen or source check does not establish
+the complete native story.
+
+### Completed software work
+
+BUG-195–205 repaired prepared-content access at zero/unknown AI quota,
+unnecessary reference ingestion, cross-learner locked/revealed answers,
+retired-card signals, selected language and latest pending language,
+cancelled-load retention, stable v2 course identity across languages,
+preserved legacy history, honest course IO errors, save retries and
+idempotent operation IDs, active-profile settings ownership, both players'
+audio destinations, distinct Unicode topic identities, ambiguous historical
+attribution and misleading cancelled-review success.
+
+Old-language progress is projected without a read-time rewrite; complete
+source snapshots are retained on successful mutation. Changed previously
+migrated aliases require review. A real Windows byte-range lock test proved
+that denied history reads/writes retain old bytes. New answers keep original
+time/confidence and use a stable operation ID across retry, including the
+case where the write succeeded but acknowledgment failed.
+
+The source-bound full suite completed 551 tests in 383.94 seconds, then an
+updated tracker-only boundary completed 551 in 423.39 seconds. Both exited
+0 with one upstream ChromaDB deprecation warning and no changed source/media
+hashes. Those runs predate the later native entry repairs and remain
+historical evidence, not acceptance of the new code. Nine related catalog
+stories passed; the separate related test group completed 84. Existing
+failure baselines, browser/native records and teacher-review states remain.
+
+### Defects found through the actual home button
+
+An owned isolated native Kazakh window was opened from current source, and
+the real home Learn button was accepted once. It selected v1 with six chapters,
+no video, internal rendering status and English completion prose. The
+accessibility observation is `tmp/native-route-baseline-20261014.json`.
+This established BUG-206–208 beyond direct handler tests.
+
+The dashboard and catalog emitted the exact prepared ID, but the receiving
+handler failed to recognize it and wrapped it in a generic generation prompt.
+It now routes directly to the v2 package. Tests click both widgets in kk/ru/en,
+at fresh/exhausted allowance, and require the exact worker topic, eight
+chapters, language and unchanged quota. Ready notices and audience labels
+are localized; rendering/text-only results explicitly distinguish text
+availability from a finished video.
+
+Route baseline: 12 failures. Notice/audience baseline: 9 failures. The same
+21 checks passed after repair in `tmp/native-entry-postfix-20261014.log`.
+The committed regressions are in `tests/test_prebuilt_student_routes.py` and
+the catalog expands their cases explicitly. These use a controlled worker
+and recorded video dispatch, not real playback.
+
+### Catalog execution and state isolation
+
+The first restricted run failed access to its own Windows temp directory and
+stalled in its smoke child. The next permitted run encountered Windows path
+failures in nested test fixtures/atomic staging. All logs and partial results
+were retained. Only command-validated owned processes were stopped.
+
+BUG-209 removes module/function names from fixture paths and gives each
+invocation fresh UUID/index directories. Three independent regressions failed
+before repair, including previous-state reuse. An initial misplaced import
+was corrected; the fixture/lifetime group then passed 4. Result notes retain
+test names, and skip/failure behavior is preserved. Long-path and isolated
+case checks are now part of F215.
+
+The final source-bound suite completed **575 passed**, one upstream ChromaDB
+warning, exit 0, in **511.21 seconds**. The all-catalog retry completed
+**252/252 PASS**, exit 0, including all 48 prepared student route checks and
+the compact fixture/lifetime checks. Logs are
+`tmp/student-route-final2-full-20261014.log` and
+`tmp/catalog-student-routes-final2-20261014.log`. The evidence files record
+unchanged app/test/tool/packaging/harness/generator/manifest/nine-media hashes
+at both boundaries; current readback rechecks these hashes.
+
+The canonical workbook was updated after the completed catalog merge, retaining
+historical cloud/browser/native/failed-run records. Integrity and lexical
+coverage gates pass: 252 features/results/tests and 90/90 recognized surfaces.
+The scope of that lexical gate is word coverage, not exhaustive UI acceptance.
+An additional read-only audit found all 753 numbered Python source references
+within existing files and line bounds; it does not prove semantic function
+matching. Changed expectation/evidence ranges were rendered and visually
+inspected, with no formula-error matches. Ruff F/I and CRLF-aware focused diff
+checks passed for the changed route/view/tests/harness/generator.
+
+### Limits of native and media acceptance
+
+Post-fix startup accessibility was observed in a new owned window. An occluded
+capture showed an unrelated foreground view and was excluded from PhysLab
+visual evidence; activation reported no monitor. Two fresh-tree clicks were
+refused by user-input detection. Post-fix native entry/playback remains
+unconfirmed; `tmp/native-route-postfix-attempt-20261014.json` retains that
+scope. Only the owned post-fix process was closed, PID 15044, after validating
+its command. User windows/data were preserved.
+
+The three actual packaged MP4s were loaded by Qt with audio/video streams and
+the correct duration, without playback. Audio-output ownership/mute toggles
+are checked. No human listening, complete native watch, PDF viewer display,
+real camera flow or deployed school-service acceptance is inferred.
+
+Pending answer drafts remain in memory. Normal close defaults to staying
+unless the learner explicitly discards them, and retries avoid double counts;
+forced termination before an uncommitted write has no durable outbox recovery.
+Old ambiguous topic history is retained without guessed per-topic scores.
+Teacher/editor review and full remaining story acceptance stay open.
+
+## Course feedback and retest status (2026-10-14, current work)
+
+BUG-210–217 cover overwritten empty/missed feedback, low-confidence correctness
+counts, lifecycle/review localization, false save acknowledgment for removed
+review targets, lost pending-card state on partial cancellation, recommendations
+ignoring later objective review, generic score reset on header language change,
+and historical PASS being promoted despite an incomplete current retest.
+Changes preserve historical quiz totals, original choices and unknown metadata.
+Self-reported recall remains separate from objective correctness.
+
+Data/tracker regressions completed **42 passed**, exit 0, in 43.73 seconds with
+unchanged recorded source hashes, in
+`tmp/feedback-core-boundary-20261014-evidence.json`. UI/controller and controlled
+pipeline tests completed **21 passed** in 101.46 seconds after correcting a
+Kazakh word-order assumption in one assertion. Logs retain the initial
+failures, two invalid fixture constructors, the intermediate metadata-only
+gate repair and the final passing focused groups. No constructor mistake is
+classified as an app defect.
+
+Automatic approval review initially could not execute the elevated header
+test because its usage limit was exhausted. The command did not run. After
+the stated reset time, the same normal approval path accepted the test group;
+no alternate tool or permission bypass was used. Only the exact owned old
+probe, PID 23948, was retired after command validation; its original log has
+no final test outcome. User windows and data were preserved.
+
+The canonical workbook currently records 252 stories and 217 linked bugs.
+While the new full regression/catalog run, seven affected checks are explicitly
+PENDING/PARTIAL: 86 FIXED, 159 PASS, 7 PARTIAL scoped software statuses.
+Historical PASS entries, dates, cloud/browser/native media evidence and failed
+runs remain; the incomplete current retest is not stamped FIXED. Structural
+integrity can be checked separately, but the strict gate must reject pending
+current-source retests. All 252 complete story behaviours remain PARTIAL.
+
+Active final runs are `tmp/lesson-feedback-final-full-20261014.log` and
+`tmp/catalog-lesson-feedback-final-20261014.log`. Their process handles are
+observed directly; silence/timeouts do not trigger a restart. They do not
+establish native camera, external school deployment, full human listening or
+PDF-viewer acceptance. The overall user goal remains active.

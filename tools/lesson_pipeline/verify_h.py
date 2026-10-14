@@ -1,5 +1,13 @@
 """Stage H verification: numbers, H1 bank mirror, option sanity, catalog wiring."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 from fractions import Fraction
 from pathlib import Path

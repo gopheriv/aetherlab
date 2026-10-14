@@ -35,6 +35,7 @@ from aetherlab.core.language import (
     normalize_language,
     tts_voice_for_language,
 )
+from aetherlab.core.lesson_messages import lesson_message
 from aetherlab.core.models import (
     LessonBundle,
     LessonChapter,
@@ -45,7 +46,12 @@ from aetherlab.core.models import (
     SolverResult,
 )
 from aetherlab.core.proc import ProcessCancelledError
-from aetherlab.services.ent_lesson_catalog import curated_ent_lesson
+from aetherlab.services.ent_lesson_catalog import (
+    ACCELERATED_MOTION_5MIN_VERSION,
+    PrebuiltLessonContentError,
+    curated_ent_lesson,
+    prebuilt_5min_media,
+)
 from aetherlab.services.lesson_planner import _prepare_lesson_plan, plan_lesson
 from aetherlab.services.manim_runtime import ManimRuntime
 
@@ -61,6 +67,44 @@ _LESSON_DIR = Path(tempfile.gettempdir()) / "aetherlab" / "lessons"
 _RENDERED_KINDS = {"scene", "equation_card", "recap"}
 
 ProgressCb = Callable[[str, int, int], None]  # (message, done, total)
+
+
+def _prebuilt_5min_bundle(plan: LessonPlan) -> LessonBundle:
+    """Assemble a LessonBundle for the prebuilt v2 5-minute lesson.
+
+    No rendering happens here: the video, subtitles, and study-guide PDF are
+    frozen pipeline artifacts resolved from content/ent/. The transcript,
+    questions, and references always work; a missing video file degrades to an
+    explicit ``error`` bundle instead of a blank page.
+    """
+    try:
+        content_hash = getattr(plan, "prebuilt_content_hash", "")
+        if not content_hash:
+            raise PrebuiltLessonContentError("Prebuilt plan has no content snapshot", "missing_content_hash")
+        media = prebuilt_5min_media(plan.language, expected_content_hash=content_hash)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Prebuilt 5-min lesson unavailable: %s", exc)
+        bundle = LessonBundle(plan=plan, status="error")
+        bundle.invalid_media = {"manifest": getattr(exc, "code", "invalid_manifest")}
+        return bundle
+    missing = list(media.get("missing", []))
+    invalid = dict(media.get("invalid", {}))
+    bundle = LessonBundle(
+        plan=plan,
+        video_path=str(media.get("video", "")),
+        status="assembled" if not missing and not invalid else "error",
+        chapter_offsets=list(media.get("offsets", [])),
+        rendered_chapter_indexes=list(range(len(plan.chapters))) if media.get("video") else [],
+    )
+    # Optional extras, same pattern as the render path's srt_path stash.
+    setattr(bundle, "srt_path", str(media.get("srt", "")))  # noqa: B010
+    setattr(bundle, "pdf_path", str(media.get("pdf", "")))  # noqa: B010
+    setattr(bundle, "review_status", dict(media.get("review_status", {})))  # noqa: B010
+    if missing:
+        setattr(bundle, "missing_media", missing)  # noqa: B010
+    if invalid:
+        setattr(bundle, "invalid_media", invalid)  # noqa: B010
+    return bundle
 
 
 class LessonPipeline:
@@ -111,16 +155,30 @@ class LessonPipeline:
         plan_cache = _PlanCache(self.settings)
         # Curated ENT lessons must use the checked, shared content package, not
         # an older free-form plan cached under the same topic name.
-        plan = curated_ent_lesson(topic, language)
+        try:
+            plan = curated_ent_lesson(topic, language)
+        except PrebuiltLessonContentError as exc:
+            text = {
+                "kk": ("Дайын сабақ қолжетімсіз", "Дайын сабақ пакетін оқу мүмкін болмады. Сабақ файлдарын қалпына келтіріп, «Оқу» түймесін қайта басыңыз."),
+                "ru": ("Готовый урок недоступен", "Не удалось прочитать пакет готового урока. Восстановите файлы урока и снова нажмите «Изучить»."),
+                "en": ("Prepared lesson unavailable", "Could not read the prepared lesson package. Restore its files and press Learn again."),
+            }[language]
+            log.warning("Prebuilt lesson content failed: %s", exc.code)
+            report(text[1], 0, 0)
+            unavailable = LessonPlan(title=text[0], topic=topic, audience=audience, language=language, model_name="localized-prebuilt-error")
+            bundle = LessonBundle(plan=unavailable, status="package_error")
+            bundle.package_error_message = text[1]
+            bundle.invalid_media = {"manifest": exc.code}
+            return bundle
         is_curated = plan is not None
         if not is_curated:
             plan = None if regenerate else plan_cache.get(topic, audience, language)
         if is_curated:
-            report("Using the source-grounded ENT lesson package", 0, 1)
+            report(lesson_message(language, "stage_source"), 0, 1)
         elif plan is not None:
-            report("Reusing cached lesson plan", 0, 1)
+            report(lesson_message(language, "stage_cache"), 0, 1)
         else:
-            report("Planning lesson", 0, 1)
+            report(lesson_message(language, "stage_plan"), 0, 1)
             plan = await plan_lesson(
                 topic, self.settings, audience=audience, language=language
             )
@@ -131,7 +189,7 @@ class LessonPipeline:
                 # Ground the plan in textbooks: attach citations + fact-check
                 # narration (fail-soft — corrected narration then flows into render
                 # + voiceover).
-                report("Grounding in textbooks", 0, 1)
+                report(lesson_message(language, "stage_ground"), 0, 1)
                 try:
                     from aetherlab.services.fact_check import fact_check_lesson
 
@@ -145,14 +203,20 @@ class LessonPipeline:
             plan.kazakh_terms = list(glossary_for_language(language))
         render_jobs = [(i, c) for i, c in enumerate(plan.chapters) if c.kind in _RENDERED_KINDS]
         if plan.model_name == "localized-planning-error":
-            report(plan.chapters[0].goal if plan.chapters else "Lesson planning failed", 0, 0)
+            report(plan.chapters[0].goal if plan.chapters else lesson_message(language, "stage_plan_failed"), 0, 0)
             return LessonBundle(plan=plan, status="planning_error")
         if plan.model_name == "localized-offline-notice":
-            report("Offline practice is available; connect a lesson model to build this video", 0, 0)
+            report(lesson_message(language, "stage_offline"), 0, 0)
             return LessonBundle(
                 plan=plan,
                 status="offline_practice_available",
             )
+        if plan.model_name == ACCELERATED_MOTION_5MIN_VERSION:
+            # Prebuilt v2 lesson: serve the frozen video/subtitles/PDF instead
+            # of rendering. Missing media is an explicit error bundle, never a
+            # silent empty page.
+            report(lesson_message(language, "stage_load"), 0, 1)
+            return _prebuilt_5min_bundle(plan)
         chapters = [c for _, c in render_jobs]
         chapter_plan_indexes = [i for i, _ in render_jobs]
         total = len(chapters) or 1
@@ -170,7 +234,7 @@ class LessonPipeline:
             async with sem:
                 if cancelled():
                     return index, None  # skip cheaply once cancel is requested
-                report(f"Chapter {index + 1}/{total}: {ch.title}", done, total)
+                report(lesson_message(language, "stage_chapter", index=index + 1, total=total, title=ch.title), done, total)
                 bundle = await self._render_chapter(
                     ch,
                     plan,
@@ -181,7 +245,7 @@ class LessonPipeline:
                 )
                 async with lock:
                     done += 1
-                    report(f"Chapter {index + 1}/{total} done", done, total)
+                    report(lesson_message(language, "stage_chapter_done", index=index + 1, total=total), done, total)
                 return index, bundle
 
         results = await asyncio.gather(
@@ -206,34 +270,34 @@ class LessonPipeline:
             )
 
         if cancelled():
-            report("Lesson cancelled", done, total)
+            report(lesson_message(language, "stage_cancelled"), done, total)
             return cancelled_bundle()
 
         try:
             # Narrate each rendered chapter + accumulate a transcript timeline.
-            report("Narrating chapters", total, total)
+            report(lesson_message(language, "stage_narrate"), total, total)
             clips, segments, titles = await self._narrate_chapters(
                 rendered_items, out_dir, language=plan.language,
                 cancel_check=cancelled,
             )
             if cancelled():
-                report("Lesson cancelled", done, total)
+                report(lesson_message(language, "stage_cancelled"), done, total)
                 return cancelled_bundle()
 
             # Assemble into one produced lesson (title cards + crossfades) + .srt.
-            report("Assembling lesson", total, total)
+            report(lesson_message(language, "stage_assemble"), total, total)
             video_path, srt_path, offsets = await self._assemble(
                 clips, segments, titles, plan, out_dir, cancel_check=cancelled,
             )
         except ProcessCancelledError:
-            report("Lesson cancelled", done, total)
+            report(lesson_message(language, "stage_cancelled"), done, total)
             return cancelled_bundle()
         if cancelled():
-            report("Lesson cancelled", done, total)
+            report(lesson_message(language, "stage_cancelled"), done, total)
             return cancelled_bundle()
 
         status = "assembled" if video_path else ("rendering" if rendered else "error")
-        report("Lesson ready" if video_path else "Lesson incomplete", total, total)
+        report(lesson_message(language, "stage_ready" if video_path else "stage_incomplete"), total, total)
         bundle = LessonBundle(
             plan=plan,
             chapter_scenes=[b for b in rendered if b is not None],

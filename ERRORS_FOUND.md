@@ -896,6 +896,206 @@ checks; the pre-font combined group passed 60 checks in
 `tmp/explanation-focused-20261013.log`. Final regression, native scope and
 remaining acceptance are recorded in `docs/FEATURE_AUDIT_STATUS.md`.
 
+## Profile and study-plan native acceptance (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-176 | P2 localized profile labels/accessibility | F235 | `aetherlab/ui/profile_dialog.py`, `aetherlab/ui/profile_avatar.py` | Kazakh username labels/errors and accessible profile/photo hints included English. Hints now follow kk/ru/en and retain learner identity. |
+| BUG-177 | P2 weekly goal language | F227 | `aetherlab/ui/exam_practice.py` | Russian/English study goals retained the Kazakh weekly suffix. The selected language now determines it; language rebuilds retain drafts. |
+| BUG-178 | P2 blank date calendar | F227 | `aetherlab/ui/exam_practice.py` | An unset optional exam date opened January 2000. Opening now browses today's month without selecting a date; an existing date browses its saved month. |
+| BUG-179 | P2 unreadable native calendar | F227 | `aetherlab/ui/exam_practice.py` | Native Windows calendar dates had unreadable inherited dark styling. Scoped light colors make dates, month controls and selection readable. |
+| BUG-180 | P2 contradictory goal save status | F227 | `aetherlab/ui/exam_practice.py` | A successful save followed by a refused resave left the old saved footer under the error. Both notices now report failure, retain the draft and return to success only after a successful retry. |
+| BUG-181 | P2 calendar language | F227 | `aetherlab/ui/exam_practice.py` | Month/day labels followed the Windows locale, including Russian labels in Kazakh UI. The date edit and calendar now use explicit kk_KZ/ru_RU/en_US locales and follow language rebuilds. |
+
+Recorded baselines: 6 locale/accessibility failures in
+`tmp/profile-goal-baseline-20261013.log`; 3 current-month failures in
+`tmp/goal-calendar-baseline-20261013.log`; 3 selection-color failures in
+`tmp/goal-palette-baseline-20261013.log`; 3 stale-success failures in
+`tmp/goal-stale-baseline-20261013.log`; 3 locale failures in
+`tmp/goal-calendar-locale-baseline-20261013.log`.
+The dark calendar was observed natively. The offscreen palette baseline
+already had white Base/dark Text and failed the selection-color expectation;
+it does not establish the Windows dark-layout symptom.
+
+Final focused recovery/read/calendar group: 37 passed. Final full tests:
+440 passed, one upstream ChromaDB warning, exit 0, 181.97 seconds, in
+`tmp/profile-locale-all-final-20261013.log`. All five refreshed catalog
+stories passed in `tmp/profile-goal-final-stories-20261013.log`.
+Native acceptance uses only isolated synthetic profiles and includes actual
+Windows FileShare.None refusal, preserved old bytes, retained drafts and retry.
+The detailed source-version boundaries and remaining acceptance are recorded
+in `docs/FEATURE_AUDIT_STATUS.md`.
+
+## Newly added attached-lesson PDF action (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-182 | P2 false PDF open success | F252 | `aetherlab/ui/main_window.py` | The new action ignored QDesktopServices.openUrl's false result and always claimed the study guide opened. It now reports refusal and reports accepted dispatch only, which does not claim that an external viewer rendered the document. |
+| BUG-183 | P2 PDF action language/accessibility | F252 | `aetherlab/ui/main_window.py`, `aetherlab/ui/lesson_view.py` | PDF missing/success statuses and accessible action name remained English in kk/ru. The visible action, accessible name and missing/refused/accepted statuses now follow the UI language. |
+
+Source inspection identified the ignored dispatch return. The initial
+`tmp/lesson-pdf-baseline-20261013.log` had 10 failures and 2 passes, but six
+dispatch cases failed first on the test's slash-sensitive Windows path
+comparison. That authoring error prevented those cases from proving the
+original outcome bug; the other four failures covered localized missing-file
+messages and accessible names. After fixing the path comparison to compare
+Path objects, all 39 combined lesson/profile checks passed in
+`tmp/profile-lesson-focused2-20261013.log`.
+Opener return values are injected and URL fixtures are not real study PDFs;
+these tests establish dispatch semantics, not native viewer rendering.
+
+## Portable prebuilt lesson and package identity (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-184 | P2 dangling portable asset references | F166 | `aetherlab/services/share_export.py` | ZIP metadata named missing/empty optional PDF and subtitle files. Asset references now come from the actual included assets, with null for unavailable optional files. |
+| BUG-185 | P2 exported chapters cannot seek | F251 | `aetherlab/services/lesson_pipeline.py` | The prebuilt bundle lacked rendered plan indexes, producing null chapter offsets and disabled HTML chapter buttons. It now retains explicit indexes when a video is available; export preserves all eight measured starts. |
+| BUG-186 | P2 portable subtitle language | F166 | `aetherlab/services/share_export.py` | The page and subtitle track were always marked English. Lesson language now appears in metadata, HTML lang and the track language/name. |
+| BUG-187 | P1 wrong prebuilt file accepted | F251 | `aetherlab/services/ent_lesson_catalog.py`, `aetherlab/services/lesson_pipeline.py`, `aetherlab/ui/main_window.py` | File existence/size alone accepted replacement media and paths outside the lesson package while ignoring recorded hashes. Streaming SHA256 verification and package-scoped paths now refuse mismatched/unhashed/unreadable files. Missing and unverified media produce distinct localized status/notice text while retaining the plan and clearing an unavailable video. |
+
+The first ZIP baseline had three environment failures creating/cleaning its
+sandbox temporary folder; it does not establish product defects. The permitted
+retry in `tmp/share-baseline-permitted-20261013.log` reproduced all three ZIP
+defects, with exit 1. The package-identity baseline reproduced five failures in
+`tmp/media-hash-baseline-20261013.log`: replacement video/SRT/PDF, outside path
+and absent hash. Final focused tests passed 31 in
+`tmp/prebuilt-integrity-focused-final-20261013.log`.
+URL/export fixtures and synthetic hashed media establish structure and identity,
+not audiovisual quality. Current real packaged lesson files also pass hash
+resolution through the existing ready-bundle tests; this does not verify their
+cloud origin or teacher/editor approval.
+
+The complete post-fix regression passed 471 tests with one upstream warning,
+exit 0, in `tmp/prebuilt-share-full-20261013.log`. Python source hashes stayed
+unchanged during the run. Five affected catalog checks passed in
+`tmp/prebuilt-share-final-stories-20261013.log`. Native lesson acceptance did
+not occur: the window tool failed capture twice; the owned process was checked
+and terminated without a restart. This is recorded as a tool limitation,
+not an app defect or a passed native journey.
+
+## Prepared student routes, progress and audio outputs (2026-10-13–14)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-195 | P1 prepared lesson blocked by AI quota | F236 | `aetherlab/ui/main_window.py`, `aetherlab/ui/command_bar.py`, `aetherlab/ui/workers.py` | Opening a packaged lesson consumed/required AI allowance and ran reference ingestion. Pure route identification now exempts the explicit prepared ID, including zero/unknown quota and command entry. Real worker loading does not index references. AI-generating topics remain metered. |
+| BUG-196 | P1 previous learner's answer state remains | F234 | `aetherlab/ui/main_window.py`, `aetherlab/ui/lesson_view.py` | Profile changes retained revealed feedback and disabled answer controls from the previous student. Owned fresh cards/gates and playback restart separate student state; retired card callbacks are ignored. Cancel/same-profile selection keeps the existing card. Unsaved drafts remain scoped to their original profile/content. |
+| BUG-197 | P2 language changes do not select lesson media | F251 | `aetherlab/ui/main_window.py` | Header language translated controls while text, questions, video and PDF remained from the old language. Prepared content now loads through the worker; latest selection wins during loading, cancellation suppresses queued reload, and empty cancelled loads preserve the prior valid lesson. |
+| BUG-198 | P1 language-dependent v2 course keys | F167 | `aetherlab/services/course_mode.py` | kk/ru used high_school:5 while English had a separate slug. A stable v2 identity projects confirmed old aliases without changing bytes on read. Successful mutation stores all original records/unknown fields as snapshots; duplicate old imports do not count twice, and changed previously migrated aliases require review without writing. V1/unrelated records remain distinct. |
+| BUG-199 | P1 refused course read can replace history | F167 | `aetherlab/services/course_mode.py`, `aetherlab/ui/main_window.py` | Blanket recovery converted IO refusal into an empty store and permitted overwriting existing history. Read IO now propagates; review callbacks report it. Missing/malformed JSON recovery keeps its existing semantics. A Windows mandatory byte-range lock check also confirms preserved bytes. |
+| BUG-200 | P1 grade cannot retry saving | F167 | `aetherlab/services/course_mode.py`, `aetherlab/ui/main_window.py`, `aetherlab/ui/lesson_view.py` | After save failure the card stayed locked with no retry. The grade, original response time and confidence remain in a profile/content draft; explicit localized retry uses an operation ledger to avoid duplicates even if writing succeeded before acknowledgment failed. Unconfirmed closure defaults to staying; discard is explicit. Drafts are in memory, not a crash-resilient outbox. |
+| BUG-201 | P1 settings save changes the course owner | F234 | `aetherlab/ui/main_window.py` | Saving normal settings after selecting another learner rebound CourseProgressStore to the default profile file. It now retains active_student_profile.course_progress_path; a post-save answer belongs to that student. |
+| BUG-202 | P1 inline voiced lessons have no audio destination | F251 | `aetherlab/ui/lesson_view.py` | QMediaPlayer.audioOutput() was None, despite voiced MP4 streams. Owned QAudioOutput is attached and narration preference applies without changing system volume. All three actual lesson streams load in Qt without playing. This proves routing/metadata, not perceived sound or pronunciation. |
+| BUG-203 | P1 scene videos have no audio destination | F61 | `aetherlab/ui/simulation_panel.py` | The scene player also lacked an audio output. An owned unmuted output is now attached. No scene audio was played during these checks. |
+| BUG-204 | P1 Unicode topics share a stripped key | F167 | `aetherlab/services/course_mode.py`, `aetherlab/ui/main_window.py` | Different translated topics inside the same English prompt boilerplate collapsed to one ASCII slug. New generic Unicode topics use stable hashes of their complete normalized names. Old ambiguous totals are retained and explicitly not attributed as verified topic scores; new checks are counted separately. Old ambiguous events are excluded from current review/evaluation evidence. |
+| BUG-205 | P2 cancelled review claims saved result | F167 | `aetherlab/ui/main_window.py` | Closing a due-review prompt without answering still displayed Review saved. The result now counts successful writes and states that no new responses were recorded on cancellation. |
+
+Initial route baseline: **16 failed / 3 passed**
+(`tmp/prebuilt-student-baseline-20261013.log`). Additional command/worker
+baseline: **4 failed**. Corrected identity/read/write baseline: **5 failed /
+1 passed** (`tmp/course-identity-baseline2-20261013.log`). Quiz-save baseline:
+six GUI storage/ack cases failed plus the not-yet-supported operation-ID case
+(`tmp/course-save-baseline-20261013.log`). Settings/profile, inline audio,
+corrected scene audio and cancelled-review baselines each reproduced one
+failure. Generic topic identity baseline reproduced two failures.
+
+Test-authoring failures are not app baselines: one command named an absent
+test file; the first scene audio test imported a nonexistent VideoPanel; one
+cancel fixture omitted required LessonPlan.title. After the Unicode-key fix,
+the legacy fixture also had to serialize the actual old ASCII key explicitly
+instead of asking the new implementation to generate an old key. All original
+count/history assertions remain. A focused run began before later edits and
+is historical evidence only. Final source-bound regression and catalog results
+are recorded after completion.
+
+Native route attempt: only the startup accessibility tree was captured.
+Screenshot/activation reported no monitor; two clicks were stopped by user
+input detection, and no native journey was accepted. The exact owned PID
+19420 was identified and deliberately stopped; exec became terminal exit 1.
+User windows were preserved. Evidence: `tmp/native-route-observation-20261013b.json`.
+
+## Whole-catalog retest and portable browser follow-up (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-193 | P2 lesson diagnostics depend on Windows locale | F133 | `tools/lesson_pipeline/*.py`, `tools/lesson_pipeline/_console.py` | A fresh complete catalog run failed the UTF-8 guard: eight text subprocess calls omitted explicit decoding and 39 printing scripts omitted the shared console policy. Explicit UTF-8/replacement now covers the pipes, and a shared bootstrap invokes the existing app policy for direct-file and package runs. The new subprocess regression executes only each script's console prefix under cp1251; it does not invoke its render/OCR/content job. |
+| BUG-194 | P2 portable controls/instructions stay English | F166 | `aetherlab/services/share_export.py` | The Russian browser page showed Objectives/Open study guide/source and the internal high_school value. HTML controls, known school audience, fallback title and README instructions now follow kk/ru/en. Optional PDF/source-only paths remain distinct and relative. Language editor review is still pending. |
+
+The first complete catalog run ended **251/252 PASS**, exit 1, with F133
+failed and no app/test/harness/manifest/media changes across its boundaries
+(`tmp/catalog-all-20261013.log`, `tmp/catalog-all-20261013/evidence.json`).
+That original snapshot did not include the tools directory; the new run does.
+The localized ZIP baseline failed once in
+`tmp/portable-label-baseline-20261013.log`. The focused post-fix group passed
+**5 tests** in `tmp/portable-console-postfix-20261013.log`.
+
+The initial loopback SimpleHTTP server had no Range support: its media was
+playable but not seekable. That observation is a test-server limitation,
+not a product regression. After adding Range to the owned server, the same
+Russian chapter action moved to about 160 seconds and playback started with
+no media error. Direct file:// and native app export-picker acceptance remain
+separate. Post-fix browser and final regression evidence follow in the audit
+report after those checks complete.
+
+Final evidence for BUG-193/194: seven affected catalog checks passed, then
+**252/252** existing catalog checks passed with exit 0 in
+`tmp/catalog-all-postfix-20261013.log`. Full regression: **495 passed**, one
+upstream warning, exit 0, **168.52 seconds**, in
+`tmp/catalog-portable-final-full-20261013.log`. Both final runs hash app/test/
+tool/packaging sources, harness/generator and actual lesson manifest/media;
+neither observed changes during execution. Browser checks recorded **24**
+successful chapter seek/play actions across ru/kk/en. PDF viewer rendering,
+subtitle display, human listening, file:// and native export remain open.
+
+## Prepared lesson content recovery and fixture isolation (2026-10-13)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-188 | P1 explicit package resolution escapes | F251 | `aetherlab/services/ent_lesson_catalog.py`, `aetherlab/services/lesson_pipeline.py`, `aetherlab/ui/main_window.py` | Missing, unreadable, malformed or incomplete manifest raised out of curated resolution. A localized package_error now clears stale video, skips course-progress refresh, invents no questions and starts no AI request. Restoring the file permits the next ordinary request. |
+| BUG-189 | P1 stale/mutable manifest cache | F251 | `aetherlab/services/ent_lesson_catalog.py` | A global mutable payload hid file/path changes and served caller edits to later requests. Each request now reads and validates the current file; read refusal never falls back to stale content. |
+| BUG-190 | P1 mixed plan/media version | F251 | `aetherlab/core/models.py`, `aetherlab/services/ent_lesson_catalog.py`, `aetherlab/services/lesson_pipeline.py` | A plan could be paired with a changed manifest's media. A semantic content fingerprint now persists in plan serialization and must match during media resolution. Changed/missing fingerprints refuse assembly; fresh reload recovers. Legacy prebuilt plans retain their text but require reload to regain verified media. |
+| BUG-191 | P2 malformed/inconsistent package accepted | F251 | `aetherlab/services/ent_lesson_catalog.py` | Package contract accepted unsupported version/kind, invalid duration/offsets, malformed structures, mismatched language chapter order/question counts and divergent answer positions. Structural validation now rejects these; it does not certify numerical physics or teacher approval. |
+| BUG-192 | P2 catalog fixture state leaks | F215 | `test_features.py` | Explicit parametrized cases reused one monkeypatch context. Deliberately damaged temporary manifests leaked into subsequent cases, producing a false catalog failure despite passing independent tests. The adapter now supplies a separate lifetime for each case; an executed adapter test verifies that environment patches are undone. |
+
+Recovery verification: the corrected original baseline reproduced **13 failures**
+(`tmp/content-recovery-baseline2-20261013.log`). The initial fingerprint repair
+then exposed its own serialization gap (**1 failure**); the plan now preserves
+the fingerprint on JSON roundtrip. Additional cross-language contract cases
+reproduced **4 failures** before their repair. The first scoped catalog attempt
+still failed F251 because fixture patches leaked; its result is retained in
+`tmp/content-recovery-final-stories-20261013.log`. Adapter isolation reproduced
+**1 failure** before repair. No earlier failed run is relabelled as success.
+
+Final focused group: **53 passed**, exit 0, in
+`tmp/content-harness-final-20261013.log`. Final complete regression:
+**493 passed**, one upstream ChromaDB warning, exit 0, **136.55 seconds**, in
+`tmp/content-recovery-final-full-20261013.log`. Before/after app/test/harness
+and manifest/nine-media hashes were unchanged. The six scoped checks
+F166/F215/F229/F247/F251/F252 passed in
+`tmp/content-recovery-stories-final2-20261013.log`.
+
+All three existing language videos decoded completely, including video and
+audio streams, with exit 0. Each is 1920×1080 at 30 fps and about 299.967 seconds.
+Fifteen sampled frames were inspected and audio signal levels were measured.
+This establishes technical file evidence, not complete visual review, human
+listening, native application playback, cloud origin or teacher approval.
+
+Corrected original content baseline: 13 failures in
+`tmp/content-recovery-baseline2-20261013.log`. The first baseline had 12
+failures/1 pass because the path-change test reset the cache before testing
+the switch; that test was corrected before the second baseline.
+Four additional structural/alignment failures were recorded in
+`tmp/content-alignment-baseline-20261013.log`.
+During the snapshot repair, a roundtrip test exposed the newly attached hash
+was not serialized. That one failure in
+`tmp/content-roundtrip-baseline-20261013.log` led to the explicit optional
+LessonPlan field; no old lesson progress or media was deleted.
+
+Focused content/media/export/PDF checks passed 52, then the adapter regression
+raised the final focused group to 53. The first catalog refresh still failed
+F251 because fixture patches leaked; the failure is retained in
+`tmp/content-recovery-final-stories-20261013.log`. The adapter baseline failed
+one test in `tmp/story-isolation-baseline-20261013.log` and passed after repair.
+
 Native tests used a current-source pythonw window and the isolated
 `tmp/feature-native-ui-20261013-current` learner data, preserving the original
 PhysLab window. The native PDF picker was opened and cancelled; no export or
@@ -976,3 +1176,156 @@ passed **21**, including all equations in three full mock PDFs and renderer
 failure fallback. Final full regression passed **422**, one upstream warning,
 exit 0, in `tmp/solutions-full-final-20261013.log`. Scope, native evidence and
 remaining acceptance are recorded in `docs/FEATURE_AUDIT_STATUS.md`.
+
+## Native prepared entry, lesson notices and catalog isolation (2026-10-14)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-206 | P1 visible Learn opens the wrong lesson | F251, F236 | `aetherlab/ui/main_window.py` | The actual home/catalog button emits `constant_acceleration_5min`, but `_start_ent_topic_lesson` recognized only the shorter v1 ID or a kinematics name. It wrapped the explicit v2 ID in a general generation request, spent AI quota and selected v1. Native Kazakh Learn showed six chapters, rendering status and no video. The handler now recognizes the pure prepared ID before wrapping. Tests click both real buttons in three languages with fresh/exhausted quota and assert the exact worker topic, eight chapters, media package and unchanged allowance. |
+| BUG-207 | P2 lesson notices ignore language | F251 | `aetherlab/ui/main_window.py`, `aetherlab/ui/lesson_view.py` | The native Kazakh lesson showed English success/status prose and `high school` in the audience subtitle. Ready prose and supported audience labels now use the content language, without displaying internal assembled status. This does not establish translation of every other lesson control or course recommendation. |
+| BUG-208 | P2 unavailable video announced as finished | F251 | `aetherlab/ui/main_window.py` | The same native v1 bundle with no video was presented as successfully built and ready to watch. Rendering/text-only bundles now use an informational notice explaining text availability and pending video. A completed assembled bundle with a video path retains the localized ready notice. This notice is not proof of decoder success or human media review. |
+| BUG-209 | P2 catalog fixtures fail or share state | F215 | `test_features.py` | General fixture paths included module/function names and reused the same plain case directory. A full catalog run under a long Windows temporary root failed while creating nested fixtures and atomic-save stages; a repeated plain invocation also inherited its predecessor's marker. Compact fresh invocation UUID/index directories preserve fixture assertions, avoid those observed path failures and isolate repeated calls. The test names remain in result notes. |
+
+Baselines retain **12 failed** route checks in
+`tmp/native-entry-baseline-20261014.log`, **9 failed** notice/audience checks in
+`tmp/native-lesson-copy-baseline-20261014.log`, and **3 failed** fixture checks in
+`tmp/story-path-baseline-20261014.log`. After the UI fixes the same 21 checks
+passed in `tmp/native-entry-postfix-20261014.log`. The first fixture repair
+placed a UUID import in the wrong function; its 2 failures/2 passes in
+`tmp/story-path-postfix-20261014.log` are an implementation mistake, retained
+without weakening assertions. The corrected fixture/patch-lifetime group
+passed **4** in `tmp/story-path-postfix2-20261014.log`.
+
+`tmp/native-route-baseline-20261014.json` retains the accessibility observation
+of the owned native window. The post-fix window's screenshot capture returned
+an unrelated occluded foreground view; activation then reported no monitor.
+Two fresh-tree button attempts were stopped by the user-input detection guard.
+No post-fix native playback or successful click is claimed. The owned windows
+and audit processes are isolated from the user's original app and data.
+
+The initial restricted catalog run denied its Windows temporary folder and
+stalled in its own smoke child. Only the command-validated audit parent/child
+were stopped. A permitted retry with a repository temporary folder then exposed
+the long-path fixture defects above. Both original logs and partial result
+files remain. These interrupted attempts are not successful all-catalog runs.
+
+The earlier final source-bound full regression passed **551** in
+`tmp/student-route-authoritative-full-20261014.log`, exit 0, with unchanged
+app/test/tool/packaging/harness/generator/media hashes. It predates BUG-206–209
+repairs and is retained as historical evidence; the new version requires its
+own final regression and catalog boundaries.
+
+Final post-fix boundaries completed: **575 tests passed**, exit 0, one upstream
+warning, in 511.21 seconds; **252/252 catalog probes passed**, exit 0. Neither
+run changed its recorded source/resource hashes. The corresponding final2
+logs/evidence and canonical workbook readback are described in
+`docs/FEATURE_AUDIT_STATUS.md`. Complete post-fix native user acceptance is
+still distinct from these automated results.
+
+## Course feedback, recall and verification state (2026-10-14)
+
+| # | Severity | Feature | File | Defect |
+|---|----------|---------|------|--------|
+| BUG-210 | P2 empty/missed feedback overwritten | F167 | `aetherlab/services/course_mode.py` | An independent legacy-history if/else overwrote both no-attempt and missed-concept messages with Ready for. The mutually exclusive branches now report no attempts, a concrete review or a next step. Core regression passed; UI acceptance remains outstanding. |
+| BUG-211 | P2 confidence changes correctness counts | F167 | `aetherlab/services/course_mode.py` | Correct low-confidence answers counted at lesson level but not question level. Objective correctness is now separate from confidence-based scheduling. Old question counters are repaired on mutation only when all quiz attempts have boolean event evidence; partial histories retain their counts. Reads do not rewrite history. Core regressions passed. |
+| BUG-212 | P2 lifecycle and recall messages stay English | F247 | `aetherlab/core/lesson_messages.py`, `aetherlab/ui/main_window.py`, `aetherlab/ui/workers.py`, `aetherlab/services/lesson_pipeline.py` | Lesson progress/cancellation, course-save/IO notices, empty review and open-recall dialogs used English literals. Shared locale copy now covers the producers and callbacks; recall defaults/escape end without a self-rating. UI and actual pipeline retests are pending. No language-editor approval is claimed. |
+| BUG-213 | P2 removed review counted as saved | F167 | `aetherlab/ui/main_window.py` | record_review_result returns zero without writing when its saved target disappeared, but the controller still incremented saved_count. It now requires a positive result and reports a changed question. The failure baseline is retained; post-fix UI test has not completed. |
+| BUG-214 | P1 partial cancellation loses visible pending grade | F150 | `aetherlab/ui/main_window.py` | A partial cancelled reload rebuilt cards without restoring an existing per-profile/content save draft. A later visible selection could differ from the retained original grade. This branch now restores the original locked choice and save retry. The failure baseline is retained; post-fix UI test is pending. |
+| BUG-215 | P2 objective review never clears a missed concept | F167 | `aetherlab/services/course_mode.py` | Summary used only last quiz correctness even after a later objectively correct spaced review. Timestamped objective events now inform the recommendation; self-reported recall does not erase an objective miss, and historical quiz totals/choices remain unchanged. Core regressions passed. |
+| BUG-216 | P2 header language erases displayed generic score | F247 | `aetherlab/ui/main_window.py` | LessonView.set_language reset the summary to its empty-state sentence, and the header callback did not restore generic lesson progress. The callback now rereads the existing summary with a display-language override, without regeneration or history writes. This is source-derived; its requested UI baseline was not executed because automatic approval review failed. |
+| BUG-217 | P1 historical pass certifies unfinished verification | F215 | `build_feature_tracker.py`, `tools/tracker_integrity_audit.py` | A recorded PASS overwrote an explicit incomplete Phase-4 state with FIXED. BLOCKED/PENDING/PARTIAL/DEFERRED now retain PARTIAL even without extra explanatory metadata. A real FAIL remains REGRESSED, a subsequent completed PASS supersedes the old marker, and the strict gate rejects unfinished retests. Ten focused generator cases passed in the bounded core group. |
+
+Course baseline: **10 failed / 3 passed** in
+`tmp/course-feedback-baseline-20261014.log`. Complete-history repair baseline:
+**1 failed / 1 passed** in `tmp/course-counter-repair-baseline-20261014.log`.
+The initial UI/callback group had **16 failed / 4 passed**, of which three
+pipeline cases were test-authoring errors (missing required chapter/scene
+constructor fields), not product evidence. After correcting both fixtures,
+the pipeline baseline completed **2 failed / 1 passed** in
+`tmp/lesson-progress-baseline3-20261014.log`.
+
+The pending-verification baseline failed four cases and passed two. A first
+repair passed six with explanatory metadata; four additional cases without
+that metadata still failed, and the rule was broadened to respect the phase
+itself. The final independent data/tracker group completed **42 passed**,
+exit 0, in 43.73 seconds, with unchanged source hashes, recorded in
+`tmp/feedback-core-boundary-20261014-evidence.json`. It does not execute UI,
+rendering, audio or the approval-blocked header test.
+
+Automatic approval review rejected execution of the elevated header UI test
+because the reviewer hit a usage limit. The tool explicitly called this a
+review failure rather than a safety finding. The action was not executed;
+the approval check has not been bypassed. Existing user authorization to test
+remains; a functioning review service is required for that elevated launch.
+The non-UI pipeline probe still has a live handle (73179) with no final result;
+it is not marked passed or restarted from an observation timeout.
+
+After the stated reset time, the normal approval mechanism accepted the UI
+launch again. Its first post-fix group completed **20 passed / 1 failed**:
+the remaining assertion assumed identical Kazakh word order in the status and
+the fuller cancellation explanation. The product phrase was grammatical and
+correct; the assertion now checks the specific empty-cancellation wording.
+The same group then completed **21 passed** in 101.46 seconds in
+`tmp/lesson-feedback-ui-postfix2-20261014.log`. This includes the formerly
+unexecuted generic-header case, stale-review refusal, pending-grade restore
+and controlled pipeline progress in three languages. It is offscreen Qt and
+controlled service evidence, not native desktop or real-render acceptance.
+
+The old non-UI probe was still live when inspected through the restored
+approval mechanism. Its exact command identified PID 23948; only that process
+was stopped, and handle 73179 became terminal with exit 1 from deliberate
+cleanup. No final test result or diagnosis of its internal wait is inferred.
+The already approved instrumented group above covers that producer scenario.
+The full current-source suite and catalog are being repeated separately.
+
+## Native translation acceptance and surface inventory (2026-10-14)
+
+| ID | Story | Observed defect | Correction and current evidence |
+| --- | --- | --- | --- |
+| BUG-218 | F251 | In the owned native window, a correct Kazakh answer gave 1/1; changing only the header to Russian rebuilt an unlocked unanswered card, and clicking the same option produced 2/2 and a second review interval. | Preserve the displayed graded choice, confidence, translated feedback and answer lock when the validated content hash is shared across translations. Restore without emitting another grading event. Six independent locale/correctness baseline cases failed in `tmp/language-answer-baseline-20261014.log`; post-fix checks are running. New content and explicit same-language restart retain fresh attempts; profile changes remain isolated. |
+| BUG-219 | F164/F247 | The surface scan detected the new `lesson_messages` locale dictionary, but no tracker source declaration covered it. Full catalog F164 failed. | Add the actual module to F247, retaining Kazakh/Russian/English scope. Regenerated CSV passes 91/91 detected surfaces; the canonical XLSX will be refreshed after current checks. |
+
+The full previous regression finished with **625 passed**, exit 0, one upstream
+warning. Its boundary evidence reports that `tools/lesson_pipeline/stage_p_accept.py`
+was added/changed during execution; it does not certify that new tool.
+The full catalog finished **250/252**, exit 1, with F164 and F251 failing.
+Its source snapshot also changed in `stage_m_assemble.py` and `stage_p_accept.py`.
+Those concurrent user changes are preserved and not claimed to have been tested
+by a clean final-source run. An isolated direct F251 retry completed exit 0;
+the original blank AssertionError is retained without an invented root cause.
+
+Native evidence is limited to the separate temporary profile and actual Learn,
+play, pause, chapter-seven seek, one answer, language change and duplicate-grade
+reproduction. The packaged Kazakh MP4 reached PlayingState with advancing
+position, and a later capture displayed the expected chapter-seven question.
+Human listening and a complete watch were not performed. PDF dispatch opened
+a Chrome window with the lesson title; viewer inspection timed out awaiting app
+approval, so actual PDF display remains unconfirmed. Only the validated owned
+Python PID 9744 was closed. Existing user app/browser windows were preserved.
+
+Post-fix: the isolated UI/storage/student-route group completed **67 passed**,
+exit 0, in 339.85 seconds. The six new translation cases are included; two
+additional fresh-attempt boundary cases were added after that collection and
+belong to the new full run. A fresh owned native window then verified KK → RU → EN:
+the selected answer stayed locked, feedback used the current language and the
+result stayed 1/1. Every recorded progress hash is identical in
+`tmp/native-translation-postfix-20261014.json`. The native window closed normally.
+No full playback/listening or external PDF-viewer acceptance is inferred.
+The latest full suite and all 252 catalog checks remain in progress; the last
+catalog failure is retained until the new check actually completes.
+
+The new catalog pass has also detected a **BUG-193 regression, F133** in the
+concurrently added `tools/lesson_pipeline/stage_p_accept.py`: its text subprocess
+captures at lines 174 and 209 omit explicit UTF-8/error handling. The current
+source audit records FAIL; this is not hidden behind the earlier console fixes.
+The new script is preserved while the frozen-source suite/catalog finish.
+Its two pipe decoders need repair and a fresh F133 check next; the current
+canonical status is REGRESSED. No additional bug number is invented for the
+same already documented encoding defect class.
+
+The new full pytest regression subsequently completed **633 passed**, exit 0,
+one upstream warning, in 1103.61 seconds. Its before/after recorded hashes are
+unchanged (`tmp/translation-lock-final-full-20261014-evidence.json`). Both later
+fresh-attempt boundaries are included. The separate catalog F133 source audit
+remains failed, and the full catalog is still running; pytest success does not
+close that encoding regression.

@@ -416,6 +416,7 @@ class LessonPlan:
     cached: bool = False
     language: str = "en"  # kk | ru | en
     kazakh_terms: list[dict[str, str]] = field(default_factory=list)
+    prebuilt_content_hash: str = ""
 
     def to_json(self) -> JsonDict:
         return {
@@ -431,6 +432,7 @@ class LessonPlan:
             "questions": [q.to_json() for q in self.questions],
             "model_name": self.model_name,
             "cached": self.cached,
+            **({"prebuilt_content_hash": self.prebuilt_content_hash} if self.prebuilt_content_hash else {}),
         }
 
     @classmethod
@@ -467,6 +469,7 @@ class LessonPlan:
             ],
             model_name=str(data.get("model_name", "cached")),
             cached=bool(data.get("cached", cached)),
+            prebuilt_content_hash=data.get("prebuilt_content_hash", "") if isinstance(data.get("prebuilt_content_hash", ""), str) else "",
         )
 
 

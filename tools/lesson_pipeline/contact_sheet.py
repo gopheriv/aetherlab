@@ -5,6 +5,14 @@ Reads output/stage_l_preview/frames/*.png, embeds them as data URIs
 (body-only fragment for the Artifact tool).
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import base64
 from pathlib import Path
 
@@ -29,7 +37,7 @@ background:#111;color:#eee}
 .sheet .legend{font-size:14px;color:#ccc}
 </style>
 <div class="sheet">
-<h1>Stage L — preview frames (ru, 720p), blocks B0–B2</h1>
+<h1>Stage L2 — preview frames (ru, 720p), blocks B0–B7 (retimed to measured narration)</h1>
 <p class="legend">first / key-transformation / final per block. Check: overlaps,
 readability of captions/formulas at 720p, disappearing objects, wrong numbers.</p>"""]
 

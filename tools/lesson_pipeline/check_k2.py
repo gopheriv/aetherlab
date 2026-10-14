@@ -1,3 +1,11 @@
+
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
 import json
 
 d = json.load(open('output/stage_k2_fragments/durations.json', encoding='utf-8'))['durations']

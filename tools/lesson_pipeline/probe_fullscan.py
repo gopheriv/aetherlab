@@ -5,6 +5,14 @@
 - max diff in +/-0.5 s of every shot boundary (pops/flashes/freezes)
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import hashlib
 from pathlib import Path
 

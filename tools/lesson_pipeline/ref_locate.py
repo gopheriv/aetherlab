@@ -1,5 +1,13 @@
 """Locate the uniformly-accelerated-motion sections in reference PDFs."""
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 from pathlib import Path
 
 import fitz

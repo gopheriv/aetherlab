@@ -5,6 +5,14 @@ against canonical.json; derived values are recomputed three ways. On success
 the script flips the `verified` flags in canonical.json and writes a report.
 """
 
+if __package__:
+    from ._console import configure_utf8_stdio
+else:
+    from _console import configure_utf8_stdio
+
+configure_utf8_stdio()
+
+
 import json
 from fractions import Fraction
 from pathlib import Path
