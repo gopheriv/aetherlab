@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import os
+import subprocess
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -60,6 +64,7 @@ async def assemble_lesson(
     palette: dict[str, str] | None = None,
     timeout: int = 300,
     return_offsets: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
 ):
     """Assemble ordered chapter clips into one lesson MP4.
 
@@ -89,11 +94,19 @@ async def assemble_lesson(
 
     # Produced lesson (cards + crossfades) when we have card metadata.
     if lesson_title or chapter_titles:
-        produced = await _assemble_produced(
-            ffmpeg, clips, Path(out_path),
-            lesson_title=lesson_title, lesson_subtitle=lesson_subtitle,
-            chapter_titles=chapter_titles or [], palette=palette, timeout=timeout,
-        )
+        produced = None
+        # One retry before downgrading: a failure at the very end of an
+        # otherwise complete encode (seen on a Windows CI runner) is usually
+        # transient, and the fallback silently drops every card and crossfade.
+        for _attempt in range(2):
+            produced = await _assemble_produced(
+                ffmpeg, clips, Path(out_path),
+                lesson_title=lesson_title, lesson_subtitle=lesson_subtitle,
+                chapter_titles=chapter_titles or [], palette=palette, timeout=timeout,
+                cancel_check=cancel_check,
+            )
+            if produced:
+                break
         if produced:
             path, chapter_starts = produced
             return _result(path, chapter_starts)
@@ -114,7 +127,9 @@ async def assemble_lesson(
     # video-only path and skip a doomed ffmpeg attempt.
     if not all(_has_audio(c) for c in clips):
         return _result(
-            await _assemble_silent(ffmpeg, clips, len(clips), out_path, timeout),
+            await _assemble_silent(
+                ffmpeg, clips, len(clips), out_path, timeout, cancel_check=cancel_check,
+            ),
             plain_offsets,
         )
 
@@ -151,20 +166,23 @@ async def assemble_lesson(
         "-movflags", "+faststart", str(out_path),
     ]
 
-    if await _run(cmd, timeout):
+    if await _run(cmd, timeout, cancel_check=cancel_check):
         log.info("Assembled lesson: %s (%.1f MB, %d chapters)",
                  out_path, out_path.stat().st_size / 1e6, len(clips))
         return _result(out_path, plain_offsets)
     # Retry once treating every clip as silent (some clips may lack an audio
     # stream, which breaks the [i:a] mapping above).
     return _result(
-        await _assemble_silent(ffmpeg, clips, silence_idx, out_path, timeout),
+        await _assemble_silent(
+            ffmpeg, clips, silence_idx, out_path, timeout, cancel_check=cancel_check,
+        ),
         plain_offsets,
     )
 
 
 async def _assemble_silent(
-    ffmpeg: str, clips: list[Path], silence_idx: int, out_path: Path, timeout: int
+    ffmpeg: str, clips: list[Path], silence_idx: int, out_path: Path, timeout: int,
+    *, cancel_check: Callable[[], bool] | None = None,
 ) -> Path | None:
     """Fallback: video-only concat (drop audio) — never fail to produce a lesson
     just because one chapter had no audio stream."""
@@ -186,7 +204,7 @@ async def _assemble_silent(
         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
         "-movflags", "+faststart", str(out_path),
     ]
-    if await _run(cmd, timeout):
+    if await _run(cmd, timeout, cancel_check=cancel_check):
         log.info("Assembled lesson (video-only): %s", out_path)
         return out_path
     return None
@@ -213,6 +231,8 @@ def _probe(clip: Path) -> tuple[float, bool]:
 
         with av.open(str(clip)) as container:
             dur = float(container.duration) / 1e6 if container.duration else 0.0
+            if not math.isfinite(dur) or dur < 0:
+                dur = 0.0
             return dur, bool(container.streams.audio)
     except Exception:  # noqa: BLE001
         return 0.0, False
@@ -225,7 +245,10 @@ _VNORM = (
 )
 
 
-async def _normalize_card(ffmpeg: str, png: Path, dur: float, out: Path, timeout: int) -> bool:
+async def _normalize_card(
+    ffmpeg: str, png: Path, dur: float, out: Path, timeout: int,
+    *, cancel_check: Callable[[], bool] | None = None,
+) -> bool:
     """PNG → a `dur`-second clip with a silent stereo audio track."""
     cmd = [
         ffmpeg, "-y", "-loop", "1", "-t", f"{dur:.2f}", "-i", str(png),
@@ -234,11 +257,12 @@ async def _normalize_card(ffmpeg: str, png: Path, dur: float, out: Path, timeout
         "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest",
         "-movflags", "+faststart", str(out),
     ]
-    return await _run(cmd, timeout)
+    return await _run(cmd, timeout, cancel_check=cancel_check)
 
 
 async def _normalize_clip(
-    ffmpeg: str, clip: Path, has_audio: bool, out: Path, timeout: int
+    ffmpeg: str, clip: Path, has_audio: bool, out: Path, timeout: int,
+    *, cancel_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Chapter clip → uniform canvas/fps with a guaranteed stereo audio track."""
     if has_audio:
@@ -257,7 +281,7 @@ async def _normalize_clip(
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
             "-movflags", "+faststart", str(out),
         ]
-    return await _run(cmd, timeout)
+    return await _run(cmd, timeout, cancel_check=cancel_check)
 
 
 async def _assemble_produced(
@@ -270,6 +294,7 @@ async def _assemble_produced(
     chapter_titles: list[str],
     palette: dict[str, str] | None,
     timeout: int,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[Path, list[float]] | None:
     """Build a title-carded, crossfaded lesson.
 
@@ -287,7 +312,7 @@ async def _assemble_produced(
     # 1) Draw the cards as PNGs.
     n = len(clips)
     intro_png = render_card_png(
-        work / "intro.png", kicker="AetherLab lesson",
+        work / "intro.png", kicker="PhysLab lesson",
         title=lesson_title or "A visual explainer", subtitle=lesson_subtitle,
         palette=palette,
     )
@@ -329,9 +354,13 @@ async def _assemble_produced(
     for idx, seg in enumerate(segments):
         dst = work / f"seg{idx:02d}.mp4"
         if seg[0] == "card":
-            ok = await _normalize_card(ffmpeg, seg[1], seg[2], dst, timeout)
+            ok = await _normalize_card(
+                ffmpeg, seg[1], seg[2], dst, timeout, cancel_check=cancel_check,
+            )
         else:
-            ok = await _normalize_clip(ffmpeg, seg[1], seg[3], dst, timeout)
+            ok = await _normalize_clip(
+                ffmpeg, seg[1], seg[3], dst, timeout, cancel_check=cancel_check,
+            )
         if not ok or not dst.exists():
             return None
         # Trust the requested card duration; probe clips for the exact length.
@@ -344,8 +373,16 @@ async def _assemble_produced(
 
     # 4) Crossfade-chain the normalized segments (video + audio together).
     #    xfade needs the fade shorter than the shortest neighbour.
-    xfade = min(_XFADE_SEC, max(0.2, min(durations) * 0.4))
-    ok = await _xfade_chain(ffmpeg, norm, durations, xfade, out_path, timeout)
+    # A transition must fit inside even the shortest chapter. The old 0.2 s
+    # floor made a one- or two-frame clip request a fade longer than itself,
+    # which FFmpeg rejected and silently downgraded to plain concatenation.
+    xfade = min(_XFADE_SEC, min(durations) * 0.4)
+    if not math.isfinite(xfade) or xfade <= 0:
+        return None
+    ok = await _xfade_chain(
+        ffmpeg, norm, durations, xfade, out_path, timeout,
+        cancel_check=cancel_check,
+    )
     if not ok:
         return None
 
@@ -381,6 +418,7 @@ def _segment_starts(durs: list[float], d: float) -> list[float]:
 async def _xfade_chain(
     ffmpeg: str, segs: list[Path], durs: list[float], d: float,
     out_path: Path, timeout: int,
+    *, cancel_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Chain uniform segments with xfade (video) + acrossfade (audio).
 
@@ -401,10 +439,10 @@ async def _xfade_chain(
         vlabel = f"[vx{k}]"
         alabel = f"[ax{k}]"
         vfilters.append(
-            f"{v_prev}[{k}:v]xfade=transition=fade:duration={d:.2f}:"
-            f"offset={offset:.2f}{vlabel}"
+            f"{v_prev}[{k}:v]xfade=transition=fade:duration={d:.6f}:"
+            f"offset={offset:.6f}{vlabel}"
         )
-        afilters.append(f"{a_prev}[{k}:a]acrossfade=d={d:.2f}{alabel}")
+        afilters.append(f"{a_prev}[{k}:a]acrossfade=d={d:.6f}{alabel}")
         v_prev, a_prev = vlabel, alabel
 
     filtergraph = ";".join(vfilters + afilters)
@@ -415,33 +453,77 @@ async def _xfade_chain(
         "-c:a", "aac", "-b:a", "160k", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", str(out_path),
     ]
-    return await _run(cmd, timeout)
+    return await _run(cmd, timeout, cancel_check=cancel_check)
 
 
-async def _run(cmd: list[str], timeout: int) -> bool:
-    from aetherlab.core.proc import subprocess_kwargs
+def _ffmpeg_error_summary(stderr: bytes, tail: int = 400) -> str:
+    """ffmpeg's error lines plus the end of its log.
 
+    The tail alone is mostly encoder statistics, which hid the actual error
+    behind "Conversion failed!" (Windows CI, 2026-10-01).
+    """
+    text = stderr.decode(errors="replace")
+    markers = ("error", "invalid", "failed", "denied", "no such", "cannot", "unable")
+    errors = [
+        line.strip() for line in text.splitlines()
+        if any(marker in line.lower() for marker in markers)
+        and "conversion failed" not in line.lower()
+    ]
+    summary = " | ".join(dict.fromkeys(errors[:8]))
+    return (summary + " || tail: " if summary else "") + text[-tail:]
+
+
+async def _run(
+    cmd: list[str], timeout: int, *, cancel_check: Callable[[], bool] | None = None,
+) -> bool:
+    from aetherlab.core.atomic_file import unique_staging_path
+    from aetherlab.core.proc import ProcessCancelledError, run_process_tree, subprocess_kwargs
+
+    target = Path(cmd[-1])
+    staging = unique_staging_path(target)
+    staged_cmd = [*cmd[:-1], str(staging)]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        if cancel_check is not None and cancel_check():
+            raise ProcessCancelledError("Lesson assembly cancelled")
+        result = await asyncio.to_thread(
+            run_process_tree,
+            staged_cmd,
+            timeout=timeout,
+            cancel_check=cancel_check,
+            capture_output=True,
             **subprocess_kwargs(),
         )
+    except ProcessCancelledError:
+        staging.unlink(missing_ok=True)
+        raise
+    except subprocess.TimeoutExpired as exc:
+        staging.unlink(missing_ok=True)
+        stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+        log.warning("ffmpeg assembly timed out: %s", _ffmpeg_error_summary(stderr))
+        return False
     except (FileNotFoundError, OSError) as exc:
-        log.warning("ffmpeg assembly could not start: %s", exc)
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg assembly could not complete: %s", exc)
+        return False
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    if result.returncode != 0:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg assembly failed: %s", _ffmpeg_error_summary(result.stderr or b""))
         return False
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:  # noqa: BLE001
-            pass
-        log.warning("ffmpeg assembly timed out.")
+        complete_output = staging.is_file() and staging.stat().st_size > 0
+    except OSError:
+        complete_output = False
+    if not complete_output:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg assembly reported success without a complete output file.")
         return False
-    if proc.returncode != 0:
-        log.warning("ffmpeg assembly failed: %s", stderr.decode(errors="replace")[-600:])
+    try:
+        os.replace(staging, target)
+    except OSError as exc:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg assembly output could not be installed: %s", exc)
         return False
     return True

@@ -1,0 +1,387 @@
+﻿1
+00:00:00,000 --> 00:00:02,300
+Imagine a bus pulling away from a
+
+2
+00:00:02,300 --> 00:00:04,599
+stop. Its speed rises from zero to
+
+3
+00:00:04,599 --> 00:00:07,069
+two metres per second in one second,
+
+4
+00:00:07,069 --> 00:00:09,113
+then to four. If the same speed
+
+5
+00:00:09,113 --> 00:00:12,690
+increase happens each second, the acceleration is
+
+6
+00:00:12,690 --> 00:00:15,926
+constant. Acceleration is not speed itself; it
+
+7
+00:00:15,926 --> 00:00:18,992
+tells us how quickly velocity changes over
+
+8
+00:00:18,992 --> 00:00:21,377
+time. In this lesson we will choose
+
+9
+00:00:21,377 --> 00:00:24,273
+the right formula, solve one example, read
+
+10
+00:00:24,273 --> 00:00:27,168
+a velocity-time graph, and work through a
+
+11
+00:00:27,168 --> 00:00:31,086
+problem from the supplied Testcenter-3 collection. At
+
+12
+00:00:31,086 --> 00:00:33,471
+the end, try a short check question
+
+13
+00:00:33,471 --> 00:00:34,152
+yourself.
+
+14
+00:00:43,000 --> 00:00:45,704
+Start a solution by listing the known
+
+15
+00:00:45,704 --> 00:00:48,495
+quantities. Let v naught be the initial
+
+16
+00:00:48,495 --> 00:00:51,025
+velocity, v the final velocity, t the
+
+17
+00:00:51,025 --> 00:00:53,380
+time, a the acceleration, and s the
+
+18
+00:00:53,380 --> 00:00:56,956
+displacement. Velocity is measured in metres per
+
+19
+00:00:56,956 --> 00:01:00,619
+second, acceleration in metres per second squared,
+
+20
+00:01:00,619 --> 00:01:03,759
+time in seconds, and displacement in metres.
+
+21
+00:01:03,759 --> 00:01:07,074
+Displacement is the directed change from the
+
+22
+00:01:07,074 --> 00:01:10,824
+starting position to the ending position. Distance
+
+23
+00:01:10,824 --> 00:01:12,918
+is the full length of the path.
+
+24
+00:01:12,918 --> 00:01:15,796
+If the object never turns back, distance
+
+25
+00:01:15,796 --> 00:01:18,936
+equals the magnitude of displacement. If it
+
+26
+00:01:18,936 --> 00:01:22,425
+reverses, split the motion into sections. Choose
+
+27
+00:01:22,425 --> 00:01:25,216
+the positive axis before calculating.
+
+28
+00:01:26,000 --> 00:01:30,271
+For straight-line motion with constant acceleration, final
+
+29
+00:01:30,271 --> 00:01:32,866
+velocity equals v naught plus a times
+
+30
+00:01:32,866 --> 00:01:35,127
+t. With our chosen axis, positive a
+
+31
+00:01:35,127 --> 00:01:38,560
+increases the velocity component; negative a can
+
+32
+00:01:38,560 --> 00:01:41,742
+reduce it. Displacement equals v naught times
+
+33
+00:01:41,742 --> 00:01:43,501
+t plus one half a t squared.
+
+34
+00:01:43,501 --> 00:01:47,101
+Use these equations only while acceleration stays
+
+35
+00:01:47,101 --> 00:01:49,948
+constant. If the object turns around, keep
+
+36
+00:01:49,948 --> 00:01:52,628
+the sign of displacement and split the
+
+37
+00:01:52,628 --> 00:01:55,224
+path to find total distance. Check the
+
+38
+00:01:55,224 --> 00:01:58,741
+units after substitution: metres per second times
+
+39
+00:01:58,741 --> 00:02:02,006
+seconds gives metres, and acceleration must be
+
+40
+00:02:02,006 --> 00:02:04,016
+in metres per second squared.
+
+41
+00:02:09,000 --> 00:02:11,403
+Let us solve an example. A cyclist
+
+42
+00:02:11,403 --> 00:02:14,785
+starts at two metres per second. Acceleration
+
+43
+00:02:14,785 --> 00:02:17,365
+is one point five metres per second
+
+44
+00:02:17,365 --> 00:02:20,213
+squared, and time is four seconds. Final
+
+45
+00:02:20,213 --> 00:02:22,794
+velocity is two plus one point five
+
+46
+00:02:22,794 --> 00:02:25,820
+times four, which equals eight metres per
+
+47
+00:02:25,820 --> 00:02:29,023
+second. Displacement is two times four plus
+
+48
+00:02:29,023 --> 00:02:32,138
+one point five times four squared, divided
+
+49
+00:02:32,138 --> 00:02:34,274
+by two. The first part is eight
+
+50
+00:02:34,274 --> 00:02:37,834
+metres; the second is twelve. Total displacement
+
+51
+00:02:37,834 --> 00:02:40,771
+is twenty metres. Check it using average
+
+52
+00:02:40,771 --> 00:02:43,262
+velocity: half of two plus eight is
+
+53
+00:02:43,262 --> 00:02:46,110
+five metres per second. Five times four
+
+54
+00:02:46,110 --> 00:02:47,712
+is also twenty metres.
+
+55
+00:02:52,000 --> 00:02:54,916
+On a velocity-time graph, the slope gives
+
+56
+00:02:54,916 --> 00:02:58,690
+acceleration: change in velocity divided by elapsed
+
+57
+00:02:58,690 --> 00:03:01,434
+time. The signed area beneath the graph
+
+58
+00:03:01,434 --> 00:03:05,036
+gives displacement. In our example, velocity rises
+
+59
+00:03:05,036 --> 00:03:07,524
+from two to eight metres per second
+
+60
+00:03:07,524 --> 00:03:10,611
+over four seconds. Split the trapezoid into
+
+61
+00:03:10,611 --> 00:03:13,527
+a rectangle and a triangle. The rectangle
+
+62
+00:03:13,527 --> 00:03:15,843
+is two times four, or eight metres.
+
+63
+00:03:15,843 --> 00:03:18,073
+The triangle is one half times a
+
+64
+00:03:18,073 --> 00:03:19,960
+base of four and a height of
+
+65
+00:03:19,960 --> 00:03:22,790
+six, or twelve metres. Together they give
+
+66
+00:03:22,790 --> 00:03:25,534
+twenty metres. If the graph drops below
+
+67
+00:03:25,534 --> 00:03:28,622
+the time axis, displacement can be negative;
+
+68
+00:03:28,622 --> 00:03:31,109
+add the magnitudes of areas to find
+
+69
+00:03:31,109 --> 00:03:32,224
+total distance.
+
+70
+00:03:35,000 --> 00:03:37,919
+Now read question one from the supplied
+
+71
+00:03:37,919 --> 00:03:40,838
+test collection. From zero to one second,
+
+72
+00:03:40,838 --> 00:03:43,492
+velocity rises from zero to four; the
+
+73
+00:03:43,492 --> 00:03:46,146
+triangle area is two metres. From one
+
+74
+00:03:46,146 --> 00:03:49,065
+to three seconds, velocity stays at four,
+
+75
+00:03:49,065 --> 00:03:51,807
+so the rectangle area is eight metres.
+
+76
+00:03:51,807 --> 00:03:54,284
+During the last second it falls to
+
+77
+00:03:54,284 --> 00:03:57,291
+zero, adding another two metres. The total
+
+78
+00:03:57,291 --> 00:03:59,326
+is two plus eight plus two, or
+
+79
+00:03:59,326 --> 00:04:02,510
+twelve metres. The printed key marks answer
+
+80
+00:04:02,510 --> 00:04:05,075
+B. Do not mistake the final velocity
+
+81
+00:04:05,075 --> 00:04:07,995
+for the distance travelled: a zero speed
+
+82
+00:04:07,995 --> 00:04:10,029
+at the end does not erase the
+
+83
+00:04:10,029 --> 00:04:12,152
+earlier area under the graph.
+
+84
+00:04:18,000 --> 00:04:20,995
+Your turn. Speed falls from eighteen to
+
+85
+00:04:20,995 --> 00:04:23,897
+six metres per second in four seconds.
+
+86
+00:04:23,897 --> 00:04:27,548
+Acceleration is six minus eighteen, divided by
+
+87
+00:04:27,548 --> 00:04:30,918
+four: minus three metres per second squared.
+
+88
+00:04:30,918 --> 00:04:33,913
+The object does not reverse, so average
+
+89
+00:04:33,913 --> 00:04:38,032
+velocity is twelve and displacement is forty-eight
+
+90
+00:04:38,032 --> 00:04:41,214
+metres. Remember the two core equations: v
+
+91
+00:04:41,214 --> 00:04:43,086
+equals v naught plus a t; s
+
+92
+00:04:43,086 --> 00:04:45,426
+equals v naught t plus one half
+
+93
+00:04:45,426 --> 00:04:47,860
+a t squared. Kinematics is in the
+
+94
+00:04:47,860 --> 00:04:51,792
+2026 UNT physics specification, which gives about
+
+95
+00:04:51,792 --> 00:04:54,693
+two minutes per task on average. Label
+
+96
+00:04:54,693 --> 00:04:57,876
+the quantities first, then check the sign,
+
+97
+00:04:57,876 --> 00:04:59,280
+formula, and units.

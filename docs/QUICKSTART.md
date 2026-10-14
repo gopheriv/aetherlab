@@ -11,10 +11,11 @@ computer.
 
 **From source (Python 3.11+):**
 ```bash
-pip install -e .[rag]
-pip install manim
+pip install -e ".[rag,render]"
 python -m aetherlab
 ```
+
+The `render` extra pins Manim Community 0.21.0 to match the cloud worker.
 
 ## 2. Solve your first problem
 

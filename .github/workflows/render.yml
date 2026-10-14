@@ -42,42 +42,58 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
 
       - name: Install system render dependencies
+        timeout-minutes: 7
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update
           sudo apt-get install -y --no-install-recommends \
-            ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+            libcairo2-dev libpango1.0-dev pkg-config
           if [ "${{ inputs.needs_latex }}" = "true" ]; then
             sudo apt-get install -y --no-install-recommends \
-              texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+              texlive-latex-extra dvisvgm
           fi
 
       - name: Install pinned Manim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "manim==0.20.1"
+          python -m pip install "manim==0.21.0" "imageio-ffmpeg==0.6.0"
           python - <<'PY'
           import importlib.metadata as m
+          import os
+          from pathlib import Path
+          import imageio_ffmpeg
+
+          ffmpeg_dir = Path(os.environ["RUNNER_TEMP"]) / "aetherlab-bin"
+          ffmpeg_dir.mkdir(parents=True, exist_ok=True)
+          (ffmpeg_dir / "ffmpeg").symlink_to(imageio_ffmpeg.get_ffmpeg_exe())
+          with Path(os.environ["GITHUB_PATH"]).open("a", encoding="utf-8") as path_file:
+              path_file.write(str(ffmpeg_dir) + "\n")
           print("manim", m.version("manim"))
+          print("ffmpeg", imageio_ffmpeg.get_ffmpeg_exe())
           PY
 
       - name: Render scene
         id: render
         shell: bash
+        env:
+          SCENE_CLASS: ${{ inputs.class_name }}
+          RENDER_JOB_ID: ${{ inputs.job_id }}
         run: |
           set +e
           mkdir -p out
-          python -m manim render \
+          /usr/bin/time -f 'AETHERLAB_RENDER_WALL_SECONDS=%e\nAETHERLAB_PEAK_RSS_KB=%M' \
+            -o "${{ inputs.job_id }}.telemetry" python -m manim render \
             -q${{ inputs.quality }} \
             --fps "${{ inputs.fps }}" \
             --disable_caching \
@@ -85,19 +101,36 @@ jobs:
             "${{ inputs.scene_path }}" \
             "${{ inputs.class_name }}" 2>&1 | tee "${{ inputs.job_id }}.log"
           code=${PIPESTATUS[0]}
+          cat "${{ inputs.job_id }}.telemetry" | tee -a "${{ inputs.job_id }}.log"
           if [ "$code" -ne 0 ]; then
             exit "$code"
           fi
-          mp4="$(find out -type f -name '*.mp4' -print0 | xargs -0 ls -S | head -n 1)"
-          if [ -z "$mp4" ]; then
-            echo "No MP4 produced" | tee -a "${{ inputs.job_id }}.log"
-            exit 2
-          fi
-          cp "$mp4" "${{ inputs.job_id }}.mp4"
+          # Select exactly one final output for the requested scene.
+          # A larger unrelated video or partial fragment is never a substitute.
+          python - <<'PY'
+          import os
+          import shutil
+          import sys
+          from pathlib import Path
+
+          scene_class = os.environ["SCENE_CLASS"]
+          matches = [
+              path for path in Path("out/videos").rglob("*.mp4")
+              if path.name == f"{scene_class}.mp4"
+              and "partial_movie_files" not in path.parts
+          ]
+          if len(matches) != 1:
+              message = f"Expected one final MP4 for scene {scene_class}; found {len(matches)}"
+              print(message, file=sys.stderr)
+              with Path(f"{os.environ['RENDER_JOB_ID']}.log").open("a", encoding="utf-8") as output:
+                  output.write(message + "\n")
+              sys.exit(2)
+          shutil.copyfile(matches[0], f"{os.environ['RENDER_JOB_ID']}.mp4")
+          PY
 
       - name: Upload rendered MP4
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.job_id }}.mp4
           path: ${{ inputs.job_id }}.mp4
@@ -105,7 +138,7 @@ jobs:
 
       - name: Upload render log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.job_id }}.log
           path: ${{ inputs.job_id }}.log

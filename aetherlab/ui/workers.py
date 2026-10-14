@@ -17,18 +17,46 @@ from aetherlab.core.settings import AppSettings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
 from aetherlab.services.manim_runtime import ManimRuntime
+from aetherlab.services.planner import Planner
 from aetherlab.services.rag import LocalVectorRag
 from aetherlab.ui.qt_compat import QtCore, require_qt
 
 require_qt()
 
 
-class _PipelineCancelled(Exception):
+class _PipelineCancelledError(Exception):
     """Internal sentinel exception for pipeline cancellation (#2)."""
     pass
 
 
+# Keep the former name available for callers that import the sentinel directly.
+_PipelineCancelled = _PipelineCancelledError
+
+
+def _skipped_scene(engine: str) -> SceneBundle:
+    """Placeholder scene for problems the planner marks as non-animated."""
+    return SceneBundle(
+        class_name="AetherLabScene",
+        code="",
+        engine=engine,
+        status="skipped",
+        diagnostics=["Animation not required for this problem (planner)."],
+    )
+
+
+def _refresh_spec(scene: SceneBundle, request: ProblemRequest, solver, rag) -> None:
+    try:
+        from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+        refresh_scene_bundle_spec(scene, request, solver, rag)
+    except Exception as exc:  # noqa: BLE001 - the evidence panel is fail-soft
+        scene.diagnostics.append(
+            f"Scene specification unavailable: {type(exc).__name__}."
+        )
+
+
 class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
+    plan_ready = QtCore.pyqtSignal(object)
     solver_ready = QtCore.pyqtSignal(object)
     rag_ready = QtCore.pyqtSignal(object)
     scene_ready = QtCore.pyqtSignal(object)
@@ -52,12 +80,12 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
     def _check_cancelled(self) -> None:
         """Raise if pipeline was cancelled — checked between stages (#2)."""
         if self._cancelled:
-            raise _PipelineCancelled()
+            raise _PipelineCancelledError()
 
     def run(self) -> None:
         try:
             asyncio.run(self._run_async())
-        except _PipelineCancelled:
+        except _PipelineCancelledError:
             self.status.emit("Pipeline cancelled by user.")
         except Exception as exc:
             if self._cancelled:
@@ -75,6 +103,13 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         cache = SessionCache(self.settings.cache_path)
         key = cache.ensure_request(self.request)
         cached = cache.get(key)
+
+        # Planner: decide which outputs this problem warrants (never raises).
+        self.progress.emit(3, "Planning outputs...")
+        plan = await Planner(self.settings).plan(self.request)
+        self.plan_ready.emit(plan)
+        self.status.emit(f"Plan: {', '.join(plan.enabled()) or 'none'}.")
+        self._check_cancelled()
 
         # ── Worker A: solve ──
         self.progress.emit(5, "Solving analytical scaffold\u2026")
@@ -121,10 +156,33 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 and _scene_cache_usable(cached.scene, self.settings)
                 and cached.scene.engine == current_engine
                 and cached.scene.status in {"compiled", "rendered"}
+                and (
+                    float(self.request.duration_target_s) <= 45.0
+                    or cached.scene.class_name == "AetherLabSegmentedScene"
+                )
             ):
                 self.status.emit("Loaded generated Manim scene from SQLite cache.")
                 return cached.scene
-            self.status.emit("Worker C: generating dynamic Manim scene via LLM.")
+            if float(self.request.duration_target_s) > 45.0:
+                from aetherlab.services.segmented_pipeline import render_segmented_scene
+
+                self.status.emit(
+                    f"Worker C: planning and rendering a {self.request.duration_target_s:.0f}s "
+                    "explanation as resumable segments."
+                )
+                scene = await render_segmented_scene(
+                    self.request,
+                    solver,
+                    rag,
+                    self.settings,
+                    runtime=manim,
+                    quality=self.render_quality,
+                    progress=lambda msg: self.status.emit(str(msg)),
+                    cancel_check=lambda: self._cancelled,
+                )
+                cache.store_scene(key, scene)
+                return scene
+            self.status.emit("Worker C: composing Manim scene (curated components / LLM).")
             if manim.scene_tournament_enabled(self.settings):
                 self.status.emit("Worker C: running scene candidate tournament.")
                 scene = await manim.generate_render_tournament(
@@ -138,7 +196,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                     cancel_check=lambda: self._cancelled,
                 )
             else:
-                scene = await manim.generate_scene_async(self.request, solver, rag, self.settings)
+                scene = await manim.generate_scene_async(self.request, solver, rag, self.settings, plan=plan)
             cache.store_scene(key, scene)
             return scene
 
@@ -147,20 +205,65 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         self.rag_ready.emit(rag)
         self.progress.emit(50, f"Found {len(rag.hits)} references")
 
+        if not plan.needs_animation:
+            # Planner: this problem doesn't warrant a rendered animation — skip
+            # scene generation and the (expensive) render entirely.
+            skipped = _skipped_scene(current_engine)
+            _refresh_spec(skipped, self.request, solver, rag)
+            self.status.emit("Animation not required for this problem (planner).")
+            self.scene_ready.emit(skipped)
+            self.render_ready.emit(skipped)
+            self.progress.emit(100, "Pipeline complete")
+            self.pipeline_finished.emit(
+                PipelineResult(
+                    request=self.request,
+                    cache_key=key,
+                    solver=solver,
+                    rag=rag,
+                    scene=skipped,
+                    plan=plan,
+                )
+            )
+            return
+
         scene = await _do_scene(rag)
+        _refresh_spec(scene, self.request, solver, rag)
         self._check_cancelled()
         self.scene_ready.emit(scene)
-        self.progress.emit(70, "Scene compiled")
+        if scene.class_name == "AetherLabSegmentedScene" and scene.status == "rendered":
+            self.progress.emit(92, "All lesson segments validated and assembled")
+        elif scene.status == "incomplete":
+            self.progress.emit(70, "Long explanation is incomplete; no video was published")
+        else:
+            self.progress.emit(70, "Scene compiled")
 
         # ── Worker D: render Manim scene to video ──
         quality_label = {"l": "480p", "m": "720p", "h": "1080p"}.get(self.render_quality, "480p")
-        self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
-        self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
+        segmented_ready = (
+            scene.class_name == "AetherLabSegmentedScene" and scene.status == "rendered"
+        )
+        if not segmented_ready:
+            self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
+            self.status.emit(f"Worker D: rendering Manim scene to MP4 ({quality_label}).")
         from aetherlab.services.pipeline import _video_exists
 
         needs_render = scene.status == "compiled" or (
             scene.status == "rendered" and not _video_exists(scene.video_path)
         )
+        if needs_render and scene.class_name == "AetherLabSegmentedScene":
+            # Never re-render the joined segment code (only the last segment
+            # would come out); resume and re-assemble from the manifest.
+            from aetherlab.services.segmented_pipeline import render_segmented_scene
+
+            self.status.emit("Lesson video missing; resuming from the segment manifest.")
+            scene = await render_segmented_scene(
+                self.request, solver, rag, self.settings, runtime=manim,
+                quality=self.render_quality,
+                progress=lambda msg: self.status.emit(str(msg)),
+                cancel_check=lambda: self._cancelled,
+            )
+            cache.store_scene(key, scene)
+            needs_render = False
         if scene.status == "rendered" and needs_render:
             scene.diagnostics.append("Cached rendered video missing; re-rendering.")
             scene.status = "compiled"
@@ -171,6 +274,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 brief=self.request.prompt,
                 progress=lambda msg: self.status.emit(str(msg)),
                 cancel_check=lambda: self._cancelled,
+                duration_target_s=self.request.duration_target_s,
             )
             if any("Applied render repair" in d for d in rendered_scene.diagnostics):
                 self.status.emit("Scene needed a render repair pass; re-rendered.")
@@ -178,9 +282,18 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 self.status.emit("Visual critic requested a revision; re-rendered.")
             cache.store_scene(key, rendered_scene)
         else:
-            self.status.emit("Reusing cached rendered video.")
+            if scene.status == "incomplete":
+                self.status.emit(
+                    scene.diagnostics[-1] if scene.diagnostics else "Long explanation incomplete."
+                )
+            elif scene.class_name == "AetherLabSegmentedScene":
+                self.status.emit("Segmented lesson assembled and validated.")
+            else:
+                self.status.emit("Reusing cached rendered video.")
             rendered_scene = scene
         self._check_cancelled()
+        _refresh_spec(rendered_scene, self.request, solver, rag)
+        cache.store_scene(key, rendered_scene)
         self.render_ready.emit(rendered_scene)
         self.progress.emit(95, "Render complete")
 
@@ -191,26 +304,38 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
                 solver=solver,
                 rag=rag,
                 scene=rendered_scene,
+                plan=plan,
             )
         )
         self.progress.emit(100, "Pipeline complete")
 
     async def _ensure_ingested(self) -> None:
-        """Auto-index library files into ChromaDB if empty (#16 — progress emitted)."""
+        """Keep the textbook index current, including curated external references."""
+        try:
+            from aetherlab.services.ingestion import LibraryIngestor
+
+            ingestor = LibraryIngestor(self.settings)
+            pending = ingestor.pending_files()
+        except Exception:  # noqa: BLE001 - generation remains available without RAG
+            ingestor = None
+            pending = []
+
         if self.settings.chroma_path.exists():
             try:
                 import chromadb
                 client = chromadb.PersistentClient(path=str(self.settings.chroma_path))
                 collection = client.get_collection("textbooks")
-                if collection.count() > 0:
+                if collection.count() > 0 and not pending:
                     self.progress.emit(33, f"RAG ready: {collection.count()} chunks indexed")
                     return
             except Exception:
                 pass
 
-        if self.settings.library_path.exists():
+        has_sources = self.settings.library_path.exists() or bool(
+            getattr(self.settings, "reference_sources_path", None)
+        )
+        if has_sources and ingestor is not None:
             try:
-                ingestor = LibraryIngestor(self.settings)
                 count = ingestor.ingest(should_cancel=lambda: self._cancelled)
                 if count > 0:
                     self.status.emit(f"Ingested {count} chunks into ChromaDB.")
@@ -240,11 +365,13 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
     def __init__(self, topic: str, settings: AppSettings, *,
                  audience: str = "undergrad", quality: str = "l",
+                 language: str = "en",
                  regenerate: bool = False) -> None:
         super().__init__()
         self.topic = topic
         self.settings = settings
         self.audience = audience
+        self.language = language
         self.quality = quality
         self.regenerate = regenerate
         import threading
@@ -256,6 +383,22 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
     def run(self) -> None:
         try:
+            try:
+                ingestor = LibraryIngestor(self.settings)
+                pending_sources = ingestor.pending_files()
+                if pending_sources:
+                    self.progress.emit("Indexing textbook references", 0, len(pending_sources))
+
+                    def report_ingest(name: str, done: int, total: int, detail: str) -> None:
+                        self.progress.emit(f"Indexing {name} · {detail}", done + 1, total)
+
+                    ingestor.ingest(
+                        progress=report_ingest,
+                        should_cancel=self._cancel.is_set,
+                    )
+            except Exception:  # noqa: BLE001 - lessons continue if local RAG is unavailable
+                pass
+
             from aetherlab.services.lesson_pipeline import LessonPipeline
 
             pipeline = LessonPipeline(self.settings)
@@ -263,6 +406,7 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
                 pipeline.run(
                     self.topic,
                     audience=self.audience,
+                    language=self.language,
                     quality=self.quality,
                     regenerate=self.regenerate,
                     cancel_check=self._cancel.is_set,
@@ -277,6 +421,10 @@ class LessonWorker(QtCore.QThread):  # type: ignore[union-attr]
 
 
 def _scene_cache_usable(scene: SceneBundle, settings: AppSettings) -> bool:
+    from aetherlab.services.pipeline import _stale_fallback_scene
+
+    if _stale_fallback_scene(scene, settings):
+        return False
     if scene.status == "rendered":
         from aetherlab.services.pipeline import _video_exists
 

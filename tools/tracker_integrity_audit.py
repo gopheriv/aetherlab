@@ -8,9 +8,9 @@ import csv
 import importlib.util
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 TRACKER_CSV = ROOT / "AetherLab_Feature_Tracker.csv"
@@ -20,7 +20,7 @@ GENERATOR = ROOT / "build_feature_tracker.py"
 FEATURE_TESTS = ROOT / "test_features.py"
 ERRORS_FOUND = ROOT / "ERRORS_FOUND.md"
 
-VALID_STATUSES = {"Documented", "PASS", "FAIL", "PARTIAL", "FIXED"}
+VALID_STATUSES = {"Documented", "PASS", "FAIL", "PARTIAL", "FIXED", "REGRESSED"}
 VALID_TEST_METHODS = {"headless", "static", "gui"}
 VALID_PERSONAS = {"P1", "P2", "P3", "P4", "P5"}
 VALID_STORY_TEST_METHODS = {"harness", "scripted-ui", "manual", "live-cloud"}
@@ -36,6 +36,9 @@ REQUIRED_STORY_COLUMNS = [
     "Errors found",
     "Phase-4 result",
 ]
+IMPLEMENTATION_REF_RE = re.compile(
+    r"(?<![\w])([A-Za-z0-9_./\\-]+\.(?:py|yml|yaml):(\d+))"
+)
 
 
 def _load_generator() -> Any:
@@ -62,7 +65,14 @@ def _read_xlsx() -> tuple[list[str], list[dict[str, str]]]:
     values = list(ws.iter_rows(values_only=True))
     headers = [str(v or "") for v in values[0]]
     rows = [
-        {headers[i]: "" if value is None else str(value) for i, value in enumerate(row)}
+        {
+            headers[i]: "" if value is None else (
+                value.replace(tzinfo=UTC).isoformat(timespec="seconds")
+                if isinstance(value, datetime) and headers[i] == "Latest check (UTC)"
+                else str(value)
+            )
+            for i, value in enumerate(row)
+        }
         for row in values[1:]
         if any(value is not None for value in row)
     ]
@@ -96,7 +106,9 @@ def _contiguous(ids: list[str]) -> list[str]:
     return sorted(expected - set(ids), key=lambda x: int(x[1:]))
 
 
-def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
+def audit(
+    *, allow_pending_result: str | set[str] | None = None, include_run_status: bool = True
+) -> dict[str, Any]:
     issues: list[str] = []
     module = _load_generator()
     expected = _expected_rows(module)
@@ -141,6 +153,35 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         for col in REQUIRED_STORY_COLUMNS:
             if not row.get(col, "").strip():
                 issues.append(f"{fid} missing {col}")
+        expected_behavior = row.get("Expected behaviour", "")
+        references = IMPLEMENTATION_REF_RE.findall(expected_behavior)
+        if not references:
+            issues.append(f"{fid} missing a concrete Python/YAML implementation reference")
+        else:
+            has_implementation_source = False
+            for reference, line_text in references:
+                relative_path = reference.rsplit(":", 1)[0].replace("\\", "/")
+                source_path = ROOT / relative_path
+                line_number = int(line_text)
+                if source_path.suffix in {".py", ".yml", ".yaml"}:
+                    has_implementation_source = True
+                if not source_path.is_file():
+                    issues.append(f"{fid} implementation reference points to missing file {relative_path}")
+                    continue
+                try:
+                    source_lines = source_path.read_text(encoding="utf-8").splitlines()
+                except (OSError, UnicodeError) as exc:
+                    issues.append(f"{fid} cannot read implementation reference {reference}: {exc}")
+                    continue
+                if not 1 <= line_number <= len(source_lines):
+                    issues.append(
+                        f"{fid} implementation reference is out of range: {reference} "
+                        f"(file has {len(source_lines)} lines)"
+                    )
+                elif not source_lines[line_number - 1].strip():
+                    issues.append(f"{fid} implementation reference points to a blank line: {reference}")
+            if not has_implementation_source:
+                issues.append(f"{fid} implementation reference does not point to source code/config")
         if row.get("Story") and not row["Story"].startswith(f"US-{fid}:"):
             issues.append(f"{fid} story id does not match feature id")
         if row.get("Persona") and row["Persona"] not in VALID_PERSONAS:
@@ -156,7 +197,12 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
     result_ids = set(results)
     missing_results = csv_id_set - result_ids
     extra_results = result_ids - csv_id_set
-    if allow_pending_result and missing_results == {allow_pending_result} and not extra_results:
+    allowed_pending = (
+        {allow_pending_result}
+        if isinstance(allow_pending_result, str)
+        else set(allow_pending_result or ())
+    )
+    if missing_results <= allowed_pending and not extra_results:
         missing_results = set()
     if missing_results or extra_results:
         issues.append(
@@ -176,19 +222,78 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         if not str(result.get("note", "")).strip():
             issues.append(f"{fid} missing result note")
 
+    # BUG-60: the audit used to certify a tracker regenerated from *failing*
+    # results — rebuilding simply absorbed the failures into the spreadsheet and
+    # every downstream gate went green. A run with failures is never certifiable,
+    # however the statuses happen to be stamped.
+    # `include_run_status` exists only so t_f165 — which runs *inside* the
+    # harness and therefore reads the PREVIOUS run's results — can assert
+    # artifact consistency without asserting on a stale run status. Without it a
+    # single failing run would fail t_f165 forever: its own recorded failure
+    # would keep the audit red on every subsequent run. The CLI `--check` gate
+    # (the CI path) always includes it, and t_f215 asserts that it rejects.
+    harness_failures = sorted(
+        (fid for fid, result in results.items() if result.get("status") == "FAIL"),
+        key=lambda fid: int(fid[1:]) if re.fullmatch(r"F\d+", fid) else 0,
+    )
+    if include_run_status and harness_failures:
+        issues.append(
+            "Feature harness failures recorded in feature_test_results.json: "
+            f"{harness_failures}"
+        )
+
     errors_text = ERRORS_FOUND.read_text(encoding="utf-8")
-    errors_bug_ids = set(re.findall(r"BUG-\d+", errors_text))
+    errors_bug_ids = set(re.findall(r"^\|\s*(BUG-\d+)\s*\|", errors_text, re.M))
+    tracker_bug_ids = {
+        bug_id
+        for row in csv_rows
+        for bug_id in re.findall(r"BUG-\d+", row.get("Errors found", ""))
+    }
+    for row in csv_rows:
+        if row.get("Phase-2 result") in {"FAIL", "PARTIAL"}:
+            linked_bugs = set(re.findall(r"BUG-\d+", row.get("Errors found", "")))
+            if not linked_bugs:
+                issues.append(
+                    f"{row['ID']} Phase-2 result is {row['Phase-2 result']} without a linked BUG entry"
+                )
+            undocumented = sorted(linked_bugs - errors_bug_ids, key=lambda b: int(b.split("-")[1]))
+            if undocumented:
+                issues.append(f"{row['ID']} references bugs missing from ERRORS_FOUND.md: {undocumented}")
     defect_bug_ids = set()
     defect_ids = set(module.DEFECTS)
     for fid, note in module.DEFECTS.items():
         if fid not in csv_id_set:
             issues.append(f"DEFECTS references unknown feature {fid}")
-        if next((r for r in csv_rows if r["ID"] == fid), {}).get("Status") != "FIXED":
-            issues.append(f"DEFECTS feature {fid} is not marked FIXED")
+        defect_status = next((r for r in csv_rows if r["ID"] == fid), {}).get("Status")
+        recorded = results.get(fid, {}).get("status")
+        expected_status = {"PASS": "FIXED", "FAIL": "REGRESSED"}.get(recorded, "PARTIAL")
+        if defect_status != expected_status:
+            issues.append(f"DEFECTS feature {fid} is {defect_status}, expected {expected_status} for recorded result {recorded}")
+        if include_run_status and defect_status == "REGRESSED":
+            issues.append(
+                f"DEFECTS feature {fid} REGRESSED: a previously-fixed defect is failing again"
+            )
         defect_bug_ids.update(re.findall(r"BUG-\d+", note))
     missing_bug_docs = sorted(defect_bug_ids - errors_bug_ids, key=lambda b: int(b.split("-")[1]))
     if missing_bug_docs:
         issues.append(f"DEFECTS bug IDs missing from ERRORS_FOUND.md: {missing_bug_docs}")
+    non_feature_bug_ids = set(module.NON_FEATURE_DEFECTS)
+    unknown_non_feature_bug_ids = sorted(
+        non_feature_bug_ids - errors_bug_ids,
+        key=lambda b: int(b.split("-")[1]),
+    )
+    if unknown_non_feature_bug_ids:
+        issues.append(
+            f"NON_FEATURE_DEFECTS references missing error rows: {unknown_non_feature_bug_ids}"
+        )
+    unlinked_logged_bugs = sorted(
+        errors_bug_ids - tracker_bug_ids - non_feature_bug_ids,
+        key=lambda b: int(b.split("-")[1]),
+    )
+    if unlinked_logged_bugs:
+        issues.append(
+            f"Logged BUG rows are not linked to a feature story: {unlinked_logged_bugs}"
+        )
 
     return {
         "ok": not issues,
@@ -199,6 +304,9 @@ def audit(*, allow_pending_result: str | None = None) -> dict[str, Any]:
         "test_count": len(test_ids),
         "defect_count": len(defect_ids),
         "bug_ids_in_defects": sorted(defect_bug_ids, key=lambda b: int(b.split("-")[1])),
+        "logged_bug_count": len(errors_bug_ids),
+        "linked_bug_count": len(errors_bug_ids & tracker_bug_ids),
+        "unlinked_logged_bug_ids": unlinked_logged_bugs,
     }
 
 

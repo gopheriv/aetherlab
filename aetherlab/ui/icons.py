@@ -163,7 +163,7 @@ _STROKE_WIDTH = 1.75
 _pixmap_cache: dict[tuple[str, int, str], QtGui.QPixmap] = {}
 
 
-def icon_pixmap(name: str, size: int = 16, color: str = "#94A3B8") -> QtGui.QPixmap:
+def icon_pixmap(name: str, size: int = 16, color: str = "#65758A") -> QtGui.QPixmap:
     """Render a Lucide icon to a crisp QPixmap at 2x device resolution."""
     key = (name, size, color)
     cached = _pixmap_cache.get(key)
@@ -187,11 +187,11 @@ def icon_pixmap(name: str, size: int = 16, color: str = "#94A3B8") -> QtGui.QPix
     return pm
 
 
-def icon(name: str, size: int = 16, color: str = "#94A3B8") -> QtGui.QIcon:
+def icon(name: str, size: int = 16, color: str = "#65758A") -> QtGui.QIcon:
     return QtGui.QIcon(icon_pixmap(name, size, color))
 
 
-def icon_label(name: str, size: int = 16, color: str = "#94A3B8"):
+def icon_label(name: str, size: int = 16, color: str = "#65758A"):
     """A QLabel showing a fixed icon — convenient for card headers."""
     from PyQt6 import QtWidgets
 

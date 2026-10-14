@@ -107,6 +107,14 @@ STARTER_BOOKS: tuple[StarterBook, ...] = (
         approx_mb=264,  # broad algebra-based survey — wide cross-reference, large file
         default_checked=False,
     ),
+    StarterBook(
+        key="physics",
+        title="Physics",
+        filename="OpenStax - Physics.pdf",
+        fallback_url="https://assets.openstax.org/oscms-prodcms/media/documents/Physics_-_WEB.pdf",
+        approx_mb=55,  # algebra-based intro survey — plainer prose deepens retrieval recall
+        default_checked=False,
+    ),
 )
 
 _ATTRIBUTION = """OpenStax textbooks in this folder

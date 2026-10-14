@@ -7,7 +7,7 @@ Steps:
 2. Smoke-test the frozen app: `dist/aetherlab/aetherlab.exe --smoke` must
    exit 0 with NO provider configured (exercises the keyless fallback path,
    the domain templates, and a real Manim render inside the bundle).
-3. iscc packaging/installer.iss  →  dist/AetherLab-Setup-<version>.exe
+3. iscc packaging/installer.iss  →  dist/PhysLab-Setup-<version>.exe
    (skipped with a warning when Inno Setup isn't installed).
 """
 
@@ -40,7 +40,7 @@ def main() -> int:
 
     configure_utf8_stdio()
 
-    print(f"Building AetherLab {__version__}")
+    print(f"Building PhysLab {__version__}")
 
     # 1 — freeze
     run([sys.executable, "-m", "PyInstaller", "packaging/aetherlab.spec", "--noconfirm"])
@@ -104,7 +104,7 @@ def main() -> int:
         )
         return 0
     run([iscc, f"/DMyAppVersion={__version__}", "packaging/installer.iss"])
-    setup = ROOT / "dist" / f"AetherLab-Setup-{__version__}.exe"
+    setup = ROOT / "dist" / f"PhysLab-Setup-{__version__}.exe"
     print(f"\nDONE: {setup} ({setup.stat().st_size / 1e6:.0f} MB)"
           if setup.exists() else "\nWARNING: installer output not found")
     return 0

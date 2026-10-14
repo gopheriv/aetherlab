@@ -2,7 +2,8 @@
 
 AetherLab can render Manim scenes locally, or send a single sanitized Manim
 scene file to a GitHub Actions render repo and download the MP4 artifact.
-Cloud rendering is optional and always fails soft to local rendering.
+Cloud rendering is optional. Auto mode can fall back to local rendering; explicit
+Cloud mode reports a remote failure without starting a local render.
 
 ## Recommended Setup
 
@@ -74,8 +75,10 @@ patterns. If it sees one, it refuses cloud rendering and renders locally.
 ## Modes
 
 - `Local`: current behavior. Render with the local Manim install.
-- `Cloud`: try GitHub Actions first; fall back to local if unavailable.
-- `Auto`: use cloud only for heavy scenes. The default threshold is `3.0`,
+- `Cloud`: render through GitHub Actions only; report cloud failures without
+  starting a local render.
+- `Auto`: use cloud for heavy scenes and fall back to local if cloud is unavailable.
+  The default threshold is `3.0`,
   matching AetherLab's existing heavy-scene render-cost heuristic.
 
 ## Cache Behavior
@@ -86,12 +89,26 @@ Cloud job ids are derived from:
 - scene class
 - quality
 - fps
-- `manim==0.20.1`
+- `manim==0.21.0`
 - workflow contract version
 
 Identical scenes reuse an existing GitHub artifact when available. Downloaded
 MP4s are stored under the same local isolated render-run directory shape used by
 local rendering, so missing local videos still trigger a re-render.
+
+Local Manim rendering keeps its per-render cache disabled by default. For
+measured repair-chain experiments, set `AETHERLAB_MANIM_REPAIR_CACHE=1`; Manim
+then reuses content-hashed play segments only inside one isolated repair UUID.
+`AETHERLAB_MANIM_PARTIAL_REVISIONS=1` can additionally render only the play
+range identified from critic frame timestamps, then assemble the complete MP4
+from that lineage cache. It skips the partial pass when the scene timing is
+dynamic or ambiguous. Both flags apply only to a selected local backend; they
+do not change the explicit Cloud workflow or its cache contract.
+
+For a local OpenGL experiment, set `AETHERLAB_MANIM_RENDERER=opengl`. Cairo
+remains the default, and cloud workers continue to use Cairo. Generated scenes
+may use Cairo-only behavior, so compare visuals and failures before adopting
+OpenGL for regular local rendering.
 
 ## Runner Parity
 
@@ -99,20 +116,42 @@ The workflow pins:
 
 - `ubuntu-24.04`
 - Python `3.14`
-- `manim==0.20.1`
+- `manim==0.21.0`
 - ffmpeg, cairo, pango
+- optional MathTex support: `texlive-latex-extra` and `dvisvgm`. The extra
+  bundle supplies Manim's required `standalone` document class; recommended
+  fonts are omitted to keep the conditional TeX install smaller.
 
 LaTeX is installed only when the app marks a scene as needing `Tex`/`MathTex`.
 AetherLab's default generated and fallback scenes remain Text-first to avoid a
 hard LaTeX dependency.
 
+The dependency step has a seven-minute limit and bounded APT retries/timeouts;
+the whole render job is limited to 15 minutes so a stalled package mirror does
+not leave an orphan worker running for hours.
+
 ## Failure Behavior
+
+The worker publishes only one final MP4 with the requested scene class name,
+excluding partial movie fragments. A missing or ambiguous match fails the job;
+an unrelated larger video is never substituted. Workflow version 7 changes the
+content-addressed job key so older worker outputs cannot satisfy a new request.
+
+The client checks the MP4 container, video stream, positive duration, requested
+dimensions and a decoded frame before presenting the artifact as ready. PyAV
+(`av`) is a base application dependency for this check even in cloud-only mode;
+it does not require local Manim rendering. If the decoder cannot load, the app
+reports a validation failure with a repair hint. This sample is not a full
+decode of every frame or a visual/auditory quality certification.
 
 Cloud failures map back to the normal render contract:
 
-- poll timeout -> cancel the remote run best-effort and immediately fall back local
-- Manim crash -> `render-error`, classified as latex/ffmpeg/oom/hallucinated-api/unknown
-- no network/token/repo/workflow -> local fallback
+- poll timeout -> cancel the remote run best-effort; **Auto** mode falls back to local,
+  while explicit **Cloud** mode reports the failure and skips local rendering
+- Manim crash -> `render-error`, classified as latex/ffmpeg/oom/hallucinated-api/unknown;
+  repair may retry through the selected backend
+- no network/token/repo/workflow -> **Auto** mode falls back to local; explicit
+  **Cloud** mode reports the failure and does not start a local Manim process
 
 The configured cloud timeout is a ceiling. AetherLab derives a smaller
 quality/cost-aware budget (a light draft is capped at 420 seconds even when an
@@ -128,17 +167,23 @@ Every cloud render and scene tournament is recorded in a **render-farm ledger**
 `<data_dir>/render_ledger.json`). Open it from **Settings → View render ledger**
 to see, per job:
 
-- the status timeline — `queued → in_progress → completed/failed/cancelled/
-  rate_limited → artifact_downloaded → rendered`, or `fallback_local`;
+- job id, scene/class, quality, FPS, backend, and provider;
+- the status timeline — `queued → in_progress → completed →
+  artifact_downloaded → rendered`, or `failed`, `cancelled`,
+  `action_required`, `rate_limited → in_progress`, and `fallback_local`;
+- safe links to the GitHub Actions run and artifact page. Signed ZIP URLs and
+  URLs with query parameters are never stored;
 - for a tournament, the **per-candidate critic scores with the winner
   highlighted** — i.e. *why* this scene was chosen;
 - a **sanitized failure log tail** (tokens/keys are redacted at write time, so
   the ledger is safe to share) and the classified failure kind;
-- the **local-fallback reason** and the final output path when cloud was
-  unavailable.
+- the **local-fallback reason** and the final output path when Auto mode used a
+  local render after cloud was unavailable; explicit Cloud failures remain
+  cloud-only.
 
 The ledger is fail-soft and capped: it never breaks a render and keeps only the
-most recent jobs. Because every free-text field is scrubbed on the way in, no
-credential is ever persisted. To debug a failed cloud render, read its log tail
-and timeline here first; to confirm a tournament, check the candidate scores and
-the winner index.
+most recent jobs. Text fields and diagnostics are scrubbed before display or
+persistence. A missing GitHub token scope appears as `action_required` with a
+short setup hint; a poll rate limit appears in the timeline before polling
+resumes. To debug a failed cloud render, read its log tail and timeline here
+first; to confirm a tournament, check the candidate scores and the winner index.

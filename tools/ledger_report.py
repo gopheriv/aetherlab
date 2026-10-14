@@ -175,6 +175,71 @@ def summarize_ledger(jobs: list[dict]) -> dict[str, Any]:
     fallbacks = sum(1 for j in jobs if j.get("status") == "fallback_local")
     failures = sum(1 for j in jobs if j.get("status") == "failed")
 
+    telemetry_rows = [
+        j for j in jobs if isinstance(j.get("metrics"), dict) and j.get("metrics")
+    ]
+    by_backend: dict[str, list[dict[str, Any]]] = {}
+    for job in telemetry_rows:
+        metrics = job.get("metrics") or {}
+        backend = str(metrics.get("backend") or job.get("backend") or "unknown")
+        by_backend.setdefault(backend, []).append(metrics)
+
+    def metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        fields = (
+            "prepare_seconds", "upload_seconds", "dispatch_seconds",
+            "queue_seconds", "worker_seconds", "download_seconds",
+            "render_wall_seconds", "peak_rss_mb", "total_seconds",
+            "quality_score", "retry_count", "cache_hits",
+        )
+        summary: dict[str, Any] = {"samples": len(rows)}
+        for field in fields:
+            values = []
+            for row in rows:
+                try:
+                    value = float(row.get(field))
+                except (TypeError, ValueError):
+                    continue
+                if value == value and abs(value) != float("inf"):
+                    values.append(value)
+            if values:
+                summary[f"mean_{field}"] = _mean(values)
+        return summary
+
+    by_renderer: dict[str, int] = {}
+    for job in telemetry_rows:
+        renderer = str((job.get("metrics") or {}).get("manim_renderer") or "unknown")
+        by_renderer[renderer] = by_renderer.get(renderer, 0) + 1
+    cache_enabled = [
+        (job.get("metrics") or {}) for job in telemetry_rows
+        if bool((job.get("metrics") or {}).get("repair_cache"))
+    ]
+    cache_disabled = [
+        (job.get("metrics") or {}) for job in telemetry_rows
+        if "repair_cache" in (job.get("metrics") or {})
+        and not bool((job.get("metrics") or {}).get("repair_cache"))
+    ]
+    cache_hits = [
+        int(row.get("cache_hits", 0) or 0) for row in cache_enabled
+    ]
+    telemetry = {
+        "jobs_with_metrics": len(telemetry_rows),
+        "by_backend": {
+            backend: metric_summary(rows) for backend, rows in sorted(by_backend.items())
+        },
+        "by_renderer": dict(sorted(by_renderer.items())),
+        "repair_cache": {
+            "jobs_enabled": len(cache_enabled),
+            "jobs_with_hits": sum(1 for value in cache_hits if value > 0),
+            "total_segment_hits": sum(cache_hits),
+            "mean_render_wall_enabled_seconds": metric_summary(cache_enabled).get(
+                "mean_render_wall_seconds", 0.0
+            ),
+            "mean_render_wall_disabled_seconds": metric_summary(cache_disabled).get(
+                "mean_render_wall_seconds", 0.0
+            ),
+        },
+    }
+
     return {
         "schema": "aetherlab.ledger_report.v1",
         "totals": {
@@ -187,6 +252,7 @@ def summarize_ledger(jobs: list[dict]) -> dict[str, Any]:
             "fallback_rate": round(fallbacks / len(jobs), 3) if jobs else 0.0,
             "failure_rate": round(failures / len(jobs), 3) if jobs else 0.0,
         },
+        "telemetry": telemetry,
         "candidate_histogram": dict(sorted(hist.items(), key=lambda kv: int(kv[0]))),
         "winner_margin": {
             "n": len(margins),

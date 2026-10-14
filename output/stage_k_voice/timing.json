@@ -1,0 +1,140 @@
+{
+ "rate": "+0%",
+ "voices": {
+  "kk": "kk-KZ-AigulNeural",
+  "ru": "ru-RU-SvetlanaNeural",
+  "en": "en-US-AndrewMultilingualNeural"
+ },
+ "samples": {
+  "ru": {
+   "file": "ru.mp3",
+   "seconds": 8.46
+  },
+  "kk": {
+   "file": "kk.mp3",
+   "seconds": 7.13
+  },
+  "en": {
+   "file": "en.mp3",
+   "seconds": 6.61
+  }
+ },
+ "fragments": {
+  "B0_kk": {
+   "file": "B0_kk.mp3",
+   "seconds": 14.26
+  },
+  "B0_ru": {
+   "file": "B0_ru.mp3",
+   "seconds": 13.7
+  },
+  "B0_en": {
+   "file": "B0_en.mp3",
+   "seconds": 11.74
+  },
+  "B1_kk": {
+   "file": "B1_kk.mp3",
+   "seconds": 33.6
+  },
+  "B1_ru": {
+   "file": "B1_ru.mp3",
+   "seconds": 34.03
+  },
+  "B1_en": {
+   "file": "B1_en.mp3",
+   "seconds": 34.79
+  },
+  "B2_kk": {
+   "file": "B2_kk.mp3",
+   "seconds": 23.19
+  },
+  "B2_ru": {
+   "file": "B2_ru.mp3",
+   "seconds": 22.55
+  },
+  "B2_en": {
+   "file": "B2_en.mp3",
+   "seconds": 20.91
+  },
+  "B3_kk": {
+   "file": "B3_kk.mp3",
+   "seconds": 24.89
+  },
+  "B3_ru": {
+   "file": "B3_ru.mp3",
+   "seconds": 26.98
+  },
+  "B3_en": {
+   "file": "B3_en.mp3",
+   "seconds": 27.45
+  },
+  "B4_kk": {
+   "file": "B4_kk.mp3",
+   "seconds": 20.39
+  },
+  "B4_ru": {
+   "file": "B4_ru.mp3",
+   "seconds": 16.59
+  },
+  "B4_en": {
+   "file": "B4_en.mp3",
+   "seconds": 20.08
+  },
+  "B5_kk": {
+   "file": "B5_kk.mp3",
+   "seconds": 20.59
+  },
+  "B5_ru": {
+   "file": "B5_ru.mp3",
+   "seconds": 19.4
+  },
+  "B5_en": {
+   "file": "B5_en.mp3",
+   "seconds": 18.94
+  },
+  "B6_kk": {
+   "file": "B6_kk.mp3",
+   "seconds": 17.9
+  },
+  "B6_ru": {
+   "file": "B6_ru.mp3",
+   "seconds": 18.04
+  },
+  "B6_en": {
+   "file": "B6_en.mp3",
+   "seconds": 15.68
+  },
+  "B7_kk": {
+   "file": "B7_kk.mp3",
+   "seconds": 35.36
+  },
+  "B7_ru": {
+   "file": "B7_ru.mp3",
+   "seconds": 35.31
+  },
+  "B7_en": {
+   "file": "B7_en.mp3",
+   "seconds": 34.59
+  }
+ },
+ "b6_split": {
+  "kk": {
+   "B6a_s": 11.25,
+   "gap_s": 10.97,
+   "B6b_s": 5.78,
+   "edge_breath_s": 1.0
+  },
+  "ru": {
+   "B6a_s": 11.56,
+   "gap_s": 10.96,
+   "B6b_s": 5.48,
+   "edge_breath_s": 1.0
+  },
+  "en": {
+   "B6a_s": 9.78,
+   "gap_s": 12.44,
+   "B6b_s": 5.78,
+   "edge_breath_s": 1.0
+  }
+ }
+}

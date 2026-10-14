@@ -80,17 +80,17 @@ def fit_quality_proxy(
 
     if len(pairs) < 2:
         return None
-    X = np.asarray([vec for vec, _ in pairs], dtype=float)
+    design_matrix = np.asarray([vec for vec, _ in pairs], dtype=float)
     y = np.asarray([score for _, score in pairs], dtype=float)
-    n, d = X.shape
-    Xb = np.hstack([X, np.ones((n, 1))])  # bias column
+    n, d = design_matrix.shape
+    extended_matrix = np.hstack([design_matrix, np.ones((n, 1))])  # bias column
     reg = lam * np.eye(d + 1)
     reg[d, d] = 0.0  # do not regularise the intercept
     try:
-        w = np.linalg.solve(Xb.T @ Xb + reg, Xb.T @ y)
+        w = np.linalg.solve(extended_matrix.T @ extended_matrix + reg, extended_matrix.T @ y)
     except np.linalg.LinAlgError:
-        w, *_ = np.linalg.lstsq(Xb, y, rcond=None)
-    pred = Xb @ w
+        w, *_ = np.linalg.lstsq(extended_matrix, y, rcond=None)
+    pred = extended_matrix @ w
     ss_res = float(((y - pred) ** 2).sum())
     ss_tot = float(((y - y.mean()) ** 2).sum())
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0

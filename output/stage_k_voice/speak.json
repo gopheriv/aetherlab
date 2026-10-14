@@ -1,0 +1,42 @@
+{
+ "B0": {
+  "kk": "Мәшине секундына екі метр жылдамдықпен келе жатыр және бірқалыпты үдейді. Төрт секундтан кейін жылдамдық он төрт метр секундқа жетеді. Ол қанша метр жүрді? Сабақ соңында жауапты екі тәсілмен табасың.",
+  "ru": "Машина едет со скоростью два метра в секунду и плавно разгоняется. Через четыре секунды — уже четырнадцать. Сколько метров она прошла? К концу урока ты найдёшь ответ двумя способами.",
+  "en": "A car travels at two metres per second and accelerates smoothly. After four seconds it already does fourteen. How many metres did it cover? By the end of the lesson you will find the answer two ways."
+ },
+ "B1": {
+  "kk": "Егер жылдамдық өзгермесе — қозғалыс бірқалыпты: вэ тең эс бөлінген тэ. Бізде жылдамдық өседі — бірақ әр секундта бірдей шамаға өседі. Әр секундта жылдамдық секундына үш метрге артады — бұл үдеудің үшке тең екенін білдіреді. Мұндай қозғалыс теңүдемелі деп аталады. Жылдамдықтың өсу шапшаңдығын үдеу көрсетеді: а тең жылдамдық өзгерісін уақытқа бөлгенге. Өлшем бірлігі — метр секундына квадрат. Икс осін қозғалыс бағытымен бағыттаймыз: алға бағытталғанның бәрі плюс таңбасымен.",
+  "ru": "Если скорость не меняется — движение равномерное: вэ равно эс делить на тэ. У нас скорость растёт — но растёт одинаково за каждую секунду. Каждую секунду прибавка три метра в секунду — это и значит, что ускорение равно трём. Такое движение называется равноускоренным. Быстроту роста скорости показывает ускорение: а равно изменение скорости, делённое на время. Единица — метр на секунду в квадрате. Направим ось икс по движению: всё, что вперёд, — со знаком плюс.",
+  "en": "If speed never changes, motion is uniform: v equals s over t. Here speed grows — but grows by the same amount each second. Every second adds three metres per second — that is what an acceleration of three means. Such motion is called uniformly accelerated. Acceleration measures how fast velocity grows: a equals the change in velocity divided by time. Its unit is the metre per second squared. We point the x axis along the motion: everything forward takes the plus sign."
+ },
+ "B2": {
+  "kk": "Кез келген сәттегі жылдамдық — бастапқы жылдамдық пен өсімшенің қосындысы. Өсімше — үдеу мен уақыттың көбейтіндісі: вэ тең вэ нөл плюс а тэ. Сандарды қоямыз: екі плюс үш көбейту төрт — секундына он төрт метр. Бірліктерді тексер: метр секундына квадратты секундқа көбейткенде метр секунд шығады. Бәрі сәйкес.",
+  "ru": "Скорость в любой момент — это стартовая скорость плюс прибавка. Прибавка — ускорение умножить на время: вэ равно вэ нулевое плюс а тэ. Подставим наши числа: два плюс три умножить на четыре — четырнадцать метров в секунду. Проверь единицы: метр на секунду в квадрате умножить на секунду даёт метр на секунду. Всё сходится.",
+  "en": "Velocity at any moment is the starting velocity plus the gain. The gain is acceleration times time: v equals v naught plus a t. Plug in our numbers: two plus three times four — fourteen metres per second. Check the units: metres per second squared times seconds gives metres per second. It all fits."
+ },
+ "B3": {
+  "kk": "Орын ауыстыру — дененің старттан қанша ығысқаны. Бағыт өзгермесе, ол жүрілген жолға тең. Формула: эс тең вэ нөл тэ плюс а тэ квадраттың жартысы. Бірінші қосылғыш — үдемей жүрген жол, екіншісі — үдеуден қосылғаны. Есептейміз: екі көбейту төрт — сегіз, плюс үш көбейту он алтының жартысы — жиырма төрт. Барлығы отыз екі метр.",
+  "ru": "Перемещение — это насколько тело сдвинулось от старта. Пока направление не меняется, оно равно пройденному пути. Формула: эс равно вэ нулевое тэ плюс а тэ квадрат пополам. Первое слагаемое — что прошли бы без разгона, второе — добавка от разгона. Считаем: два умножить на четыре — восемь, плюс три умножить на шестнадцать пополам — двадцать четыре. Итого тридцать два метра.",
+  "en": "Displacement is how far the body shifted from the start. While direction stays the same, it equals the distance travelled. The formula: s equals v naught t plus a t squared over two. The first term is what we would cover without accelerating; the second is the boost from acceleration. Let's compute: two times four is eight, plus three times sixteen over two — twenty-four. Thirty-two metres in total."
+ },
+ "B4": {
+  "kk": "Жылдамдықтың уақытқа тәуелділік графигін саламыз: вэ тең екі плюс үш тэ. Бұл түзу: нөлде — екі, төрт секундтан кейін — он төрт. Түзудің көлбеуі — бұл үдеу: неғұрлым тік болса, а соғұрлым үлкен. Есте сақта: вэ-ның тэ-ға тәуелділік графигінің көлбеуі үдеуге тең.",
+  "ru": "Построим график скорости от времени: вэ равно два плюс три тэ. Это прямая: в нуле — два, через четыре секунды — четырнадцать. Наклон прямой — это ускорение: чем круче, тем больше а. Запомни: наклон графика вэ от тэ равен ускорению.",
+  "en": "Let's plot velocity against time: v equals two plus three t. It is a straight line: two at zero, fourteen after four seconds. The slope of the line is the acceleration: the steeper, the larger the a. Remember: the slope of the v–t graph equals the acceleration."
+ },
+ "B5": {
+  "kk": "Енді тексереміз. Жылдамдық графигі астындағы аудан сан жағынан орын ауыстыруға тең. Бізде табандары екі мен он төрт, биіктігі төрт трапеция: табандардың жарты қосындысын биіктікке көбейтеміз — сегіз көбейту төрт — отыз екі метр. Формуламен сәйкес келді. Екі тәсіл — бір жауап.",
+  "ru": "А теперь проверка. Площадь под графиком скорости численно равна перемещению. У нас трапеция с основаниями два и четырнадцать и высотой четыре: полусумма оснований на высоту — восемь умножить на четыре — тридцать два метра. Сошлось с формулой. Два способа — один ответ.",
+  "en": "Now the check. The area under the velocity graph numerically equals the displacement. We have a trapezoid with bases two and fourteen and height four: half the sum of the bases times the height — eight times four — thirty-two metres. It matches the formula. Two ways, one answer."
+ },
+ "B6": {
+  "kk": "Енді өзің. Мәшине орнынан секундына квадрат екі метр үдеумен қозғалды. Бес секундта қанша жол жүреді? Видеоны кідірте тұр да, өзің шығар. Жауабы: нөл көбейту бес плюс екі көбейту жиырма бестің жартысы — жиырма бес метр.",
+  "ru": "А теперь ты. Машина стартует с места с ускорением два метра на секунду в квадрате. Сколько она пройдёт за пять секунд? Поставь видео на паузу и реши. Ответ: ноль умножить на пять плюс два умножить на двадцать пять пополам — двадцать пять метров.",
+  "en": "Now you. A car starts from rest with an acceleration of two metres per second squared. How far does it go in five seconds? Pause the video and solve it. Answer: zero times five plus two times twenty-five over two — twenty-five metres."
+ },
+ "B7": {
+  "kk": "Екі қақпан. Біріншісі: соңғы жылдамдықты бірқалыпты қозғалыс формуласына қою: он төрт көбейту төрт — елу алты. Қате: жылдамдық өсіп отыр, орташасын алу керек. Екіншісі: көлбеу мен ауданды шатастыру. Көлбеу — бұл үдеу, аудан — орын ауыстыру. Қорытынды: вэ тең вэ нөл плюс а тэ; эс тең вэ нөл тэ плюс а тэ квадраттың жартысы; вэ-ның тэ-ға графигі астындағы аудан — орын ауыстыру. График ауданына есептер ҰБТ байқау сынақтарында кездеседі — енді оларды танисың.",
+  "ru": "Две ловушки. Первая: подставить конечную скорость в формулу равномерного движения: четырнадцать умножить на четыре — пятьдесят шесть. Неверно: скорость-то росла, брать надо среднюю. Вторая: перепутать наклон и площадь. Наклон — это ускорение, площадь — перемещение. Итог: вэ равно вэ нулевое плюс а тэ; эс равно вэ нулевое тэ плюс а тэ квадрат пополам; площадь под вэ от тэ — перемещение. Задачи на площадь графика встречаются в пробниках ЕНТ — теперь ты их узнаешь.",
+  "en": "Two traps. First: plugging the final speed into the uniform-motion formula: fourteen times four is fifty-six. Wrong: the speed was growing, you must take the average. Second: mixing up slope and area. Slope is acceleration; area is displacement. To sum up: v equals v naught plus a t; s equals v naught t plus a t squared over two; the area under the v–t graph is the displacement. Graph-area problems appear in UNT mocks — now you will recognise them."
+ }
+}

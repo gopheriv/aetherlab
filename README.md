@@ -1,18 +1,28 @@
 <p align="center">
-  <img src="assets/aetherlab_icon_1080.png" width="96" alt="AetherLab" />
+  <img src="assets/aetherlab_icon_1080.png" width="96" alt="PhysLab" />
 </p>
 
-<h1 align="center">AetherLab</h1>
+<h1 align="center">PhysLab</h1>
+
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+" /></a>
+  <a href="https://www.manim.community/"><img src="https://img.shields.io/badge/manim-0.21.0-orange" alt="Manim 0.21.0" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" /></a>
+  <a href="docs/QUICKSTART.md"><img src="https://img.shields.io/badge/docs-quickstart-informational" alt="Quickstart" /></a>
+  <img src="https://img.shields.io/badge/langs-ru_%7C_kk_%7C_en-lightgrey" alt="ru kk en" />
+</p>
 
 <p align="center"><b>Ask a physics question — or a whole topic — and get a
 narrated, animated explanation you can actually learn from.</b></p>
 
 ---
 
-AetherLab is a desktop physics workbench for students, educators, and the
-curious. It works two ways from the same prompt bar:
+PhysLab is a desktop physics learning workbench for Kazakhstan high-school
+students preparing for ЕНТ/ҰБТ. It combines a multilingual practice set,
+beginner-friendly lessons, interactive visual explanations, and a searchable
+PDF library. The existing solver and animation pipeline remain available.
 
-### ▶ Solve — one problem, visualized
+### Solve — one problem, visualized
 Type a problem, press **Run**, and watch a four-stage pipeline:
 
 | Stage | What you get |
@@ -25,8 +35,8 @@ Type a problem, press **Run**, and watch a four-stage pipeline:
 Plus a **live parametric canvas**: drag sliders (damping, stiffness, gravity…)
 and watch the solution curves respond in real time.
 
-### 🎓 Learn — a whole topic, taught
-Type a *topic*, press **Learn**, and AetherLab builds a **narrated,
+### Learn — a whole topic, taught
+Type a *topic*, press **Learn**, and PhysLab builds a **narrated,
 multi-chapter video lesson** — hook → intuition → the math, built up → worked
 example → recap. The Lesson page is a self-contained classroom:
 
@@ -44,7 +54,7 @@ AI key you still get a coherent, domain-matched template lesson.
 
 ## Install
 
-**Students:** run `AetherLab-Setup-<version>.exe` → launch from the Start menu.
+**Students:** run `PhysLab-Setup-<version>.exe` → launch from the Start menu.
 Then read the [Quickstart](docs/QUICKSTART.md).
 
 **From source** (Python 3.11+):
@@ -58,18 +68,20 @@ python -m aetherlab
 
 - **No AI:** built-in domain templates (pendulum, orbit, wave, oscillator) +
   full textbook references. Works offline.
-- **Local AI (free, private):** install [Ollama](https://ollama.com); AetherLab
+- **Local AI (free, private):** install [Ollama](https://ollama.com); PhysLab
   detects it and enables it in one click.
 - **Cloud AI:** any OpenAI-compatible endpoint (Settings → paste base URL,
   key, model → Test connection). A separate **vision model** (optional) lets the
   critic watch renders and revise them.
 
-Advanced configuration (env vars override everything):
+Advanced configuration (the existing `AETHERLAB_*` variable names remain as a
+backward-compatible prefix):
 `AETHERLAB_OPENAI_API_KEY`/`OPENAI_API_KEY`, `AETHERLAB_OPENAI_BASE_URL`,
 `AETHERLAB_LLM_MODEL`, `AETHERLAB_VISION_MODEL`, `AETHERLAB_PROVIDER=ollama`,
 `AETHERLAB_NARRATION=1`, `AETHERLAB_DATA_DIR`, `AETHERLAB_LIBRARY_DIR`,
-`AETHERLAB_LLM_TIMEOUT`. Data lives under `%LOCALAPPDATA%\AetherLab` (or
-`~/.aetherlab`); logs in `…\AetherLab\logs\aetherlab.log`.
+`AETHERLAB_LLM_TIMEOUT`. User data remains under `%LOCALAPPDATA%\AetherLab` (or
+`~/.aetherlab`) so existing settings, textbooks, and study history survive the
+rebrand; logs remain in that data folder.
 
 ## Highlights
 
@@ -101,7 +113,7 @@ On Windows, `start.bat` launches the app under a crash-restart watchdog.
 ## Development
 
 ```bash
-python test_features.py            # canonical behavioural suite, 165 features
+python test_features.py            # canonical feature checks, 250 features
 python build_feature_tracker.py    # regenerate the canonical feature tracker
 python tools/tracker_integrity_audit.py --check
 python tools/feature_surface_audit.py --check
@@ -110,7 +122,9 @@ python -m pytest -q                # focused legacy regression suite
 
 The feature catalog lives in `AetherLab_Feature_Tracker.xlsx` (generated — edit
 `build_feature_tracker.py`). The CSV/XLSX, result JSON, tests, and defect log
-are guarded by the audit tools above. Design & architecture notes:
+are guarded by the audit tools above. The workbook records software checks
+separately from complete user-behaviour acceptance; native UI, hardware and live
+cloud verification must be evidenced independently. Design & architecture notes:
 `TOPIC_EXPLAINER_BRIEF.md`, `MANIM_PIPELINE_QUALITY_ANALYSIS.md`,
 `RENDER_RELIABILITY_AND_CLOUD.md`, `PHYSICS_SOURCES.md`. User docs:
 [`docs/QUICKSTART.md`](docs/QUICKSTART.md),
@@ -118,6 +132,6 @@ are guarded by the audit tools above. Design & architecture notes:
 
 ## License & credits
 
-MIT. Videos are rendered with [Manim Community](https://www.manim.community/).
+[MIT](LICENSE). Videos are rendered with [Manim Community](https://www.manim.community/).
 Starter textbooks are [OpenStax](https://openstax.org) (CC BY 4.0) — download
 for free at openstax.org. Icons are [Lucide](https://lucide.dev) (MIT).

@@ -15,10 +15,10 @@ never see a broken lesson because grounding was unavailable.
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from aetherlab.core.models import LessonPlan
+from aetherlab.services.model_policy import request_temperature
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -83,11 +83,10 @@ def _cite(hit) -> str:
 
 
 async def _check_chapter(chapter, hits, settings: "AppSettings") -> None:
-    from openai import AsyncOpenAI
+    from aetherlab.services.llm_client import make_client
 
-    from aetherlab.services.model_policy import openai_client_kwargs
 
-    client = AsyncOpenAI(**openai_client_kwargs(settings))
+    client = make_client(settings)
     passages = "\n\n".join(f"[{_cite(h)}]\n{h.excerpt[:500]}" for h in hits[:3])
     user = (
         f"## Chapter narration\n{chapter.narration}\n\n"
@@ -99,7 +98,7 @@ async def _check_chapter(chapter, hits, settings: "AppSettings") -> None:
             {"role": "system", "content": FACT_CHECK_SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ],
-        temperature=0.0,
+        temperature=request_temperature(settings, 0.0),
         max_tokens=1024,
     )
     from aetherlab.services.model_json import load_model_json

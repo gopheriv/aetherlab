@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,17 @@ def atomic_write_json(path: Path, payload: Any, *, indent: int = 2) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(staged, target)
+        # Windows scanners/readers may hold a target without FILE_SHARE_DELETE.
+        # Reuse the fsynced stage and retry only recognized Windows refusals;
+        # never remove the destination or turn a lasting failure into success.
+        for attempt in range(5):
+            try:
+                os.replace(staged, target)
+                break
+            except PermissionError as exc:
+                if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 4:
+                    raise
+                time.sleep(0.025 * (2 ** attempt))
     finally:
         try:
             staged.unlink(missing_ok=True)

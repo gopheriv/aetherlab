@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 JsonDict = dict[str, Any]
+DEFAULT_SCENE_DURATION_TARGET_S = 30.0
 
 
 def utc_now_iso() -> str:
@@ -21,6 +21,7 @@ class ProblemRequest:
     parameters: dict[str, float] = field(default_factory=dict)
     session_id: str = "default"
     created_at: str = field(default_factory=utc_now_iso)
+    duration_target_s: float = DEFAULT_SCENE_DURATION_TARGET_S
 
     def normalized_prompt(self) -> str:
         return " ".join(self.prompt.strip().split())
@@ -30,6 +31,7 @@ class ProblemRequest:
             "prompt": self.normalized_prompt(),
             "parameters": {key: self.parameters[key] for key in sorted(self.parameters)},
             "session_id": self.session_id,
+            "duration_target_s": float(self.duration_target_s),
         }
 
 
@@ -45,9 +47,17 @@ class SolverResult:
     # Optional plottable-curve payload (see services/plotting.py). Old cache
     # rows lack the key and load as None (legacy name-based canvas curves).
     plot: dict | None = None
+    # Optional ODE ground-truth spec (see services/numeric.py): a system the
+    # canvas/PDF integrate numerically instead of trusting a guessed curve.
+    numeric_spec: dict | None = None
     # Governing equations as LaTeX strings (mathtext subset), most important
     # first — drives the hero equation banner. Old cache rows load as [].
     key_equations: list[str] = field(default_factory=list)
+    # Optional units and machine-checkable algebra claims. Legacy solver/cache
+    # payloads omit these fields and remain explicitly unverified.
+    variable_units: dict[str, str] = field(default_factory=dict)
+    derivation_records: list[JsonDict] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return asdict(self)
@@ -57,7 +67,11 @@ class SolverResult:
         data = dict(payload)
         data["cached"] = cached
         plot = data.get("plot")
+        numeric_spec = data.get("numeric_spec")
         equations = data.get("key_equations")
+        units = data.get("variable_units")
+        records = data.get("derivation_records")
+        assumptions = data.get("assumptions")
         return cls(
             summary=str(data.get("summary", "")),
             derivation_steps=list(data.get("derivation_steps", [])),
@@ -67,7 +81,14 @@ class SolverResult:
             raw_response=str(data.get("raw_response", "")),
             cached=bool(data.get("cached", cached)),
             plot=plot if isinstance(plot, dict) else None,
+            numeric_spec=numeric_spec if isinstance(numeric_spec, dict) else None,
             key_equations=[str(e) for e in equations] if isinstance(equations, list) else [],
+            variable_units={str(k): str(v) for k, v in units.items()}
+            if isinstance(units, dict) else {},
+            derivation_records=[dict(record) for record in records if isinstance(record, dict)]
+            if isinstance(records, list) else [],
+            assumptions=[str(item) for item in assumptions if str(item).strip()]
+            if isinstance(assumptions, list) else [],
         )
 
 
@@ -142,10 +163,25 @@ class SceneBundle:
     quality_score: float = 0.0
     critique_verdict: str = ""
     critique_issues: list[str] = field(default_factory=list)
+    critique_model: str = ""
     # Per-axis 0-2 critic breakdown (keys == scene_critic.CRITIC_AXES). Empty on
     # old cache rows and when no judgement was made; additive, so reuse behaviour
     # is unchanged.
     critique_breakdown: dict[str, float] = field(default_factory=dict)
+    # Manim play segments reused during the current render; legacy rows default
+    # to zero. The render ledger is the aggregate source for this metric.
+    cache_hits: int = 0
+    # True when this scene is the built-in domain template rather than an
+    # AI-authored one, plus why the LLM path did not produce it. Without this a
+    # timed-out generation renders a generic template that looks like a real
+    # answer. Old cache rows load as False/"".
+    used_fallback: bool = False
+    fallback_reason: str = ""
+    # Unified, backend-neutral evidence/timing payload. Additive for legacy cache rows.
+    scene_spec: JsonDict | None = None
+    narration_text: str = ""
+    subtitle_path: str = ""
+    narration_sync: JsonDict = field(default_factory=dict)
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -154,6 +190,10 @@ class SceneBundle:
     @classmethod
     def from_json(cls, payload: JsonDict, *, cached: bool = False) -> "SceneBundle":
         storyboard = payload.get("storyboard")
+        try:
+            cache_hits = max(0, int(payload.get("cache_hits", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            cache_hits = 0
         return cls(
             class_name=str(payload.get("class_name", "AetherLabScene")),
             code=str(payload.get("code", "")),
@@ -167,6 +207,14 @@ class SceneBundle:
             storyboard=storyboard if isinstance(storyboard, dict) else None,
             quality_score=float(payload.get("quality_score", 0.0) or 0.0),
             critique_verdict=str(payload.get("critique_verdict", "")),
+            critique_model=str(payload.get("critique_model", "")),
+            used_fallback=bool(payload.get("used_fallback", False)),
+            fallback_reason=str(payload.get("fallback_reason", "")),
+            scene_spec=payload.get("scene_spec") if isinstance(payload.get("scene_spec"), dict) else None,
+            narration_text=str(payload.get("narration_text", "")),
+            subtitle_path=str(payload.get("subtitle_path", "")),
+            narration_sync=payload.get("narration_sync")
+            if isinstance(payload.get("narration_sync"), dict) else {},
             critique_issues=[str(i) for i in payload.get("critique_issues", [])]
             if isinstance(payload.get("critique_issues"), list) else [],
             critique_breakdown={
@@ -175,6 +223,84 @@ class SceneBundle:
                 if isinstance(v, (int, float)) and not isinstance(v, bool)
             }
             if isinstance(payload.get("critique_breakdown"), dict) else {},
+            cache_hits=cache_hits,
+        )
+
+
+@dataclass
+class NumericSolution:
+    """Ground-truth trajectory from integrating an ODE spec (services/numeric.py).
+
+    `t` is the time grid; `states` maps each state-variable name to its values
+    over that grid. `ok` is False (with a `note`) when integration was skipped
+    or failed, so callers can fall back to the analytic curve.
+    """
+
+    t: list[float] = field(default_factory=list)
+    states: dict[str, list[float]] = field(default_factory=dict)
+    observe: str = ""
+    method: str = "RK45"
+    ok: bool = False
+    note: str = ""
+
+    def series(self, name: str = "") -> list[float]:
+        """Values of the observed (or named) state variable."""
+        key = name or self.observe or (next(iter(self.states), ""))
+        return self.states.get(key, [])
+
+
+@dataclass
+class OutputPlan:
+    """Which output modalities a given problem actually warrants.
+
+    Produced by services/planner.py (one LLM classification call with a
+    deterministic keyword heuristic fallback). The pipeline gates each stage on
+    these flags so a problem only pays for the outputs it needs. (Distinct from
+    LessonPlan below, which is the multi-chapter narrated-lesson structure.)
+    """
+
+    needs_numeric: bool = False
+    needs_2d: bool = True
+    needs_3d: bool = False
+    needs_animation: bool = True
+    needs_pdf: bool = True
+    rationale: str = ""
+    model_name: str = "heuristic-fallback"
+
+    def enabled(self) -> list[str]:
+        """Human-readable list of the modalities this plan turns on."""
+        flags = [
+            ("numeric", self.needs_numeric),
+            ("2d", self.needs_2d),
+            ("3d", self.needs_3d),
+            ("animation", self.needs_animation),
+            ("pdf", self.needs_pdf),
+        ]
+        return [name for name, on in flags if on]
+
+    def to_json(self) -> JsonDict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, payload: JsonDict, *, model_name: str | None = None) -> "OutputPlan":
+        data = dict(payload)
+
+        def _flag(key: str, default: bool) -> bool:
+            value = data.get(key, default)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"true", "yes", "1", "y"}
+            return bool(value)
+
+        return cls(
+            needs_numeric=_flag("needs_numeric", False),
+            needs_2d=_flag("needs_2d", True),
+            needs_3d=_flag("needs_3d", False),
+            needs_animation=_flag("needs_animation", True),
+            needs_pdf=_flag("needs_pdf", True),
+            rationale=str(data.get("rationale", "")),
+            model_name=str(model_name or data.get("model_name", "cached")),
         )
 
 
@@ -185,6 +311,7 @@ class PipelineResult:
     solver: SolverResult
     rag: RagResult
     scene: SceneBundle
+    plan: "OutputPlan" = field(default_factory=lambda: OutputPlan())
 
 
 @dataclass
@@ -216,6 +343,11 @@ class LessonChapter:
     # services/fact_check.py. Old caches load with empty defaults.
     citations: list[str] = field(default_factory=list)
     fact_check: str = ""
+    # Interactive learning checks run before a rendered chapter and between
+    # chapters. Stored as question-shaped JSON to keep old caches compatible.
+    prediction: dict | None = None
+    retrieval: dict | None = None
+    key_symbols: list[str] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return asdict(self)
@@ -234,6 +366,11 @@ class LessonChapter:
             citation_query=str(data.get("citation_query", "")),
             citations=[str(c) for c in data.get("citations", [])],
             fact_check=str(data.get("fact_check", "")),
+            prediction=data.get("prediction") if isinstance(data.get("prediction"), dict) else None,
+            retrieval=data.get("retrieval") if isinstance(data.get("retrieval"), dict) else None,
+            key_symbols=[
+                str(symbol) for symbol in data.get("key_symbols", [])
+            ] if isinstance(data.get("key_symbols", []), list) else [],
         )
 
 
@@ -277,15 +414,19 @@ class LessonPlan:
     questions: list[LessonQuestion] = field(default_factory=list)
     model_name: str = ""
     cached: bool = False
+    language: str = "en"  # kk | ru | en
+    kazakh_terms: list[dict[str, str]] = field(default_factory=list)
 
     def to_json(self) -> JsonDict:
         return {
             "title": self.title,
             "topic": self.topic,
             "audience": self.audience,
+            "language": self.language,
             "prerequisites": self.prerequisites,
             "objectives": self.objectives,
             "misconception": self.misconception,
+            "kazakh_terms": self.kazakh_terms,
             "chapters": [c.to_json() for c in self.chapters],
             "questions": [q.to_json() for q in self.questions],
             "model_name": self.model_name,
@@ -298,13 +439,22 @@ class LessonPlan:
         audience = str(data.get("audience", "undergrad")).lower().replace(" ", "_")
         if audience not in {"high_school", "ap", "undergrad"}:
             audience = "undergrad"
+        from aetherlab.core.language import normalize_language
+
+        kazakh_terms = data.get("kazakh_terms", [])
         return cls(
             title=str(data.get("title", "")) or "Untitled lesson",
             topic=str(data.get("topic", "")),
             audience=audience,
+            language=normalize_language(data.get("language", "en")),
             prerequisites=[str(p) for p in data.get("prerequisites", [])],
             objectives=[str(o) for o in data.get("objectives", [])],
             misconception=str(data.get("misconception", "")),
+            kazakh_terms=[
+                {str(k): str(v) for k, v in item.items() if isinstance(k, str)}
+                for item in kazakh_terms
+                if isinstance(item, dict)
+            ] if isinstance(kazakh_terms, list) else [],
             chapters=[
                 LessonChapter.from_json(c)
                 for c in data.get("chapters", [])
@@ -330,7 +480,7 @@ class LessonBundle:
     plan: LessonPlan
     chapter_scenes: list[SceneBundle] = field(default_factory=list)
     video_path: str = ""
-    status: str = "planned"  # planned | rendering | assembled | error
+    status: str = "planned"  # planned | rendering | assembled | error | offline_practice_available
     cached: bool = False
     # Start time (seconds) of each rendered chapter clip WITHIN the assembled
     # video, accounting for intro/chapter title cards + crossfades. Used to seek

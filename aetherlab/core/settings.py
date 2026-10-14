@@ -29,6 +29,12 @@ class AppSettings:
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 0
     llm_context_window: int = 250_000
+    # Optional backup provider (OpenAI-compatible). When all three are set,
+    # every model call that fails on the primary (connection cut, timeout,
+    # error status, empty reply) is retried once here; see llm_client.py.
+    fallback_api_key: str | None = None
+    fallback_base_url: str | None = None
+    fallback_llm_model: str | None = None
     # Optional vision-capable model (same OpenAI-compatible endpoint) used by
     # the scene critic to look at rendered frames. None disables the critique
     # loop entirely (renders ship uncritiqued, as before).
@@ -43,6 +49,8 @@ class AppSettings:
     narration_enabled: bool = False
     tts_voice: str = "en-US-AndrewMultilingualNeural"
     tts_rate: str = "+8%"
+    # Local-only spaced-review schedule expressed as comma-separated days.
+    review_intervals_days: str = "1,3,7,14"
     # Pluggable render backend. Local is today's behavior; cloud/auto are
     # additive and fail soft to local when GitHub Actions is unavailable.
     render_mode: str = "local"  # local | cloud | auto
@@ -67,6 +75,9 @@ class AppSettings:
     provider_source: str = "environment"
     api_key_source: str = "none"
     provider_warning: str = ""
+    # Optional local source folder. Only catalogued textbooks and theory
+    # references are added to the RAG index; exam packs stay separate.
+    reference_sources_path: Path | None = None
 
 
 OLLAMA_OPENAI_BASE_URL = "http://localhost:11434/v1"
@@ -115,6 +126,14 @@ def save_app_config(values: dict[str, str | None]) -> Path:
     return path
 
 
+def save_reference_sources_path(path: str | Path) -> Path:
+    """Save a valid local textbook/mock folder without touching its contents."""
+    root = Path(path).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Reference sources folder does not exist: {root}")
+    return save_app_config({"reference_sources_path": str(root)})
+
+
 def load_settings() -> AppSettings:
     # app_config_path() keys off env/default only, so honoring app_cfg's own
     # data_dir override here is safe (no recursion) and lets the Settings
@@ -135,6 +154,17 @@ def load_settings() -> AppSettings:
             else data_dir / "library"
         ),
     )
+    reference_sources_value = (
+        os.getenv("AETHERLAB_REFERENCE_SOURCES")
+        or app_cfg.get("reference_sources_path")
+    )
+    reference_sources_path = (
+        Path(reference_sources_value).expanduser()
+        if reference_sources_value
+        else Path.home() / "Projects" / "References"
+    )
+    if not reference_sources_path.is_dir():
+        reference_sources_path = None
     # The ~/.qwen autoload is a developer-machine convenience: a student's app
     # must never silently inherit provider credentials from an unrelated tool.
     # Opt back in with AETHERLAB_QWEN_AUTOLOAD=1.
@@ -151,7 +181,7 @@ def load_settings() -> AppSettings:
     legacy_api_key, legacy_api_key_name = _first_mapping_named(
         legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"
     )
-    api_key = (
+    api_key = _clean_secret(
         env_api_key
         or app_cfg.get("api_key")
         or legacy_api_key
@@ -199,6 +229,10 @@ def load_settings() -> AppSettings:
     else:
         source = qwen.get("source", "environment")
 
+    fallback_api_key = _first_env("AETHERLAB_FALLBACK_OPENAI_API_KEY") or app_cfg.get("fallback_api_key")
+    fallback_base_url = _first_env("AETHERLAB_FALLBACK_OPENAI_BASE_URL") or app_cfg.get("fallback_base_url")
+    fallback_llm_model = _first_env("AETHERLAB_FALLBACK_LLM_MODEL") or app_cfg.get("fallback_model")
+
     cloud_enabled = _as_bool(
         os.getenv("CLOUD_RENDER_ENABLED"),
         legacy_env.get("CLOUD_RENDER_ENABLED"),
@@ -210,18 +244,27 @@ def load_settings() -> AppSettings:
         cache_path=cache_path,
         chroma_path=chroma_path,
         library_path=library_path,
+        reference_sources_path=reference_sources_path,
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,
+        fallback_api_key=fallback_api_key or None,
+        fallback_base_url=fallback_base_url or None,
+        fallback_llm_model=fallback_llm_model or None,
         llm_timeout_seconds=max(
             5.0,
             min(
-                900.0,
+                # Mirrors model_policy.MAX_LLM_TIMEOUT_SECONDS — reasoning
+                # models legitimately need minutes for one call.
+                1800.0,
                 _as_float(
                     _first_env("AETHERLAB_LLM_TIMEOUT", "LLM_TIMEOUT"),
                     app_cfg.get("llm_timeout_seconds"),
                     _first_mapping(legacy_env, "LLM_TIMEOUT"),
-                    default=60.0,
+                    # An explicit setting always wins; only the DEFAULT is
+                    # model-aware, so selecting a reasoning model works out of
+                    # the box instead of timing out into the fallback template.
+                    default=_default_llm_timeout(llm_model),
                 ),
             ),
         ),
@@ -257,6 +300,11 @@ def load_settings() -> AppSettings:
             or "en-US-AndrewMultilingualNeural"
         ),
         tts_rate=_first_env("AETHERLAB_TTS_RATE", "TTS_RATE") or app_cfg.get("tts_rate") or "+8%",
+        review_intervals_days=(
+            _first_env("AETHERLAB_REVIEW_INTERVALS_DAYS")
+            or app_cfg.get("review_intervals_days")
+            or "1,3,7,14"
+        ),
         render_mode=_render_mode(
             os.getenv("AETHERLAB_RENDER_MODE")
             or app_cfg.get("render_mode")
@@ -353,12 +401,38 @@ def load_settings() -> AppSettings:
     )
 
 
+def _default_llm_timeout(model: str) -> float:
+    """Per-model default budget, or 60s if the policy module is unavailable.
+
+    Imported lazily so core.settings keeps no hard dependency on services.
+    """
+    try:
+        from aetherlab.services.model_policy import default_timeout_for
+
+        return float(default_timeout_for(model))
+    except Exception:  # noqa: BLE001 — a default must never break settings load
+        return 60.0
+
+
 def _first_env(*names: str) -> str | None:
     for name in names:
         value = os.getenv(name)
         if value is not None and value.strip():
             return value.strip()
     return None
+
+
+def _clean_secret(value: object) -> str | None:
+    """Drop whitespace and byte-order marks around a pasted key.
+
+    Windows tools (PowerShell pipes, Notepad) can prefix a UTF-8 BOM that
+    str.strip() keeps; in an Authorization header it fails every request
+    with "'ascii' codec can't encode character '\\ufeff'" (live 2026-10-02).
+    """
+    if not isinstance(value, str):
+        return value if value is None else str(value)
+    cleaned = value.strip().strip("﻿​").strip()
+    return cleaned or None
 
 
 def _first_env_named(*names: str) -> tuple[str | None, str | None]:

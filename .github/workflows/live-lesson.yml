@@ -1,0 +1,110 @@
+name: AetherLab Live Lesson
+run-name: Live lesson ${{ github.ref_name }}
+
+# Runs one narrated AI lesson end to end on a GitHub machine: MiniMax calls,
+# voice-first timing, preflight, Manim render, narration and assembly. Nothing
+# heavy runs on the owner's laptop, and GitHub's network reaches MiniMax
+# directly (no VPN).
+#
+# Start it by pushing a branch named live-run/<anything> whose root holds
+# live_run.json: {"prompt": "...", "seconds": 60, "solver": "optional path"}
+# or, once this file is on the default branch, from the Actions tab.
+
+on:
+  push:
+    branches: ["live-run/**"]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "What the lesson explains"
+        required: true
+      seconds:
+        description: "Target length in seconds (over 45 uses segments)"
+        default: "60"
+
+permissions:
+  contents: read
+
+jobs:
+  lesson:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      AETHERLAB_OPENAI_API_KEY: ${{ secrets.AETHERLAB_OPENAI_API_KEY }}
+      AETHERLAB_OPENAI_BASE_URL: https://api.minimax.io/v1
+      AETHERLAB_LLM_MODEL: MiniMax-M3
+      AETHERLAB_VISION_MODEL: MiniMax-M3
+      AETHERLAB_DATA_DIR: ${{ github.workspace }}/.live-data
+      AETHERLAB_CHROMA_PATH: ${{ github.workspace }}/.live-data/chroma
+      QWEN_SETTINGS_PATH: /nonexistent
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check the model key is configured
+        run: |
+          if [ -z "$AETHERLAB_OPENAI_API_KEY" ]; then
+            echo "::error::Add the repository secret AETHERLAB_OPENAI_API_KEY (the MiniMax key)."
+            exit 1
+          fi
+
+      - name: Install system dependencies (Manim, LaTeX, ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libcairo2-dev libpango1.0-dev pkg-config \
+            texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+
+      - name: Install AetherLab
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[render,narration,numeric,verification]
+
+      - name: Read the lesson request
+        id: request
+        shell: bash
+        env:
+          INPUT_PROMPT: ${{ github.event.inputs.prompt }}
+          INPUT_SECONDS: ${{ github.event.inputs.seconds }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          req = {}
+          if Path("live_run.json").is_file():
+              req = json.loads(Path("live_run.json").read_text(encoding="utf-8"))
+          prompt = os.environ.get("INPUT_PROMPT") or req.get("prompt", "")
+          seconds = os.environ.get("INPUT_SECONDS") or str(req.get("seconds", 60))
+          solver = req.get("solver", "")
+          if not prompt:
+              raise SystemExit("No prompt: add live_run.json or use the Actions form.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"seconds={float(seconds):g}\n")
+              out.write(f"solver={solver}\n")
+          Path("lesson_prompt.txt").write_text(prompt, encoding="utf-8")
+          print(f"prompt: {prompt}\nseconds: {seconds}\nsolver: {solver or '(solve live)'}")
+          PY
+
+      - name: Run the lesson
+        shell: bash
+        run: |
+          args=(lesson-out "$(cat lesson_prompt.txt)" "${{ steps.request.outputs.seconds }}")
+          if [ -n "${{ steps.request.outputs.solver }}" ]; then
+            args+=(--solver "${{ steps.request.outputs.solver }}")
+          fi
+          python tools/live_lesson_run.py "${args[@]}"
+
+      - name: Upload the lesson and its reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: live-lesson
+          path: lesson-out/
+          if-no-files-found: warn
+          retention-days: 14

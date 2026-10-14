@@ -1,0 +1,17 @@
+{
+  "slides": [
+    "00-contact-sheet",
+    "01-navigation",
+    "02-home",
+    "03-topics",
+    "04-practice",
+    "05-question",
+    "06-result",
+    "07-companions",
+    "08-profile",
+    "09-ai",
+    "10-library-lab"
+  ],
+  "aspect_ratio": "9:16",
+  "source": "C:\\Users\\sunak\\Projects\\aetherlab\\ui-screenshots\\ui-next-level"
+}

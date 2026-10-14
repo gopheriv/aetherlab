@@ -24,7 +24,6 @@ import av
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "visual_regression" / "cases.json"
 DEFAULT_OUT = (
@@ -304,8 +303,9 @@ def audit_video(
         warnings.append("duration below 2s")
     if fps < 5.0:
         warnings.append("fps below 5")
-    if blank_ranges:
-        warnings.append(f"{len(blank_ranges)} blank range(s)")
+    blank_warning = blank_span_warning(blank_ranges)
+    if blank_warning:
+        warnings.append(blank_warning)
     if static_ranges and max(r["duration"] for r in static_ranges) > max(3.0, duration * 0.45):
         warnings.append("long static visual range")
     if subtitle and subtitle["warnings"]:
@@ -400,6 +400,14 @@ def flag_ranges(
                 })
             start = None
     return ranges
+
+
+def blank_span_warning(blank_ranges: list[dict[str, float]]) -> str | None:
+    """Warn only on sustained blank gaps; short fades are normal scene edits."""
+    longest = max((float(r.get("duration", 0.0)) for r in blank_ranges), default=0.0)
+    if longest > _MAX_BLANK_SPAN_S:
+        return f"blank span {longest:.2f}s exceeds {_MAX_BLANK_SPAN_S:.1f}s"
+    return None
 
 
 def top_transitions(diffs: np.ndarray, times: np.ndarray, limit: int = 8) -> list[dict[str, float]]:
@@ -511,15 +519,17 @@ def parse_srt_time(value: str) -> float:
 
 # ── Quality gate (machine-checkable, render-agnostic) ───────────────────────
 # Soft `warnings` (audit_video) record notable-but-tolerable observations; these
-# thresholds are stricter and mark a render as *broken* (empty/frozen/too short),
-# so `--strict` can fail CI on them. Pure functions — unit-tested without any
-# rendering (see test_features.py F162).
+# thresholds mark a render as *broken* (empty/frozen/too short), so `--strict`
+# can fail CI on them. Pure gate functions are unit-tested without rendering
+# (see test_features.py F162 and F224).
 _MIN_DURATION_S = 2.0
 _MIN_FPS = 5.0
-_MAX_BLANK_SPAN_S = 0.5
+_MAX_BLANK_SPAN_S = 1.0
+_MAX_BLANK_RATIO = 0.10
 
 # compare_report regression tolerances vs. a baseline run.
 _DURATION_REGRESS = 0.25   # a render that lost >25% of its length
+_DURATION_RATIO_TOLERANCE = 0.25  # normalized ratios need similar-length clips
 _BLANK_RATIO_REGRESS = 0.02
 _STATIC_RATIO_REGRESS = 0.05
 
@@ -542,6 +552,9 @@ def quality_failures(case: dict[str, Any]) -> list[str]:
     )
     if longest_blank > _MAX_BLANK_SPAN_S:
         reasons.append(f"blank span {longest_blank:.2f}s exceeds {_MAX_BLANK_SPAN_S:.1f}s")
+    blank_ratio = float(metrics.get("blank_ratio", 0.0) or 0.0)
+    if blank_ratio > _MAX_BLANK_RATIO:
+        reasons.append(f"blank ratio {blank_ratio:.1%} exceeds {_MAX_BLANK_RATIO:.0%}")
     longest_static = max(
         (float(r.get("duration", 0.0)) for r in metrics.get("static_ranges") or []),
         default=0.0,
@@ -574,10 +587,16 @@ def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] 
         new_dur = float(new_metrics.get("duration", 0.0) or 0.0)
         if old_dur > 0 and new_dur < old_dur * (1 - _DURATION_REGRESS):
             regressions.append(f"duration dropped {old_dur:.1f}s -> {new_dur:.1f}s")
-        if new_metrics["blank_ratio"] - old_metrics["blank_ratio"] > _BLANK_RATIO_REGRESS:
-            regressions.append("blank ratio increased")
-        if new_metrics["static_ratio"] - old_metrics["static_ratio"] > _STATIC_RATIO_REGRESS:
-            regressions.append("static ratio increased")
+        ratios_comparable = (
+            old_dur > 0
+            and new_dur > 0
+            and abs(new_dur - old_dur) / old_dur <= _DURATION_RATIO_TOLERANCE
+        )
+        if ratios_comparable:
+            if new_metrics["blank_ratio"] - old_metrics["blank_ratio"] > _BLANK_RATIO_REGRESS:
+                regressions.append("blank ratio increased")
+            if new_metrics["static_ratio"] - old_metrics["static_ratio"] > _STATIC_RATIO_REGRESS:
+                regressions.append("static ratio increased")
         deltas.append({
             "id": case["id"],
             "duration_delta": round(new_dur - old_dur, 3),
@@ -587,6 +606,7 @@ def compare_report(compare_dir: Path, report: dict[str, Any]) -> dict[str, Any] 
                 new_metrics["static_ratio"] - old_metrics["static_ratio"],
                 4,
             ),
+            "ratio_comparison": "compared" if ratios_comparable else "skipped_duration_changed",
             "regressions": regressions,
         })
     regression_count = sum(len(d["regressions"]) for d in deltas)

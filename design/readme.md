@@ -1,5 +1,19 @@
 # AetherLab Design System
 
+## Current native application: Study Studio (9 October 2026)
+
+This direction replaces the cream/burgundy and dark graphite versions in the native app. Earlier web-kit notes below are historical; the Python widgets and current color tokens define the shipped desktop layout.
+
+- Cool white window (`#F7F8FC`), white navigation and panels, charcoal text, and steel-blue primary actions (`#4B6385`). Topic cards use seafoam, mint and apricot accents.
+- A 92px rail uses icons above localized short labels. A 68px header carries product identity, page breadcrumb, physics badge, language and settings.
+- Home places an steel-blue next-topic hero beside a weekly-goal ring and plan. Both use saved practice data; unset goals and mock scores are named clearly. Four metrics and three recommended topics reflow beneath it.
+- Topics is a responsive card collection with real name search and all/not-started/practiced filters. Kinematics keeps its existing constant-acceleration lesson route.
+- The tutor uses a left-aligned introduction, large example tiles, a practice callout, connection status and white prompt composer.
+- Practice offers distinct practice/timed-mock cards, compact filters, goal controls and a fixed action footer. Single-answer options are exclusive; feedback appears only when needed.
+- Empty progress uses a vector orbit illustration and a practice action. Mock history and topic mastery appear only after real attempts.
+- Native layouts were rendered in Kazakh, Russian and English at 960 and 1440px. The practice setup fits 640px; narrow tutor content fits the 558px reference width.
+
+
 AetherLab turns a natural-language physics/math prompt into an analytical derivation, textbook references (RAG), a generated Manim animation, and a live interactive parametric canvas. Users are students, educators, and researchers; the core loop is **type a prompt → watch a 4-stage pipeline (Solve → RAG → Scene → Render) → read, watch, and tweak the result.**
 
 The target surface is a **PyQt6 desktop application** — every component here is built to map cleanly onto Qt widgets (`QStackedWidget`, `QSplitter`, `QSlider`, `QListWidget`, `QComboBox`, `QMediaPlayer`, custom `QPainter` canvases), not web-only effects.
@@ -65,20 +79,20 @@ No shipped copy deck was provided, so tone is inferred from the brief's own regi
 - **Empty states:** name the missing thing and give exactly one action — "No textbooks indexed yet" + "Add textbooks…", not multi-sentence onboarding copy.
 
 ## Visual foundations
-- **Identity:** "engineering blueprint / dark lab" — a near-black instrument panel, cyan-accented, hairline-gridded, built to feel like a precision tool rather than a consumer app.
-- **Color:** deep near-black base (`#0A0A0F`) with two panel tiers (`#0D0D14`, `#13131A`); a single primary accent (cyan `#06B6D4`) reserved for the active/primary action and the pipeline's live state; emerald for "complete/success," amber for warning, rose for error, violet used sparingly for keyword/tag accents. One accent per meaning — never mix cyan and violet for the same semantic role.
-- **Backgrounds:** flat panel fills, no photography, no illustration. The one textured background is the simulation canvas: a subtle top-to-bottom gradient (`#0F1520` → `#0A0A0F`) with a faint blueprint grid — the only place a "texture" motif appears, and it's literal (graph paper), not decorative.
+- **Identity:** a warm, focused study workspace for Kazakhstan's ЕНТ/ҰБТ physics preparation, with clear student navigation and a steel-blue accent.
+- **Color:** cool white (`#F7F8FC`) and white panels; muted steel blue (`#4B6385`) marks the active destination and primary action; green (`#16866B`) supports charts; green marks success, amber marks warnings, and rose marks errors. Keep one accent per meaning.
+- **Backgrounds:** quiet, flat surfaces with lavender, mint and apricot tints. Keep video and simulation content clear against its own stage; study screens stay calm so lesson and exam questions remain the focus.
 - **Type:** UI in Inter (Segoe UI on native Windows), numbers/code/equations-as-placeholder in JetBrains Mono (Cascadia Code stand-in). Mono is used generously — parameter values, timestamps, scores, code — reinforcing the instrument-panel feel.
 - **Spacing:** 4px base rhythm (4/8/12/16/24/32/48/64); card interior padding is consistently 16px (`--space-4`) with 12px (`--space-3`) gaps between inline controls.
 - **Radii:** small and consistent — 4px for tight chips/badges, 8px for buttons and inputs, 12px for cards and panels, full pill only for progress rails, sliders, and status chips. Nothing is fully rounded except literal pills.
-- **Elevation:** panels use a soft inset highlight + outer shadow (`--shadow-panel`) rather than heavy drop shadows; cards use a lighter `--shadow-card`. The only glow effect is the cyan accent glow on the active pipeline node and focused primary controls — glow is a status signal, not decoration.
-- **Borders:** 1px hairlines everywhere (`#1E293B` default, `#334155` for emphasis/hover) — the primary way panels and cards separate from each other, more often than shadow.
+- **Elevation:** panels use a soft inset highlight + outer shadow (`--shadow-panel`) rather than heavy drop shadows; cards use a lighter `--shadow-card`. Accent glow is reserved for focus and live status.
+- **Borders:** 1px warm-gray hairlines (`#263750` default, `#3B506C` for emphasis/hover) separate panels and cards, more often than shadow.
 - **Motion:** purposeful only — stage-transition fades, an active-node pulse (1.6s, ease-standard), a determinate progress sweep (ease-out). No infinite decorative loops beyond the two live-status indicators (active pipeline node, busy command bar), and both stop the instant a stage resolves.
-- **Hover states:** primary buttons lighten (cyan → lighter cyan); secondary/bordered controls gain a cyan border; ghost buttons brighten text from secondary to primary text color. Never a background-darken-only hover — always a visible color or border shift.
-- **Press/active states:** primary buttons darken to `--accent-cyan-active`; nav rail "current" indicator is a persistent 3px cyan left-edge bar with glow, not a press effect.
+- **Hover states:** primary buttons deepen to `#3D5476`; secondary/bordered controls gain a steel-blue border; ghost buttons brighten text from secondary to primary text color.
+- **Press/active states:** primary buttons use the deep steel blue pressed state; the selected sidebar destination uses a soft blue fill with a persistent left-edge marker.
 - **Transparency/blur:** used only for the loading/busy overlay (`--surface-overlay`, translucent near-black) and popovers (examples menu) — never on persistent chrome.
 - **Imagery:** none supplied or invented — see Iconography below for the icon system; no photography or illustration exists in this identity.
-- **Cards:** 1px hairline border + 12px radius + `--shadow-card`, no colored left-border accent, no gradient fills.
+- **Cards:** 1px hairline border + 16px radius + `--shadow-card`, minimal shadow, restrained rose highlights, no decorative gradients.
 
 ## Iconography
 No icon font, sprite sheet, or SVG set was supplied with the brief. This system uses **Lucide** (MIT-licensed, CDN-loaded) as a substitute — flagged here as a substitution, not a discovered brand asset. Lucide's thin (1.75px), geometric line style matches the "engineering blueprint" identity better than a filled/duotone set would.

@@ -1,13 +1,17 @@
 """Web reference providers — references from beyond the local library.
 
-Currently a Wikipedia provider that fetches relevant article intros through the
-public MediaWiki API. Pure stdlib (urllib), short-timeout, and *never raises*:
-any failure (offline, rate-limited, malformed) returns an empty list so the
-pipeline degrades to local-library-only references.
+Two MediaWiki-backed providers fetch relevant intros through the public API:
+Wikipedia (encyclopedic) and Wikibooks (open textbooks — closer to the
+citation style our local OpenStax library provides). Both are pure stdlib
+(urllib), short-timeout, and *never raise*: any failure (offline, rate-limited,
+malformed) returns an empty list so the pipeline degrades to
+local-library-only references.
 
 Results are returned as RagHit objects with origin="web" and a source_label
 (the article title); source_path is the article URL, which the reference card
-opens in the browser.
+opens in the browser. ``fetch_web_references`` aggregates the providers,
+de-duplicates by title/URL, and only reaches for the second source when the
+first comes back thin — so the common case stays a single HTTP round-trip.
 """
 
 from __future__ import annotations
@@ -40,7 +44,8 @@ class WikipediaReferenceProvider:
 
     def __init__(self, timeout: float = 8.0, lang: str = "en") -> None:
         self.timeout = timeout
-        self.api = f"https://{lang}.wikipedia.org/w/api.php"
+        self.site = f"https://{lang}.wikipedia.org"
+        self.api = f"{self.site}/w/api.php"
 
     def search(self, keywords: list[str], limit: int = 3) -> list[RagHit]:
         """Return up to `limit` Wikipedia references. Never raises."""
@@ -86,7 +91,7 @@ class WikipediaReferenceProvider:
             title = str(page.get("title", "")).strip()
             extract = str(page.get("extract", "")).strip()
             page_url = page.get("fullurl") or (
-                "https://en.wikipedia.org/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
+                f"{self.site}/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
             )
             if not title or not extract:
                 continue
@@ -105,6 +110,21 @@ class WikipediaReferenceProvider:
         return hits
 
 
+class WikibooksReferenceProvider(WikipediaReferenceProvider):
+    """Open-textbook references from Wikibooks via the same MediaWiki API.
+
+    Wikibooks reads like a textbook rather than an encyclopedia, so its hits sit
+    naturally alongside the local OpenStax citations. Behavior (query shape,
+    fail-soft contract, RagHit mapping) is inherited unchanged from the
+    Wikipedia provider; only the API host differs.
+    """
+
+    def __init__(self, timeout: float = 8.0, lang: str = "en") -> None:
+        super().__init__(timeout=timeout, lang=lang)
+        self.site = f"https://{lang}.wikibooks.org"
+        self.api = f"{self.site}/w/api.php"
+
+
 def _page_rank(page: dict) -> float:
     try:
         return float(page.get("index", 1_000))
@@ -112,14 +132,45 @@ def _page_rank(page: dict) -> float:
         return 1_000.0
 
 
+def _dedupe_hits(hits: list[RagHit], limit: int) -> list[RagHit]:
+    """Drop hits that repeat a title or URL already seen, capped at ``limit``."""
+    seen: set[str] = set()
+    out: list[RagHit] = []
+    for hit in hits:
+        keys = {
+            (hit.source_label or "").strip().lower(),
+            (hit.source_path or "").strip().lower(),
+        }
+        keys.discard("")
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(hit)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def fetch_web_references(keywords: list[str], settings, limit: int = 3) -> list[RagHit]:
-    """Convenience entry: honor the settings toggle, return [] when disabled."""
+    """Aggregate web references across providers. Honors the settings toggle,
+    returns [] when disabled, and never raises.
+
+    Wikipedia is primary; Wikibooks only fills remaining slots when Wikipedia
+    comes back short of ``limit``, so a well-covered query costs one HTTP call.
+    """
     if not getattr(settings, "web_references", True):
         return []
-    provider = WikipediaReferenceProvider(
-        timeout=float(getattr(settings, "web_ref_timeout", 8.0))
-    )
-    return provider.search(keywords, limit=limit)
+    timeout = float(getattr(settings, "web_ref_timeout", 8.0))
+
+    hits = WikipediaReferenceProvider(timeout=timeout).search(keywords, limit=limit)
+    if len(hits) < limit:
+        # Give the supplementary source a tighter budget so topping up can never
+        # dominate the caller's overall web-reference time box.
+        extra = WikibooksReferenceProvider(timeout=min(timeout, 5.0)).search(
+            keywords, limit=limit - len(hits)
+        )
+        hits = hits + extra
+    return _dedupe_hits(hits, limit)
 
 
 def _trim(text: str, limit: int = 420) -> str:

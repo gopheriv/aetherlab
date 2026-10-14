@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
-from aetherlab.core.models import PipelineResult, ProblemRequest
+from aetherlab.core.models import PipelineResult, ProblemRequest, SceneBundle
 from aetherlab.core.settings import AppSettings, load_settings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
 from aetherlab.services.manim_runtime import ManimRuntime
+from aetherlab.services.planner import Planner
 from aetherlab.services.rag import LocalVectorRag
 
 
@@ -25,6 +26,9 @@ class AetherLabPipeline:
     async def run(self, request: ProblemRequest) -> PipelineResult:
         key = self.cache.ensure_request(request)
         cached = self.cache.get(key)
+
+        # Planner decides which outputs this problem warrants (never raises).
+        plan = await Planner(self.settings).plan(request)
 
         # Auto-ingest library into ChromaDB on first run
         await self._ensure_ingested()
@@ -42,29 +46,73 @@ class AetherLabPipeline:
 
         manim = self.manim
         current_engine, _ = manim.detect_engine()
-        scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
-        if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
-            tournament_enabled = getattr(manim, "scene_tournament_enabled", lambda _settings: False)
-            if tournament_enabled(self.settings):
-                scene = await manim.generate_render_tournament(
-                    request, solver, rag, self.settings, brief=request.prompt
+
+        if not plan.needs_animation:
+            # Planner: this problem doesn't warrant a rendered animation — skip
+            # scene generation and the (expensive) Manim render entirely.
+            scene = _skipped_scene(current_engine)
+        else:
+            scene = cached.scene if cached and cached.scene and self._scene_cache_usable(cached.scene) else None
+            if (
+                float(request.duration_target_s) > 45.0
+                and scene is not None
+                and (
+                    scene.class_name != "AetherLabSegmentedScene"
+                    # Its `code` joins every segment's AetherLabScene; re-rendering
+                    # it would silently produce only the last segment. Resume from
+                    # the segment manifest instead.
+                    or not _video_exists(scene.video_path)
                 )
-            else:
-                scene = await manim.generate_scene_async(request, solver, rag, self.settings)
-            self.cache.store_scene(key, scene)
+            ):
+                # A legacy monolithic/curated cache is not a valid long-form
+                # result. Let the segmented manifest resume each verified unit.
+                scene = None
+            if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
+                if float(request.duration_target_s) > 45.0:
+                    from aetherlab.services.segmented_pipeline import render_segmented_scene
 
-        if scene.status == "rendered" and not _video_exists(scene.video_path):
-            scene.diagnostics.append("Cached rendered video missing; re-rendering.")
-            scene.status = "compiled"
-            scene.video_path = ""
+                    scene = await render_segmented_scene(
+                        request, solver, rag, self.settings, runtime=manim,
+                    )
+                elif getattr(manim, "scene_tournament_enabled", lambda _settings: False)(self.settings):
+                    scene = await manim.generate_render_tournament(
+                        request, solver, rag, self.settings, brief=request.prompt
+                    )
+                else:
+                    scene = await manim.generate_scene_async(request, solver, rag, self.settings, plan=plan)
+                self.cache.store_scene(key, scene)
 
-        # Render to MP4 (skip if a valid cached video already exists);
-        # render-time API errors get a bounded LLM self-repair pass.
-        if scene.status == "compiled":
-            scene = await manim.render_scene_with_repair(
-                scene, self.settings, brief=request.prompt
-            )
+            if scene.status == "rendered" and not _video_exists(scene.video_path):
+                scene.diagnostics.append("Cached rendered video missing; re-rendering.")
+                scene.status = "compiled"
+                scene.video_path = ""
+
+            try:
+                from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+                refresh_scene_bundle_spec(scene, request, solver, rag)
+                self.cache.store_scene(key, scene)
+            except Exception as exc:  # noqa: BLE001 - the spec cannot block a solve
+                scene.diagnostics.append(
+                    f"Scene specification unavailable: {type(exc).__name__}."
+                )
+
+            # Render to MP4 (skip if a valid cached video already exists);
+            # render-time API errors get a bounded LLM self-repair pass.
+            if scene.status == "compiled":
+                scene = await manim.render_scene_with_repair(
+                    scene, self.settings, brief=request.prompt,
+                    duration_target_s=request.duration_target_s,
+                )
+                self.cache.store_scene(key, scene)
+
+        try:
+            from aetherlab.services.scene_specification import refresh_scene_bundle_spec
+
+            refresh_scene_bundle_spec(scene, request, solver, rag)
             self.cache.store_scene(key, scene)
+        except Exception as exc:  # noqa: BLE001 - evidence export never blocks a solve
+            scene.diagnostics.append(f"Scene specification unavailable: {type(exc).__name__}.")
 
         return PipelineResult(
             request=request,
@@ -72,6 +120,7 @@ class AetherLabPipeline:
             solver=solver,
             rag=rag,
             scene=scene,
+            plan=plan,
         )
 
     async def _ensure_ingested(self) -> None:
@@ -107,10 +156,24 @@ class AetherLabPipeline:
         return True
 
     def _scene_cache_usable(self, scene) -> bool:
+        if _stale_fallback_scene(scene, self.settings):
+            return False
         min_score = float(getattr(self.settings, "min_quality_score", 0.0) or 0.0)
         if min_score <= 0:
             return True
         return float(getattr(scene, "quality_score", 0.0) or 0.0) >= min_score
+
+
+def _stale_fallback_scene(scene, settings) -> bool:
+    """True for a cached built-in template when an AI scene is now possible.
+
+    A timed-out or failed generation caches the domain template with
+    ``used_fallback``. Reusing it pinned that prompt to the template forever,
+    even after the provider recovered, so with a key configured it is a miss.
+    """
+    return bool(getattr(scene, "used_fallback", False)) and bool(
+        getattr(settings, "openai_api_key", None)
+    )
 
 
 def _video_exists(video_path: str) -> bool:
@@ -137,6 +200,17 @@ def _video_exists(video_path: str) -> bool:
         return size > 1024
     except Exception:  # noqa: BLE001
         return False
+
+
+def _skipped_scene(engine: str) -> SceneBundle:
+    """A placeholder scene for problems the planner marks as non-animated."""
+    return SceneBundle(
+        class_name="AetherLabScene",
+        code="",
+        engine=engine,
+        status="skipped",
+        diagnostics=["Animation not required for this problem (planner)."],
+    )
 
 
 async def _merge_web_references(rag, keywords, settings):
