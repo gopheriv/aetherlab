@@ -62,31 +62,31 @@ def _solve(p: dict[str, float]) -> dict[str, Any] | None:
     import numpy as np
     from scipy.integrate import solve_ivp
 
-    g, L, m, k, a0 = p["g"], p["L"], p["m"], p["k"], p["amp"]
-    w1, w2, T = transfer_time(p)
-    if not 2.0 <= T <= 60.0:
+    g, length, m, k, a0 = p["g"], p["L"], p["m"], p["k"], p["amp"]
+    w1, w2, transfer_period = transfer_time(p)
+    if not 2.0 <= transfer_period <= 60.0:
         return None
 
     def f(t, y):
         a, b, va, vb = y
-        return [va, vb, -g / L * math.sin(a) - k / m * (math.sin(a) - math.sin(b)) * math.cos(a),
-                -g / L * math.sin(b) - k / m * (math.sin(b) - math.sin(a)) * math.cos(b)]
+        return [va, vb, -g / length * math.sin(a) - k / m * (math.sin(a) - math.sin(b)) * math.cos(a),
+                -g / length * math.sin(b) - k / m * (math.sin(b) - math.sin(a)) * math.cos(b)]
 
-    t_end = 2.4 * T
+    t_end = 2.4 * transfer_period
     ts = np.linspace(0.0, t_end, int(t_end / 0.01) + 1)
     s = solve_ivp(f, (0.0, t_end), [a0, 0.0, 0.0, 0.0], t_eval=ts, method="DOP853", rtol=1e-10, atol=1e-12)
     if not s.success:
         return None
     a, b, va, vb = s.y
-    ea = 0.5 * m * (L * va) ** 2 + m * g * L * (1 - np.cos(a))
-    eb = 0.5 * m * (L * vb) ** 2 + m * g * L * (1 - np.cos(b))
-    spring = 0.5 * k * L * L * (np.sin(a) - np.sin(b)) ** 2
+    ea = 0.5 * m * (length * va) ** 2 + m * g * length * (1 - np.cos(a))
+    eb = 0.5 * m * (length * vb) ** 2 + m * g * length * (1 - np.cos(b))
+    spring = 0.5 * k * length * length * (np.sin(a) - np.sin(b)) ** 2
     total = ea + eb + spring
-    first = ts < 1.5 * T
+    first = ts < 1.5 * transfer_period
     i = int(np.argmin(np.where(first, ea, np.inf)))
     step = 2
     return {
-        "w1": w1, "w2": w2, "T": T, "T_sim": float(ts[i]), "left": float(ea[i] / total[0]),
+        "w1": w1, "w2": w2, "T": transfer_period, "T_sim": float(ts[i]), "left": float(ea[i] / total[0]),
         "drift": float(np.max(np.abs(total - total[0])) / total[0]),
         "t": [round(float(x), 3) for x in ts[::step]],
         "a": [round(float(x), 5) for x in a[::step]], "b": [round(float(x), 5) for x in b[::step]],
@@ -102,26 +102,26 @@ def build(class_name: str, solver: Any) -> str | None:
     s = _solve(p)
     if s is None or abs(s["T_sim"] - s["T"]) > 0.05 * s["T"] or s["left"] > 0.02 or s["drift"] > 1e-6:
         return None
-    g, L, m, k, a0 = p["g"], p["L"], p["m"], p["k"], p["amp"]
-    w1, w2, T = s["w1"], s["w2"], s["T"]
+    g, length, m, k, a0 = p["g"], p["L"], p["m"], p["k"], p["amp"]
+    w1, w2, transfer_period = s["w1"], s["w2"], s["T"]
     deg = math.degrees(a0)
     ks = [k / 4.0, k, 4.0 * k]
     curve = [(round(kk, 5), round(transfer_time(p, kk)[2], 4))
              for kk in [k / 4.0 * (16.0 ** (i / 60.0)) for i in range(61)]]
     data = {
-        "L": L, "amp": a0, "T": round(T, 4), "T_sim": round(s["T_sim"], 3), "w1": w1, "w2": w2,
+        "L": length, "amp": a0, "T": round(transfer_period, 4), "T_sim": round(s["T_sim"], 3), "w1": w1, "w2": w2,
         "t": s["t"], "a": s["a"], "b": s["b"], "ea": s["ea"], "eb": s["eb"],
         "gt": s["graph_t"], "ga": s["graph_a"], "gb": s["graph_b"], "t_end": round(s["t_end"], 3),
         "curve": curve, "ks": [round(x, 5) for x in ks], "Ts": [round(transfer_time(p, x)[2], 3) for x in ks],
-        "problem": f"Two identical {L:g} m pendulums ({m:g} kg)",
+        "problem": f"Two identical {length:g} m pendulums ({m:g} kg)",
         "problem1b": f"are joined by a weak spring (k = {k:g} N/m).",
         "problem2": f"Pendulum A is pulled {deg:.0f}° aside and let go. B starts at rest.",
         "question": "How long until all the swinging has moved to B?",
         "watch_note": "The swing drains out of A and into B, then back again",
-        "tex_w1": rf"\omega_1=\sqrt{{\frac{{g}}{{L}}}}=\sqrt{{\frac{{{g:g}}}{{{L:g}}}}}={w1:.3f}\ \text{{rad/s}}",
-        "plain_w1": f"ω1 = √(g/L) = √({g:g}/{L:g}) = {w1:.3f} rad/s",
-        "tex_w2": rf"\omega_2=\sqrt{{\frac{{g}}{{L}}+\frac{{2k}}{{m}}}}=\sqrt{{{g / L:.2f}+{2 * k / m:.2f}}}={w2:.3f}\ \text{{rad/s}}",
-        "plain_w2": f"ω2 = √(g/L + 2k/m) = √({g / L:.2f} + {2 * k / m:.2f}) = {w2:.3f} rad/s",
+        "tex_w1": rf"\omega_1=\sqrt{{\frac{{g}}{{L}}}}=\sqrt{{\frac{{{g:g}}}{{{length:g}}}}}={w1:.3f}\ \text{{rad/s}}",
+        "plain_w1": f"ω1 = √(g/L) = √({g:g}/{length:g}) = {w1:.3f} rad/s",
+        "tex_w2": rf"\omega_2=\sqrt{{\frac{{g}}{{L}}+\frac{{2k}}{{m}}}}=\sqrt{{{g / length:.2f}+{2 * k / m:.2f}}}={w2:.3f}\ \text{{rad/s}}",
+        "plain_w2": f"ω2 = √(g/L + 2k/m) = √({g / length:.2f} + {2 * k / m:.2f}) = {w2:.3f} rad/s",
         "in_step": "in step: the spring never stretches",
         "opposite": "opposite: the spring pulls both back",
         "tex_sum_a": r"\theta_A=\tfrac{\theta_0}{2}\left(\cos\omega_1t+\cos\omega_2t\right)"
@@ -133,14 +133,14 @@ def build(class_name: str, solver: Any) -> str | None:
         "envelope_note": "the slow envelope: A is still when the two dances are exactly out of step",
         "tex_ws": rf"\omega_1={w1:.3f}\ \text{{rad/s}},\qquad\omega_2={w2:.3f}\ \text{{rad/s}}",
         "plain_ws": f"ω1 = {w1:.3f} rad/s,   ω2 = {w2:.3f} rad/s",
-        "tex_T": rf"T=\frac{{\pi}}{{\omega_2-\omega_1}}=\frac{{\pi}}{{{w2:.3f}-{w1:.3f}}}={T:.1f}\ \text{{s}}",
-        "plain_T": f"T = π / (ω2 - ω1) = π / ({w2:.3f} - {w1:.3f}) = {T:.1f} s",
+        "tex_T": rf"T=\frac{{\pi}}{{\omega_2-\omega_1}}=\frac{{\pi}}{{{w2:.3f}-{w1:.3f}}}={transfer_period:.1f}\ \text{{s}}",
+        "plain_T": f"T = π / (ω2 - ω1) = π / ({w2:.3f} - {w1:.3f}) = {transfer_period:.1f} s",
         "check": f"Full simulation (no small-swing shortcut): A is still at {s['T_sim']:.1f} s",
-        "check2": f"A keeps {100 * s['left']:.2f}% of the energy; the formula said {T:.1f} s",
+        "check2": f"A keeps {100 * s['left']:.2f}% of the energy; the formula said {transfer_period:.1f} s",
         "dots_note": "dots: simulation;  lines: the two-dance formula",
         "whatif_note": "A weak spring passes the swing slowly; a stiff one quickly",
         "k_labels": [f"k = {x:g} N/m: {transfer_time(p, x)[2]:.1f} s" for x in ks],
-        "answer": f"Answer: after about {T:.0f} s ({T:.1f} s by formula, {s['T_sim']:.1f} s simulated)",
+        "answer": f"Answer: after about {transfer_period:.0f} s ({transfer_period:.1f} s by formula, {s['T_sim']:.1f} s simulated)",
         "answer2": "all the swinging has moved from A to B.",
     }
     return fill(_TEMPLATE, class_name, data)

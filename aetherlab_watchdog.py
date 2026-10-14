@@ -7,7 +7,6 @@ Logs to logs/watchdog.log.
 """
 
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -42,7 +41,7 @@ def main() -> None:
     restart_count = 0
 
     while True:
-        logger.info(f"Starting AetherLab GUI: python -m aetherlab")
+        logger.info("Starting AetherLab GUI: python -m aetherlab")
         started = time.monotonic()
 
         try:

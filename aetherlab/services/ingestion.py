@@ -15,7 +15,6 @@ from pathlib import Path
 
 from aetherlab.core.settings import AppSettings
 
-
 TEXT_SUFFIXES = {".txt", ".md", ".tex"}
 PDF_SUFFIXES = {".pdf"}
 
@@ -62,12 +61,8 @@ class LibraryIngestor:
         self.collection_name = collection_name
 
     def iter_chunks(self) -> list[TextChunk]:
-        root = self.settings.library_path
-        if not root.exists():
-            return []
-
         chunks: list[TextChunk] = []
-        for path in sorted(root.rglob("*")):
+        for path in self._library_files():
             suffix = path.suffix.lower()
             if suffix in TEXT_SUFFIXES:
                 chunks.extend(self._chunks_from_text_file(path))
@@ -104,12 +99,31 @@ class LibraryIngestor:
 
     def _library_files(self) -> list[Path]:
         root = self.settings.library_path
-        if not root.exists():
-            return []
-        return sorted(
-            p for p in root.rglob("*")
-            if p.is_file() and p.suffix.lower() in (TEXT_SUFFIXES | PDF_SUFFIXES)
+        reference_root = getattr(self.settings, "reference_sources_path", None)
+        same_as_reference_root = False
+        if reference_root:
+            try:
+                same_as_reference_root = root.resolve() == Path(reference_root).resolve()
+            except OSError:
+                pass
+        files = (
+            {
+                p for p in root.rglob("*")
+                if p.is_file() and p.suffix.lower() in (TEXT_SUFFIXES | PDF_SUFFIXES)
+            }
+            if root.exists() and not same_as_reference_root
+            else set()
         )
+        # The provided study books are external, read-only references. Exam
+        # packs and mixed ZIP contents are intentionally excluded from RAG.
+        if reference_root:
+            try:
+                from aetherlab.services.reference_catalog import searchable_reference_files
+
+                files.update(searchable_reference_files(reference_root))
+            except Exception:  # noqa: BLE001 - local reference discovery is fail-soft
+                pass
+        return sorted(files, key=lambda path: str(path).casefold())
 
     def pending_files(self) -> list[Path]:
         """Files new or changed since the last ingest (per the manifest)."""
@@ -120,7 +134,32 @@ class LibraryIngestor:
             sig = self._file_signature(path)
             if not entry or entry.get("mtime") != sig["mtime"] or entry.get("size") != sig["size"]:
                 pending.append(path)
+        pending.extend(Path(key) for key in self._stale_reference_manifest_keys(manifest))
         return pending
+
+    def _stale_reference_manifest_keys(self, manifest: dict[str, dict]) -> list[str]:
+        """Find formerly indexed files in the source folder no longer in its curated catalog."""
+        reference_root = getattr(self.settings, "reference_sources_path", None)
+        if not reference_root:
+            return []
+        try:
+            from aetherlab.services.reference_catalog import searchable_reference_files
+
+            root = Path(reference_root).resolve()
+            allowed = {str(path.resolve()).casefold() for path in searchable_reference_files(root)}
+        except Exception:  # noqa: BLE001 - do not block the library if catalog lookup fails
+            return []
+
+        stale: list[str] = []
+        for key in manifest:
+            try:
+                path = Path(key).resolve()
+                path.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if str(path).casefold() not in allowed:
+                stale.append(key)
+        return stale
 
     def ingest(
         self,
@@ -158,6 +197,17 @@ class LibraryIngestor:
         collection = client.get_or_create_collection(self.collection_name)
 
         manifest = self._load_manifest()
+        stale_keys = self._stale_reference_manifest_keys(manifest)
+        removed = False
+        for key in stale_keys:
+            try:
+                collection.delete(where={"path": key})
+            except Exception:  # noqa: BLE001 - retain the manifest if Chroma couldn't delete
+                continue
+            manifest.pop(key, None)
+            removed = True
+        if removed:
+            self._save_manifest(manifest)
         files = self._library_files()
         todo = [p for p in files if self._needs_ingest(manifest, p)]
         total_files = len(todo)

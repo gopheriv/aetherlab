@@ -15,7 +15,6 @@ never see a broken lesson because grounding was unavailable.
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from aetherlab.core.models import LessonPlan

@@ -16,21 +16,20 @@ PySide6 desktop physics workbench. A prompt can run:
 Rendering runs locally through Manim Community or remotely through the
 provisioned GitHub Actions cloud-render backend.
 
-Current branch: `codex/stabilize-current-branch`
+Current branch: `fix/bugcheck-2026-09-30`
 
-Recent baseline:
+Recent baseline (2026-10-08):
 
-- Feature harness: `python test_features.py` -> 168/168 passed.
+- Feature harness: `python test_features.py` -> 224/224 passed.
 - Tracker build: `python build_feature_tracker.py` regenerated CSV/XLSX.
-- Tracker audit: `python tools\tracker_integrity_audit.py --check` passed.
-- Surface audit: `python tools\feature_surface_audit.py --check` passed.
-- Pytest: `python -m pytest -q` -> 37 passed.
+- Tracker audit: `python tools\tracker_integrity_audit.py --check` -> 224 features/results/tests aligned.
+- Surface audit: `python tools\feature_surface_audit.py --check` -> 89/89 surfaces covered.
+- Pytest: `python -m pytest -q --basetemp .analysis\pytest-full-mission` -> 205 passed, 1 warning.
 - Compile: `python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools` passed.
-- Diff hygiene: `git diff --check` passed.
-- Strict visual regression: 7/7 cases, 0 render failures, 0 quality failures,
-  0 warnings, 0 regressions.
+- Strict visual regression: 7/7 passed in the 2026-10-08 runtime audit; the current F180 reporting changes do not alter rendered output.
+- Current mission check: the 2026-10-09 keyed F180 attempt was invalid/incomplete (see `.analysis/prompt-quality-lab/ab-cloud-20261008/diagnostic.md`). Follow-up fixes now send tournament candidates through the shared static/runtime repair path, canonicalize equal-count beat markers, retry malformed storyboard/planner output, and bound/minimize cloud TeX dependency installation. Rerun the full keyed A/B to validate those fixes; no valid lift is established yet.
 
-Last documented defect: **BUG-23** in `ERRORS_FOUND.md`.
+Last documented defects: **BUG-109** (provider A/B measurement validity) in `ERRORS_FOUND.md`.
 
 ## Ground Rules
 
@@ -109,53 +108,69 @@ python tools\prompt_quality_lab.py --out .analysis\prompt-quality-lab\canonical-
 
 Result: 6 prompts, 0 failures, mean score 5.32.
 
-### Next Mission: Render Farm Dashboard
+### Completed: Render Farm Dashboard (F175/F176, BUG-102)
 
 Make cloud rendering observable inside AetherLab. Today the cloud backend can
 provision, dispatch, poll, download, and fall back, but users cannot see a
 stable job ledger: what queued, what ran, what failed, which artifact was
 downloaded, and why local fallback happened.
 
-Build a render-farm dashboard that records and displays:
+The render-farm dashboard now records and displays:
 
 - job id, source scene/class, quality, fps, backend, and provider;
 - status timeline: queued, in_progress, completed, failed, cancelled,
-  action_required, artifact_downloaded, fallback_local;
-- run URL/artifact URL when safe to show;
+  action_required, rate_limited/retry, artifact_downloaded, rendered, and
+  fallback_local;
+- canonical GitHub Actions run/artifact page links; signed URLs and query
+  strings are rejected;
 - sanitized log tail for failures;
 - rate-limit or token-scope messages;
 - local fallback reason and final local render path.
 
-Done means:
+Completion evidence:
 
 - backend job-status event model with JSON persistence under the data dir;
 - UI page or panel reachable from the existing cloud/backend surfaces;
 - no secrets in persisted events or diagnostics;
-- stub tests for success, artifact download, failure log tail, cancellation,
-  token-scope failure, rate-limit retry, and local fallback;
+- stub coverage for success, artifact download, failure log tail, cancellation,
+  token-scope failure, rate-limit retry, and Auto local fallback;
 - docs explaining how to debug cloud renders from the dashboard.
 
-### Candidate Later: UI Modularization
+The follow-up audit closed missing lifecycle/link/metadata details that the
+initial F175/F176 implementation did not expose. Hand audit and regression
+coverage are recorded under BUG-102 in `ERRORS_FOUND.md`; cloud dashboard
+debugging steps are documented in `docs/CLOUD_RENDERING.md`.
+
+### Completed: UI Modularization
 
 Split the large `aetherlab/ui/widgets.py` into cohesive modules without
 behavior change: command bar, reference cards, scene player, lesson view,
 analysis panel, parameter dock, and shared primitives.
 
-Done means:
+The implementations now live in `aetherlab/ui/{command_bar,navigation,
+parameter_dock,analysis_panel,reference_panel,simulation_panel,
+library_panel,lesson_view,shared_widgets}.py`. `widgets.py` remains a
+backward-compatible facade, including the existing private names used by
+tests and integrations. The extracted declarations were compared as Python
+ASTs with the pre-refactor source; their bodies are unchanged. See
+[`docs/UI_MODULARIZATION.md`](UI_MODULARIZATION.md) for the hand audit and
+validation record.
+
+Completion checks:
 
 - imports remain stable or compatibility re-exports are provided;
 - feature harness, pytest, compileall, and manual smoke pass;
 - no visual redesign churn mixed into the refactor.
 
-## Audit Targets That Still Deserve Attention
+## Completed Audit (2026-10-08)
 
-- Timing math in `assembly.py`, `voiceover.py`, and lesson chapter offset
-  mapping.
-- Optional-id comparisons in any model or LLM-produced object.
-- Cache reads in `core/cache.py`, `pipeline.py`, and `lesson_pipeline.py`.
-- Subprocess cancellation, timeout, and non-UTF8 output paths.
-- Code-safety bypasses through dynamic string construction or Manim file APIs.
-- Settings precedence between env vars, app config, and legacy `.env` aliases.
+The listed timing, optional-id, cache, subprocess, code-safety, and settings
+precedence paths were hand-audited and recorded in
+`docs/TIMING_AND_RUNTIME_AUDIT_2026-10-08.md`. The audit fixed produced-lesson
+timing drift, cancellation after rendering, a NumPy `ndarray.dump` safety
+bypass, and strict visual-regression false positives for short fades and
+duration-incomparable baselines (BUG-105–BUG-108). Tracker, surface, feature,
+and strict visual checks passed after regeneration.
 
 ## Definition Of Done
 

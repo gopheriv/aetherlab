@@ -28,6 +28,7 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
             "status": "not_checked",
             "checked": 0,
             "failed": 0,
+            "not_checked": len(steps),
             "total": len(steps),
             "items": [],
             "message": "No structured algebra records were supplied; written steps remain unverified.",
@@ -37,17 +38,27 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - verification is optional
         return {
             "status": "not_checked", "checked": 0, "failed": 0,
-            "total": len(records), "items": [],
+            "not_checked": len(records), "total": len(records), "items": [],
             "message": "SymPy is unavailable; algebra records were not checked.",
         }
 
     variable_values = getattr(solver, "variables", {}) or {}
     variables = set(variable_values)
-    checked = failed = 0
+    checked = failed = unchecked = 0
     substitution_checked = substitution_failed = 0
     items: list[dict[str, str]] = []
     for index, record in enumerate(records, 1):
         if not isinstance(record, dict):
+            unchecked += 1
+            items.append({
+                "index": str(index),
+                "claim": "",
+                "source_ref": "",
+                "status": "not_checked",
+                "detail": "The structured derivation record is not an object.",
+                "substitution_status": "not_checked",
+                "substitution_detail": "Numeric substitution was not checked.",
+            })
             continue
         before = str(record.get("from_expression", "")).strip()
         after = str(record.get("to_expression", "")).strip()
@@ -64,6 +75,7 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
         except (TypeError, ValueError, OverflowError):
             pass
         if not before or not after:
+            unchecked += 1
             item.update(
                 status="not_checked",
                 detail="The step has no before/after expressions.",
@@ -75,20 +87,33 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
         try:
             left = _parse_sympy(before, sp, variables)
             right = _parse_sympy(after, sp, variables)
-            passed = _equivalent(left, right, sp)
+            passed = _equivalent(left, right, sp, variable_values)
             substitution = _check_substitution(left, right, variable_values, sp)
-            checked += 1
-            failed += int(not passed)
             substitution_checked += int(substitution["status"] in {"passed", "failed"})
             substitution_failed += int(substitution["status"] == "failed")
-            item.update(
-                status="passed" if passed else "failed",
-                detail="Expressions are algebraically equivalent." if passed
-                else "Expressions are not algebraically equivalent.",
-                substitution_status=substitution["status"],
-                substitution_detail=substitution["detail"],
-            )
+            if passed is None:
+                unchecked += 1
+                item.update(
+                    status="not_checked",
+                    detail=(
+                        "Equation forms differ by a symbolic factor that may be zero; "
+                        "the solver supplied no nonzero value or assumption for it."
+                    ),
+                    substitution_status=substitution["status"],
+                    substitution_detail=substitution["detail"],
+                )
+            else:
+                checked += 1
+                failed += int(not passed)
+                item.update(
+                    status="passed" if passed else "failed",
+                    detail="Expressions are algebraically equivalent." if passed
+                    else "Expressions are not algebraically equivalent.",
+                    substitution_status=substitution["status"],
+                    substitution_detail=substitution["detail"],
+                )
         except (ValueError, SyntaxError, TypeError, ZeroDivisionError) as exc:
+            unchecked += 1
             item.update(
                 status="not_checked", detail=f"Unsupported expression: {exc}",
                 substitution_status="not_checked",
@@ -96,9 +121,13 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
             )
         items.append(item)
 
-    status = "failed" if failed else ("passed" if checked else "not_checked")
+    status = "failed" if failed else ("not_checked" if unchecked or not checked else "passed")
     if failed:
-        message = f"{failed} of {checked} structured algebra step(s) failed."
+        message = f"{failed} of {checked} checked structured algebra step(s) failed."
+        if unchecked:
+            message += f" {unchecked} additional step(s) were not checked."
+    elif unchecked:
+        message = f"{checked} structured algebra step(s) passed; {unchecked} were not checked."
     elif checked:
         message = f"{checked} structured algebra step(s) passed."
     else:
@@ -107,6 +136,7 @@ def verify_derivation_records(solver: Any) -> dict[str, Any]:
         "status": status,
         "checked": checked,
         "failed": failed,
+        "not_checked": unchecked,
         "total": len(records),
         "substitution_checked": substitution_checked,
         "substitution_failed": substitution_failed,
@@ -221,7 +251,7 @@ def _sympy_node(node: ast.AST, sp: Any, names: dict[str, Any]):
     raise ValueError("only numeric constants, symbols, and + - * / ** are supported")
 
 
-def _equivalent(left: Any, right: Any, sp: Any) -> bool:
+def _equivalent(left: Any, right: Any, sp: Any, known_values: Any = None) -> bool | None:
     if not isinstance(left, tuple) and not isinstance(right, tuple):
         return sp.simplify(left - right) == 0
     if not isinstance(left, tuple) or not isinstance(right, tuple):
@@ -232,31 +262,47 @@ def _equivalent(left: Any, right: Any, sp: Any) -> bool:
     if delta == 0:
         return True
     ratio = sp.simplify(left_eq / right_eq) if right_eq != 0 else None
-    return ratio is not None and _is_nonzero_scaling(ratio, sp)
+    return ratio is not None and _is_nonzero_scaling(ratio, sp, known_values)
 
 
-def _is_nonzero_scaling(ratio: Any, sp: Any) -> bool:
+def _is_nonzero_scaling(ratio: Any, sp: Any, known_values: Any = None) -> bool | None:
     """True when two equation forms differ by a constant or a monomial factor.
 
     Rearranging ``F = m*a`` into ``a = F/m`` divides both sides by ``m``; the
-    residuals then differ by the factor ``-m``. Dividing by a named physical
-    quantity (mass, length, g) is the everyday derivation step, so a ratio that
-    is a product of powers of symbols counts as equivalent. Multiplying by a
-    sum such as ``(x - y)`` can introduce solutions, so that stays not
-    equivalent.
+    residuals then differ by the factor ``-m``. A monomial factor is safe only
+    when the solver supplied a finite, nonzero value for each free symbol (or
+    SymPy can prove it nonzero from symbol assumptions). Otherwise the step is
+    unverified: the factor might be zero and introduce solutions. Multiplying
+    by a sum such as ``(x - y)`` can introduce solutions even when its terms
+    are individually nonzero, so that remains not equivalent.
     """
     if ratio == 0 or ratio.has(sp.zoo, sp.nan, sp.oo, -sp.oo):
         return False
     if ratio.is_number:
-        return True
+        return ratio.is_zero is False
     numerator, denominator = sp.fraction(sp.together(ratio))
     symbols = sorted(ratio.free_symbols, key=lambda symbol: symbol.name)
     try:
-        return all(
-            sp.Poly(part, *symbols).is_monomial for part in (numerator, denominator)
-        )
+        if not all(sp.Poly(part, *symbols).is_monomial for part in (numerator, denominator)):
+            return False
     except sp.PolynomialError:
         return False
+    supplied = known_values if isinstance(known_values, dict) else {}
+    unknown = False
+    for symbol in symbols:
+        if symbol.is_nonzero is True:
+            continue
+        value = supplied.get(symbol.name)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            unknown = True
+            continue
+        if not math.isfinite(numeric):
+            unknown = True
+        elif numeric == 0:
+            return False
+    return None if unknown else True
 
 
 def _check_substitution(

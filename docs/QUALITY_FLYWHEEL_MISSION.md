@@ -635,7 +635,7 @@ keyed step (Phase D) is a runbook you execute.
 
 | Phase | Feature | What it delivered |
 |---|---|---|
-| A · Measure | F180 | `prompt_quality_lab --ab` runs the golden set tournament-ON vs OFF in **isolated** per-arm data dirs; `pair_ab_reports()` reports per-prompt lift, win/tie/loss, and extra-render cost with an honest verdict. |
+| A · Measure | F180 | `prompt_quality_lab --ab` runs the golden set tournament-ON vs OFF in **fresh, isolated** per-arm data dirs; keyed reports also validate vision coverage, prompt pairing, passing cases, candidate rankings, and real extra-render cost before calling the lift evidence. |
 | B · Observe more | F181 | The ledger now records difficulty/budget and the winner's **HQ** score (the draft→HQ pair); `tools/ledger_report.py` mines escalation rate, **winner margin** over the runner-up, the **draft→HQ correlation** (the BUG-31 question, now measured), spend by difficulty, and the weakest axis. |
 | C · Learn | F182 | `tools/train_quality_proxy.py` ridge-fits per-axis weights from the ledger's (draft breakdown → HQ score) pairs into a reviewable JSON model; `scene_critic` applies it when present, else the historical equal-weight sum — so the keyless `--gate` floor is byte-identical until a reviewed model ships. |
 
@@ -644,12 +644,34 @@ draft and HQ renders share composition/structure and differ mainly in resolution
 the two scores likely correlate — so the *magnitude* of the lift is still an open
 empirical question. The harness now exists to answer it.
 
+**Current finding:** replaying the saved 2026-07-12 provider run through the
+validated pairing code marks it INVALID: only 1 of 11 solves in each arm had a
+real vision critique, and the ON arm spent zero extra candidate renders. Its
+`+0.049` mean lift is diagnostic only and must not be used as a baseline or as
+evidence that the tournament helps.
+
+A fresh keyed attempt on 2026-10-09 also ended invalid/incomplete: the ON arm
+produced 11 of 12 contact sheets, but its three tournament records each scored
+only one candidate (zero extra candidate renders), and the final lesson render
+timed out while GitHub Actions was installing the full TeX package bundle. The
+OFF arm was not run. The tournament now uses the shared scene validation and
+repair path, candidate draft crashes use bounded render repair, equal-count beat
+markers are canonicalized, and the cloud worker installs a smaller bounded TeX
+stack. Rerun keyed Phase D before drawing a quality conclusion.
+
 ### Phase D runbook (needs a provider + vision key)
 
 ```bash
 # 1. Measure the lift (renders the golden set twice; ~16 min):
 python tools/prompt_quality_lab.py --ab --allow-provider
 #    -> reads .analysis/prompt-quality-lab/ab_summary.md for the verdict.
+#       Each invocation uses a new state directory under each arm, even when
+#       --out points to a previous run.
+#    -> a provider run is VALID only if every solve in both arms has a real
+#       five-axis vision critique, every ON-arm tournament candidate is vision-
+#       ranked, prompt IDs match, cases pass, and at least one extra candidate
+#       render was measured. Invalid provider runs are saved for diagnosis and
+#       exit with code 2; their numeric lift is exploratory only.
 
 # 2. Commit a keyed baseline so quality can ratchet for keyed users too:
 python tools/prompt_quality_lab.py --allow-provider --out .analysis/keyed
@@ -665,6 +687,14 @@ If the A/B lift is **positive**, the flywheel is validated — commit the keyed
 baseline. If it is **flat or negative**, that is the finding: open a tuning bug
 (escalation threshold / candidate cap / critic rubric) backed by the
 `ledger_report` draft→HQ correlation and winner-margin numbers.
+
+The harness now rejects an unsupported provider conclusion: a real vision
+score must be present for every solve in both arms, all recorded ON-arm
+tournament candidates must have complete vision scores, every case must pass,
+both arms must contain the same prompt IDs, and the ON arm must spend at least
+one extra render. The JSON/Markdown summary preserves the numeric lift for
+diagnosis but labels it exploratory only when those checks fail. A keyless run
+is labelled as not a provider measurement.
 
 **Non-negotiables held:** fail-soft everywhere; no new hard dep (numpy only);
 keyless never slower and byte-identical without a committed model; `--gate` 5.22,

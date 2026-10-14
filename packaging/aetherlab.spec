@@ -20,6 +20,15 @@ ROOT = Path(SPECPATH).parent  # repo root (spec lives in packaging/)
 
 datas = [
     (str(ROOT / "assets" / "aetherlab.ico"), "assets"),
+    (str(ROOT / "assets" / "ui" / "chevron-down.svg"), "assets/ui"),
+    (str(ROOT / "assets" / "ui" / "check.svg"), "assets/ui"),
+    (
+        str(ROOT / "assets" / "ui" / "companion-contact-sheets" / "physics-companions-overview-4k.png"),
+        "assets/ui/companion-contact-sheets",
+    ),
+    (str(ROOT / "assets" / "ui" / "companion-contact-sheets" / "quantum-evolution-4k.png"), "assets/ui/companion-contact-sheets"),
+    (str(ROOT / "assets" / "ui" / "companion-contact-sheets" / "photon-evolution-4k.png"), "assets/ui/companion-contact-sheets"),
+    (str(ROOT / "assets" / "ui" / "companion-contact-sheets" / "lab-bot-evolution-4k.png"), "assets/ui/companion-contact-sheets"),
     # DejaVu fonts drive the produced-lesson title cards (services/cards.py);
     # miss them and cards fall back to PIL's tiny bitmap font.
     (str(ROOT / "assets" / "fonts" / "DejaVuSans.ttf"), "assets/fonts"),
@@ -29,6 +38,7 @@ binaries = []
 hiddenimports = [
     "aetherlab",
     "PyQt6.QtSvg",
+    "PyQt6.QtPrintSupport",
     "PyQt6.QtMultimedia",
     "PyQt6.QtMultimediaWidgets",
     # Manim's CLI + plugin machinery (imported lazily → not auto-detected).

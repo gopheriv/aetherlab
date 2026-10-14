@@ -19,6 +19,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -93,8 +96,31 @@ def speech_cache_path(cache_dir: Path, text: str, voice: str, rate: str) -> Path
     """Content-addressed location of one synthesized line (text + voice + rate)."""
     import hashlib
 
-    key = hashlib.sha256(f"{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")).hexdigest()[:24]
+    # "trim1": cached clips have their edge silence removed (see _trim_edges).
+    key = hashlib.sha256(
+        f"trim1\n{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")
+    ).hexdigest()[:24]
     return Path(cache_dir) / f"{key}.mp3"
+
+
+async def _trim_edges(source: Path, target: Path) -> bool:
+    """Copy ``source`` to ``target`` without its leading and trailing silence.
+
+    edge-tts pads every clip (about 0.15 s before and 0.3 s after the words;
+    22% of a short line, measured 2026-10-02). Over a 22-line plan that is
+    ~10 s of silence counted as speech, so a 128-word, ~45 s script measured
+    62.5 s and could not fit 60 s. The beat timing adds its own breath.
+    """
+    ffmpeg = _ffmpeg_exe()
+    if not ffmpeg:
+        return False
+    edge = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03"
+    ok = await _run_ffmpeg([
+        ffmpeg, "-y", "-i", str(source),
+        "-af", f"{edge},areverse,{edge},areverse",
+        "-c:a", "libmp3lame", "-q:a", "3", str(target),
+    ])
+    return ok and target.is_file() and target.stat().st_size > 0
 
 
 async def synthesize_cached(
@@ -114,8 +140,14 @@ async def synthesize_cached(
     audio = await synthesize(" ".join(text.split()), partial, voice, rate)
     if audio is None:
         return None
+    trimmed = path.with_suffix(".trim.mp3")
     try:
-        partial.replace(path)
+        if await _trim_edges(partial, trimmed) and _duration_sync(trimmed) > 0.05:
+            trimmed.replace(path)
+            partial.unlink(missing_ok=True)
+        else:
+            trimmed.unlink(missing_ok=True)
+            partial.replace(path)
     except OSError:
         return None
     return path
@@ -143,30 +175,70 @@ async def measure_speech(
     return [float(value) for value in durations]
 
 
-async def _run_ffmpeg(cmd: list[str], timeout: int = 120) -> bool:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **subprocess_kwargs(),
-    )
+async def _run_ffmpeg(
+    cmd: list[str], timeout: int = 120,
+    *, cancel_check: Callable[[], bool] | None = None,
+) -> bool:
+    from aetherlab.core.atomic_file import unique_staging_path
+    from aetherlab.core.proc import ProcessCancelledError, run_process_tree
+
+    target = Path(cmd[-1])
+    staging = unique_staging_path(target)
+    staged_cmd = [*cmd[:-1], str(staging)]
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:  # noqa: BLE001
-            pass
+        if cancel_check is not None and cancel_check():
+            raise ProcessCancelledError("Narration cancelled")
+        result = await asyncio.to_thread(
+            run_process_tree,
+            staged_cmd,
+            timeout=timeout,
+            cancel_check=cancel_check,
+            capture_output=True,
+            **subprocess_kwargs(),
+        )
+    except ProcessCancelledError:
+        staging.unlink(missing_ok=True)
+        raise
+    except subprocess.TimeoutExpired:
+        staging.unlink(missing_ok=True)
         log.warning("ffmpeg mux timed out; keeping silent video.")
         return False
-    if proc.returncode != 0:
+    except (FileNotFoundError, OSError) as exc:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg mux could not complete (%s); keeping silent video.", exc)
+        return False
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    if result.returncode != 0:
+        staging.unlink(missing_ok=True)
+        stderr = result.stderr if isinstance(result.stderr, bytes) else b""
         log.warning("ffmpeg mux failed: %s", stderr.decode(errors="replace")[-500:])
+        return False
+    try:
+        complete_output = staging.is_file() and staging.stat().st_size > 0
+    except OSError:
+        complete_output = False
+    if not complete_output:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg mux reported success without a complete output file.")
+        return False
+    try:
+        os.replace(staging, target)
+    except OSError as exc:
+        staging.unlink(missing_ok=True)
+        log.warning("ffmpeg mux output could not be installed (%s); keeping silent video.", exc)
         return False
     return True
 
 
-async def merge(video: Path, audio: Path, out_path: Path) -> Path | None:
+async def merge(
+    video: Path,
+    audio: Path,
+    out_path: Path,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> Path | None:
     """Mux audio over video into a narrated mp4.
 
     Audio longer than video → pad the video's last frame (tpad) so the tail
@@ -200,7 +272,12 @@ async def merge(video: Path, audio: Path, out_path: Path) -> Path | None:
             "-map", "0:v:0", "-map", "1:a:0",
             "-movflags", "+faststart", str(out_path),
         ]
-    if await _run_ffmpeg(cmd):
+    ok = (
+        await _run_ffmpeg(cmd)
+        if cancel_check is None
+        else await _run_ffmpeg(cmd, cancel_check=cancel_check)
+    )
+    if ok:
         log.info("Narrated video: %s (%.1f MB)", out_path, out_path.stat().st_size / 1e6)
         return out_path
     return None
@@ -214,6 +291,7 @@ async def add_voiceover(
     voice: str = DEFAULT_VOICE,
     rate: str = DEFAULT_RATE,
     fit_to_video: bool = True,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> Path | None:
     """Full pipeline: narration text → TTS → fit-to-video → merge → narrated mp4.
 
@@ -226,37 +304,46 @@ async def add_voiceover(
     audio_path = out_dir / f"{video.stem}_narration.mp3"
     narrated_path = out_dir / f"{video.stem}_narrated.mp4"
 
-    audio = await synthesize(narration, audio_path, voice, rate)
-    if audio is None:
-        return None
-
-    # Fit the narration to the video by adjusting the speaking rate ONCE.
-    if fit_to_video:
-        try:
-            video_dur = await get_duration(video)
-            audio_dur = await get_duration(audio)
-            if video_dur > 0.5 and audio_dur > 0.5:
-                ratio = audio_dur / video_dur
-                if ratio > 1.10 or ratio < 0.85:  # too long / too short
-                    base = _parse_rate(rate)
-                    new_rate = _format_rate(max(-40, min(80, base + round((ratio - 1.0) * 100))))
-                    if new_rate != rate:
-                        log.info(
-                            "Fitting narration: audio %.1fs vs video %.1fs (ratio %.2f) → rate %s",
-                            audio_dur, video_dur, ratio, new_rate,
-                        )
-                        refit = await synthesize(narration, audio_path, voice, new_rate)
-                        if refit is not None:
-                            audio = refit
-        except Exception:  # noqa: BLE001
-            log.warning("Narration fit-to-video failed; using base rate.", exc_info=True)
-
-    result = await merge(video, audio, narrated_path)
     try:
-        audio_path.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
-    return result
+        audio = await synthesize(narration, audio_path, voice, rate)
+        if audio is None:
+            return None
+        if cancel_check is not None and cancel_check():
+            from aetherlab.core.proc import ProcessCancelledError
+
+            raise ProcessCancelledError("Narration cancelled")
+
+        # Fit the narration to the video by adjusting the speaking rate ONCE.
+        if fit_to_video:
+            try:
+                video_dur = await get_duration(video)
+                audio_dur = await get_duration(audio)
+                if video_dur > 0.5 and audio_dur > 0.5:
+                    ratio = audio_dur / video_dur
+                    if ratio > 1.10 or ratio < 0.85:  # too long / too short
+                        base = _parse_rate(rate)
+                        new_rate = _format_rate(max(-40, min(80, base + round((ratio - 1.0) * 100))))
+                        if new_rate != rate:
+                            log.info(
+                                "Fitting narration: audio %.1fs vs video %.1fs (ratio %.2f) → rate %s",
+                                audio_dur, video_dur, ratio, new_rate,
+                            )
+                            refit = await synthesize(narration, audio_path, voice, new_rate)
+                            if refit is not None:
+                                audio = refit
+            except Exception:  # noqa: BLE001
+                log.warning("Narration fit-to-video failed; using base rate.", exc_info=True)
+
+        if cancel_check is not None and cancel_check():
+            from aetherlab.core.proc import ProcessCancelledError
+
+            raise ProcessCancelledError("Narration cancelled")
+        return await merge(video, audio, narrated_path, cancel_check=cancel_check)
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def storyboard_timed_narration_segments(storyboard: dict | None) -> list[dict[str, Any]]:
@@ -308,6 +395,7 @@ async def add_timed_beat_voiceover(
     rate: str = DEFAULT_RATE,
     max_rate_adjustment_pct: int = 20,
     speech_cache_dir: Path | None = None,
+    measured_starts: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     """Synthesize per-beat speech and place it on the storyboard's time windows.
 
@@ -332,11 +420,43 @@ async def add_timed_beat_voiceover(
     video_duration = await get_duration(video)
     if video_duration <= 0.5:
         return None
+    if measured_starts and speech_cache_dir is not None:
+        # Each line starts when its beat's first animation really starts in
+        # the final code (measured by a dry run), whatever repairs and
+        # revisions did to the length. Live 2026-10-02: a 13.3 s plan rendered
+        # 16.0 s after a render repair and the stretched timing was declined.
+        # Beats MiniMax animates together measure the same start (live
+        # 2026-10-02: segment 5 of 5). Their lines are then spoken back to
+        # back: each starts no earlier than the previous line has finished.
+        previous_end = 0.0
+        for item in cues:                           # timeline order
+            start = measured_starts.get(item["beat_id"])
+            if start is None or not 0 <= start < video_duration:
+                start = item["start_s"]
+            start = max(float(start), previous_end)
+            item["start_s"] = round(start, 3)
+            spoken = _duration_sync(speech_cache_path(speech_cache_dir, item["text"], voice, rate))
+            previous_end = start + (spoken if spoken > 0 else 0.0) + 0.1
+        for item, following in zip(cues, cues[1:] + [None]):
+            item["end_s"] = round(following["start_s"] if following else video_duration, 3)
+        if any(item["end_s"] - item["start_s"] <= 0.05 for item in cues):
+            log.info("Beat narration declined: the lines do not fit before the video ends.")
+            return None
     timeline_end = max(item["end_s"] for item in cues)
     scale = video_duration / timeline_end if timeline_end > 0 else 1.0
-    if not 0.85 <= scale <= 1.15:
+    if measured_starts and speech_cache_dir is not None:
+        scale = 1.0                      # windows already come from the final code
+    elif not 0.85 <= scale <= 1.15:
         log.info("Beat narration declined: storyboard/video scale %.3f is too large.", scale)
         return None
+    if speech_cache_dir is not None and video_duration >= timeline_end - 0.25:
+        # Voice-first scenes: the preflight verified each beat STARTS on time,
+        # and extra length sits in the final hold. Stretching every cue by the
+        # overall ratio would push early lines late (live 2026-10-02: 15.13 s
+        # for a 13.59 s plan would have moved them up to 1.3 s), so lines stay
+        # at their planned starts and the last window runs to the video's end.
+        scale = 1.0
+        cues[-1]["end_s"] = round(max(cues[-1]["end_s"], video_duration), 3)
     for item in cues:
         item["start_s"] = round(item["start_s"] * scale, 3)
         item["end_s"] = round(item["end_s"] * scale, 3)
@@ -508,6 +628,7 @@ async def narrate_segment(
     *,
     voice: str = DEFAULT_VOICE,
     rate: str = DEFAULT_RATE,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[Path | None, float]:
     """Narrate one chapter clip. Returns (narrated_path_or_None, spoken_seconds).
 
@@ -516,7 +637,14 @@ async def narrate_segment(
     timeline stays correct either way.
     """
     video = Path(video)
-    narrated = await add_voiceover(video, narration, out_dir, voice=voice, rate=rate)
+    narrated = await add_voiceover(
+        video, narration, out_dir, voice=voice, rate=rate,
+        cancel_check=cancel_check,
+    )
+    if cancel_check is not None and cancel_check():
+        from aetherlab.core.proc import ProcessCancelledError
+
+        raise ProcessCancelledError("Narration cancelled")
     final = narrated or (video if video.exists() else None)
     duration = await get_duration(final) if final else 0.0
     return narrated, duration

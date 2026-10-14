@@ -1,0 +1,26 @@
+{
+  "stage": "M-final",
+  "quality": "h",
+  "fps": 30,
+  "langs": [
+    "ru",
+    "kk",
+    "en"
+  ],
+  "manim_pin": "manim==0.21.0",
+  "workflow_version": "7",
+  "content": {
+    "canonical": "7d85de57a9d59d861f718d05e784be520efeb4fca82c7c2faa4af8ca9bc42c84",
+    "shots": "e3995e2580ea0034fbefb584d659bef02ea56ac9bee101086259998d5779a95c",
+    "fragments": "27e5c725c737e36e7de2ac234ac9a3c0ed8d017d5bf02d8ded1cc8a9a9e54cbf",
+    "durations": "7bc777c4a1e083b77841ac3cc1ee99e0a7119b92f9b6369cc4adc2881a4bb07a",
+    "mux_plan": "a0f32da60b44d148e3d847da6798d31d89f661b0fc92b2c83d9f7735f22d178e",
+    "clips_sha256": "36b89f1941754300287b48c96f6333b7fb3025f0747006cf8d7aeee8f5e499ae"
+  },
+  "scenes": {
+    "ru": "1711cfc17ffbd67c56a1c82e0dd14f01f78ced4f69d9bb170a7bab45391b37c9",
+    "kk": "f4474c5a06b5e2038401f2da514197c959de6175a40c5dc6eb856dd555a63442",
+    "en": "e9a880e5a775f90ee952fbe3cf5e7a9e3eebb118a8e53d3ac0fe2ece63580267"
+  },
+  "started_at": "2026-10-13T13:04:09"
+}

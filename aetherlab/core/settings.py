@@ -75,6 +75,9 @@ class AppSettings:
     provider_source: str = "environment"
     api_key_source: str = "none"
     provider_warning: str = ""
+    # Optional local source folder. Only catalogued textbooks and theory
+    # references are added to the RAG index; exam packs stay separate.
+    reference_sources_path: Path | None = None
 
 
 OLLAMA_OPENAI_BASE_URL = "http://localhost:11434/v1"
@@ -90,15 +93,19 @@ def app_config_path() -> Path:
     return _path_from_env("AETHERLAB_DATA_DIR", _default_data_dir()) / "settings.json"
 
 
-def load_app_config() -> dict[str, str]:
+def load_app_config(*, strict_io: bool = False) -> dict[str, str]:
     """Read the config saved by the in-app Settings dialog (may not exist)."""
     path = app_config_path()
-    if not path.exists():
-        return {}
     with path_lock(path):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            if strict_io:
+                raise
+            return {}
+        except (UnicodeError, json.JSONDecodeError):
             return {}
     if not isinstance(payload, dict):
         return {}
@@ -113,7 +120,9 @@ def save_app_config(values: dict[str, str | None]) -> Path:
     """Persist Settings-dialog values. Empty/None values are dropped."""
     path = app_config_path()
     with path_lock(path):
-        existing = load_app_config()
+        # A missing/corrupt document can recover; an unreadable existing file
+        # must not be mistaken for an empty document during read/modify/write.
+        existing = load_app_config(strict_io=True)
         for key, value in values.items():
             if value is None or not str(value).strip():
                 existing.pop(key, None)
@@ -121,6 +130,14 @@ def save_app_config(values: dict[str, str | None]) -> Path:
                 existing[key] = str(value).strip()
         atomic_write_json(path, existing)
     return path
+
+
+def save_reference_sources_path(path: str | Path) -> Path:
+    """Save a valid local textbook/mock folder without touching its contents."""
+    root = Path(path).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Reference sources folder does not exist: {root}")
+    return save_app_config({"reference_sources_path": str(root)})
 
 
 def load_settings() -> AppSettings:
@@ -143,6 +160,17 @@ def load_settings() -> AppSettings:
             else data_dir / "library"
         ),
     )
+    reference_sources_value = (
+        os.getenv("AETHERLAB_REFERENCE_SOURCES")
+        or app_cfg.get("reference_sources_path")
+    )
+    reference_sources_path = (
+        Path(reference_sources_value).expanduser()
+        if reference_sources_value
+        else Path.home() / "Projects" / "References"
+    )
+    if not reference_sources_path.is_dir():
+        reference_sources_path = None
     # The ~/.qwen autoload is a developer-machine convenience: a student's app
     # must never silently inherit provider credentials from an unrelated tool.
     # Opt back in with AETHERLAB_QWEN_AUTOLOAD=1.
@@ -159,7 +187,7 @@ def load_settings() -> AppSettings:
     legacy_api_key, legacy_api_key_name = _first_mapping_named(
         legacy_env, "OPENAI_API_KEY", "GPT_API_KEY", "DASHSCOPE_API_KEY"
     )
-    api_key = (
+    api_key = _clean_secret(
         env_api_key
         or app_cfg.get("api_key")
         or legacy_api_key
@@ -222,6 +250,7 @@ def load_settings() -> AppSettings:
         cache_path=cache_path,
         chroma_path=chroma_path,
         library_path=library_path,
+        reference_sources_path=reference_sources_path,
         openai_api_key=api_key,
         openai_base_url=base_url,
         llm_model=llm_model,
@@ -399,6 +428,19 @@ def _first_env(*names: str) -> str | None:
     return None
 
 
+def _clean_secret(value: object) -> str | None:
+    """Drop whitespace and byte-order marks around a pasted key.
+
+    Windows tools (PowerShell pipes, Notepad) can prefix a UTF-8 BOM that
+    str.strip() keeps; in an Authorization header it fails every request
+    with "'ascii' codec can't encode character '\\ufeff'" (live 2026-10-02).
+    """
+    if not isinstance(value, str):
+        return value if value is None else str(value)
+    cleaned = value.strip().strip("﻿​").strip()
+    return cleaned or None
+
+
 def _first_env_named(*names: str) -> tuple[str | None, str | None]:
     for name in names:
         value = os.getenv(name)
@@ -442,7 +484,7 @@ def load_legacy_env(path: Path | None = None) -> dict[str, str]:
         return {}
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return {}
     result: dict[str, str] = {}
     for line in lines:
@@ -527,7 +569,7 @@ def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
 
     try:
         payload = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
 
     model_name = str(_nested_get(payload, ["model", "name"]) or "")

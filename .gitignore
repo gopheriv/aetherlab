@@ -49,3 +49,21 @@ media/
 derivation.pdf
 .analysis/
 visual_regression/runs/
+
+# Agent scratch space (pipeline snapshots live in tools/lesson_pipeline/)
+.qwen/
+
+# Pytest temp dirs
+.pytest-*/
+
+# Local preview/screenshot staging data
+.leaderboard-preview-data/
+.ui-preview-data-gamification/
+.ui-preview-data*/
+
+# Local bulk temp (GBs of preflight dirs and render caches)
+tmp/
+
+# Generated one-off inspection artifacts
+*.inspect.ndjson
+*.codex-backup

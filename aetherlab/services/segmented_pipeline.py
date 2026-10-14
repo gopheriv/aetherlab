@@ -26,7 +26,9 @@ from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, Solver
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-DEFAULT_SEGMENT_MAX_S = 28.0
+# About 5 beats per segment. Live 2026-10-02: 27 s segments carried ~9 beats and
+# 24 animations, past the 16-play / 3.5-cost cloud limits, on every attempt.
+DEFAULT_SEGMENT_MAX_S = 15.0
 LONG_SCENE_THRESHOLD_S = 45.0
 
 
@@ -162,6 +164,38 @@ def partition_storyboard(
     return result
 
 
+async def _hold_last_frame(video: Path, seconds: float) -> bool:
+    """Extend ``video`` in place by freezing its last frame for ``seconds``."""
+    from aetherlab.services.voiceover import _ffmpeg_exe, _run_ffmpeg
+
+    ffmpeg = _ffmpeg_exe()
+    if not ffmpeg or seconds <= 0:
+        return False
+    try:
+        import av
+
+        with av.open(str(video)) as container:
+            has_audio = bool(container.streams.audio)
+    except Exception:  # noqa: BLE001 - probe failure: treat as video-only
+        has_audio = False
+    held = video.with_name(video.stem + ".held.mp4")
+    cmd = [ffmpeg, "-y", "-i", str(video),
+           "-vf", f"tpad=stop_mode=clone:stop_duration={seconds:.3f}"]
+    if has_audio:
+        cmd += ["-af", f"apad=pad_dur={seconds:.3f}", "-c:a", "aac", "-b:a", "160k"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(held)]
+    if not await _run_ffmpeg(cmd) or not held.is_file():
+        held.unlink(missing_ok=True)
+        return False
+    held.replace(video)
+    return True
+
+
+def _segment_play_budget(segment: dict) -> int:
+    """Top-level play calls a segment may use: two per beat plus an entry and exit."""
+    return min(16, 2 * max(1, len(segment.get("beat_ids") or [])) + 2)
+
+
 def _stable_hash(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -274,9 +308,8 @@ async def render_segmented_scene(
             "Long-form AI generation requires a configured model; no segmented fallback was substituted.",
             engine=engine,
         )
-    from aetherlab.services.scene_generator import SceneGenerator
-
     from aetherlab.services.manim_runtime import ManimRuntime
+    from aetherlab.services.scene_generator import SceneGenerator
     from aetherlab.services.voiceover import get_duration
 
     runtime = runtime or ManimRuntime(settings)
@@ -431,7 +464,9 @@ async def render_segmented_scene(
                             f"Overall story: {global_board.get('creative_direction', global_board.get('title', ''))}. "
                             f"Cover only its assigned local beats and preserve the same equations, values, units, "
                             f"colors, objects, and visual style. Entry: {item['storyboard']['continuity']['entry_beat']}. "
-                            f"Exit: {item['storyboard']['continuity']['exit_beat']}. Do not introduce a new scenario."
+                            f"Exit: {item['storyboard']['continuity']['exit_beat']}. Do not introduce a new scenario. "
+                            f"Budget: at most {_segment_play_budget(item)} top-level self.play calls; "
+                            f"animate simultaneous changes in one play call."
                         ),
                         duration_target_s=target,
                     )
@@ -439,10 +474,21 @@ async def render_segmented_scene(
                         progress(f"Generating segment {index + 1}/{len(segments)} ({target:.1f}s).")
                     record["state"] = "generating"
                     atomic_write_json(manifest_path, manifest)
-                    bundle = await runtime.generate_scene_async(
-                        segment_request, solver, rag, settings,
-                        locked_storyboard=item["storyboard"], force_ai=True,
-                    )
+                    # One segment failing stops the whole lesson, so each gets a
+                    # second full generation before that happens.
+                    first_try: list[str] = []
+                    for segment_try in range(2):
+                        bundle = await runtime.generate_scene_async(
+                            segment_request, solver, rag, settings,
+                            locked_storyboard=item["storyboard"], force_ai=True,
+                        )
+                        if not bundle.used_fallback and bundle.status == "compiled":
+                            break
+                        if segment_try == 0:
+                            first_try = [f"First try: {d}" for d in bundle.diagnostics]
+                            if progress:
+                                progress(f"Segment {index + 1} failed its checks; generating it once more.")
+                    bundle.diagnostics = first_try + bundle.diagnostics
                     if bundle.used_fallback:
                         return _incomplete(
                             f"Segment {index + 1} fell back to a template; the long explanation is incomplete.",
@@ -465,6 +511,7 @@ async def render_segmented_scene(
                     brief=f"{request.prompt}\nSegment {index + 1}: {item['beat_ids']}",
                     progress=progress,
                     cancel_check=cancel_check,
+                    duration_target_s=target,
                 )
                 if bundle.status != "rendered" or not bundle.video_path:
                     return _incomplete(
@@ -496,11 +543,33 @@ async def render_segmented_scene(
                     return _incomplete(f"Segment {index + 1} produced an unreadable MP4.", engine=engine)
                 shutil.copy2(source, video_path)
                 measured = await get_duration(video_path)
-                segment_tolerance = max(1.0, target * 0.05)
-                if measured <= 0 or abs(measured - target) > segment_tolerance:
+                if 0 < measured < target - 0.05 and target - measured <= max(2.5, target * 0.2):
+                    # A slightly short segment holds its final frame (and
+                    # silence) to fill its slot: invisible, keeps every later
+                    # segment and the total length on time. Live 2026-10-02:
+                    # 13.17 s in a 14.24 s slot stopped the lesson.
+                    held = await _hold_last_frame(video_path, target - measured)
+                    if held:
+                        bundle.diagnostics.append(
+                            f"Held the final frame {target - measured:.2f}s to fill the {target:.2f}s slot."
+                        )
+                        measured = await get_duration(video_path)
+                # Short segments were just held to fill their slot. A long one
+                # keeps every beat start on time (preflight-verified) and only
+                # holds its last beat longer, so it is accepted within the
+                # scene gate's 20%; narration stays at the planned starts.
+                short_limit = max(1.0, target * 0.05)
+                long_limit = max(1.0, target * 0.20)
+                if measured <= 0 or measured < target - short_limit or measured > target + long_limit:
                     return _incomplete(
-                        f"Segment {index + 1} measures {measured:.2f}s; expected {target:.2f}s within ±{segment_tolerance:.2f}s.",
+                        f"Segment {index + 1} measures {measured:.2f}s; expected {target:.2f}s "
+                        f"(-{short_limit:.2f}s / +{long_limit:.2f}s).",
                         engine=engine, diagnostics=bundle.diagnostics,
+                    )
+                if measured > target + short_limit:
+                    bundle.diagnostics.append(
+                        f"Segment runs {measured - target:.2f}s past its {target:.2f}s slot "
+                        "(longer final hold; beat starts unchanged)."
                     )
                 bundle.video_path = str(video_path)
                 code_path.write_text(bundle.code, encoding="utf-8")
@@ -539,10 +608,18 @@ async def render_segmented_scene(
             final_path = Path(assembled)
         final_duration = await get_duration(final_path)
         target_duration = float(request.duration_target_s)
-        final_tolerance = 1.0 if target_duration <= 60.0 else 2.0
-        if final_duration <= 0 or abs(final_duration - target_duration) > final_tolerance:
+        # Segments never end short (they are held to fill), but each may run
+        # up to 20% long, so the lesson may end up to 20% past its target.
+        final_short = 1.0 if target_duration <= 60.0 else 2.0
+        final_long = max(final_short, target_duration * 0.20)
+        if (
+            final_duration <= 0
+            or final_duration < target_duration - final_short
+            or final_duration > target_duration + final_long
+        ):
             return _incomplete(
-                f"Assembled lesson measures {final_duration:.2f}s; expected {target_duration:.2f}s within ±{final_tolerance:.2f}s.",
+                f"Assembled lesson measures {final_duration:.2f}s; expected {target_duration:.2f}s "
+                f"(-{final_short:.2f}s / +{final_long:.2f}s).",
                 engine=engine,
             )
         subtitle_path = cache_dir / "lesson.srt"

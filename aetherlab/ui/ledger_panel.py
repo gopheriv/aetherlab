@@ -32,7 +32,7 @@ class RenderLedgerPanel(QtWidgets.QWidget):
 
         header = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("Render farm")
-        title.setStyleSheet("color: #F8FAFC; font-size: 16px; font-weight: 600;")
+        title.setStyleSheet("color: #18283D; font-size: 16px; font-weight: 600;")
         header.addWidget(title)
         header.addStretch(1)
         self._refresh_btn = QtWidgets.QPushButton("Refresh")
@@ -51,14 +51,14 @@ class RenderLedgerPanel(QtWidgets.QWidget):
         split.addWidget(self._jobs)
 
         self._details = QtWidgets.QTextBrowser()
-        self._details.setOpenExternalLinks(False)
+        self._details.setOpenExternalLinks(True)
         split.addWidget(self._details, 1)
         root.addLayout(split, 1)
 
         self._empty = QtWidgets.QLabel(
             "No render jobs yet. Cloud renders and scene tournaments appear here."
         )
-        self._empty.setStyleSheet("color: #64748B; font-size: 12px;")
+        self._empty.setStyleSheet("color: #65758A; font-size: 12px;")
         self._empty.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._empty)
 
@@ -108,17 +108,27 @@ class RenderLedgerPanel(QtWidgets.QWidget):
         def esc(value: object) -> str:
             return html.escape(str(value))
 
+        from aetherlab.services.render_ledger import safe_github_url
+
+        run_url = safe_github_url(rec.get("run_url", ""))
+        artifact_url = safe_github_url(rec.get("artifact_url", ""))
+
         parts: list[str] = [
-            f"<h3 style='color:#F8FAFC;margin:0 0 6px'>{esc(rec.get('scene_class', 'job'))}</h3>",
-            f"<div style='color:#94A3B8'>{esc(rec.get('backend', ''))}"
+            f"<h3 style='color:#18283D;margin:0 0 6px'>{esc(rec.get('scene_class', 'job'))}</h3>",
+            f"<div style='color:#65758A'>Job: {esc(rec.get('job_id', ''))} · FPS: {esc(rec.get('fps', 0))}</div>",
+            f"<div style='color:#65758A'>{esc(rec.get('backend', ''))}"
             f" · {esc(rec.get('provider', ''))} · quality {esc(rec.get('quality', ''))}"
-            f" · status <b>{esc(rec.get('status', ''))}</b></div>",
+            f" · status <b>{esc(str(rec.get('status', '')).replace('_', ' '))}</b></div>",
         ]
+        if run_url:
+            parts.append(f"<div><a href='{esc(run_url)}'>Open GitHub Actions run</a></div>")
+        if artifact_url:
+            parts.append(f"<div><a href='{esc(artifact_url)}'>Open render artifact</a></div>")
 
         candidates = rec.get("candidates") or []
         winner = rec.get("winner_index")
         if candidates:
-            parts.append("<h4 style='color:#E2E8F0;margin:12px 0 4px'>Candidates</h4><ul>")
+            parts.append("<h4 style='color:#24364B;margin:12px 0 4px'>Candidates</h4><ul>")
             for cand in candidates:
                 if not isinstance(cand, dict):
                     continue
@@ -131,7 +141,7 @@ class RenderLedgerPanel(QtWidgets.QWidget):
                 except (TypeError, ValueError):
                     is_winner = False
                 mark = " ← winner" if is_winner else ""
-                colour = "#10B981" if mark else "#E2E8F0"
+                colour = "#26725C" if mark else "#24364B"
                 parts.append(
                     f"<li style='color:{colour}'>#{idx + 1}: score "
                     f"{esc(cand.get('score', 0))} ({esc(cand.get('verdict', ''))}){esc(mark)}</li>"
@@ -140,29 +150,29 @@ class RenderLedgerPanel(QtWidgets.QWidget):
 
         if rec.get("fallback_reason"):
             parts.append(
-                f"<div style='color:#F59E0B;margin-top:8px'>Fell back to local: "
+                f"<div style='color:#8A5A24;margin-top:8px'>Fell back to local: "
                 f"{esc(rec['fallback_reason'])}</div>"
             )
         if rec.get("final_path"):
-            parts.append(f"<div style='color:#64748B'>Output: {esc(rec['final_path'])}</div>")
+            parts.append(f"<div style='color:#65758A'>Output: {esc(rec['final_path'])}</div>")
 
         timeline = rec.get("timeline") or []
         if timeline:
-            parts.append("<h4 style='color:#E2E8F0;margin:12px 0 4px'>Timeline</h4><ul>")
+            parts.append("<h4 style='color:#24364B;margin:12px 0 4px'>Timeline</h4><ul>")
             for event in timeline:
                 if not isinstance(event, dict):
                     continue
                 detail = f" — {esc(event.get('detail'))}" if event.get("detail") else ""
                 parts.append(
-                    f"<li style='color:#94A3B8'>{esc(event.get('at', ''))}: "
-                    f"{esc(event.get('status', ''))}{detail}</li>"
+                    f"<li style='color:#65758A'>{esc(event.get('at', ''))}: "
+                    f"{esc(str(event.get('status', '')).replace('_', ' '))}{detail}</li>"
                 )
             parts.append("</ul>")
 
         if rec.get("log_tail"):
-            parts.append("<h4 style='color:#F43F5E;margin:12px 0 4px'>Failure log (sanitized)</h4>")
+            parts.append("<h4 style='color:#AC4055;margin:12px 0 4px'>Failure log (sanitized)</h4>")
             parts.append(
-                f"<pre style='color:#FCA5A5;white-space:pre-wrap;font-size:11px'>"
+                f"<pre style='color:#AC4055;white-space:pre-wrap;font-size:11px'>"
                 f"{esc(rec['log_tail'])}</pre>"
             )
         return "".join(parts)
@@ -171,8 +181,10 @@ class RenderLedgerPanel(QtWidgets.QWidget):
 def _status_glyph(status: str) -> str:
     return {
         "rendered": "✓",
+        "completed": "✓",
         "artifact_downloaded": "✓",
         "failed": "✗",
+        "action_required": "⚠",
         "cancelled": "⊘",
         "rate_limited": "⏳",
         "fallback_local": "↩",

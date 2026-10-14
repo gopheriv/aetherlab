@@ -32,12 +32,14 @@ def run_app(argv: list[str] | None = None) -> int:
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "AetherLab.Workbench"
+                "PhysLab.Workbench"
             )
         except Exception:  # noqa: BLE001 — cosmetic only
             pass
 
     app = QtWidgets.QApplication(argv if argv is not None else sys.argv)
+    app.setApplicationName("PhysLab")
+    app.setApplicationDisplayName("PhysLab")
     icon = _icon_path()
     if icon is not None:
         app.setWindowIcon(QtGui.QIcon(str(icon)))

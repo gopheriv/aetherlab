@@ -58,14 +58,16 @@ def params(solver: Any) -> dict[str, float]:
 def build(class_name: str, solver: Any) -> str | None:
     """Return a chaotic double-pendulum scene, or None if it cannot integrate."""
     p = params(solver)
-    g, L1, L2, m1, m2 = p["g"], p["L1"], p["L2"], p["m1"], p["m2"]
+    g, length1, length2, m1, m2 = p["g"], p["L1"], p["L2"], p["m1"], p["m2"]
 
     spec = numeric_spec()
     try:
         from aetherlab.services.numeric import solve_numeric
 
         sol = solve_numeric(
-            spec, {"g": g, "m1": m1, "m2": m2, "L1": L1, "L2": L2}, max_points=_MAX_POINTS
+            spec,
+            {"g": g, "m1": m1, "m2": m2, "L1": length1, "L2": length2},
+            max_points=_MAX_POINTS,
         )
     except Exception:  # noqa: BLE001 — composition must never crash the pipeline
         return None
@@ -82,8 +84,8 @@ def build(class_name: str, solver: Any) -> str | None:
         class_name=class_name,
         th1=repr(th1),
         th2=repr(th2),
-        L1=repr(round(L1, 4)),
-        L2=repr(round(L2, 4)),
+        L1=repr(round(length1, 4)),
+        L2=repr(round(length2, 4)),
         title=repr(title),
     )
 

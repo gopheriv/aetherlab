@@ -11,9 +11,10 @@ pipeline for every chapter (no parallel renderer):
     → assemble the chapter clips into one lesson MP4 (Phase 3) + build .srt
 
 Fail-soft throughout: a chapter that won't render is skipped and the lesson
-continues; with no API key every chapter uses the deterministic domain
-template; assembly failure falls back to the first chapter clip. Per-chapter
-caching (keyed by the chapter's plan) means editing one chapter re-renders
+continues; without a lesson API key, English uses the deterministic domain
+template while Kazakh/Russian receive a localized offline-practice notice.
+Assembly failure falls back to the first chapter clip. Per-chapter caching
+(keyed by the chapter's plan and language) means editing one chapter re-renders
 only that chapter.
 """
 
@@ -29,6 +30,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aetherlab.core.atomic_json import atomic_write_json, path_lock
+from aetherlab.core.language import (
+    LANGUAGE_PROMPT_NAMES,
+    normalize_language,
+    tts_voice_for_language,
+)
+from aetherlab.core.lesson_messages import lesson_message
 from aetherlab.core.models import (
     LessonBundle,
     LessonChapter,
@@ -39,7 +46,13 @@ from aetherlab.core.models import (
     SolverResult,
 )
 from aetherlab.core.proc import ProcessCancelledError
-from aetherlab.services.lesson_planner import _has_learning_scaffolds, plan_lesson
+from aetherlab.services.ent_lesson_catalog import (
+    ACCELERATED_MOTION_5MIN_VERSION,
+    PrebuiltLessonContentError,
+    curated_ent_lesson,
+    prebuilt_5min_media,
+)
+from aetherlab.services.lesson_planner import _prepare_lesson_plan, plan_lesson
 from aetherlab.services.manim_runtime import ManimRuntime
 
 if TYPE_CHECKING:
@@ -56,6 +69,44 @@ _RENDERED_KINDS = {"scene", "equation_card", "recap"}
 ProgressCb = Callable[[str, int, int], None]  # (message, done, total)
 
 
+def _prebuilt_5min_bundle(plan: LessonPlan) -> LessonBundle:
+    """Assemble a LessonBundle for the prebuilt v2 5-minute lesson.
+
+    No rendering happens here: the video, subtitles, and study-guide PDF are
+    frozen pipeline artifacts resolved from content/ent/. The transcript,
+    questions, and references always work; a missing video file degrades to an
+    explicit ``error`` bundle instead of a blank page.
+    """
+    try:
+        content_hash = getattr(plan, "prebuilt_content_hash", "")
+        if not content_hash:
+            raise PrebuiltLessonContentError("Prebuilt plan has no content snapshot", "missing_content_hash")
+        media = prebuilt_5min_media(plan.language, expected_content_hash=content_hash)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Prebuilt 5-min lesson unavailable: %s", exc)
+        bundle = LessonBundle(plan=plan, status="error")
+        bundle.invalid_media = {"manifest": getattr(exc, "code", "invalid_manifest")}
+        return bundle
+    missing = list(media.get("missing", []))
+    invalid = dict(media.get("invalid", {}))
+    bundle = LessonBundle(
+        plan=plan,
+        video_path=str(media.get("video", "")),
+        status="assembled" if not missing and not invalid else "error",
+        chapter_offsets=list(media.get("offsets", [])),
+        rendered_chapter_indexes=list(range(len(plan.chapters))) if media.get("video") else [],
+    )
+    # Optional extras, same pattern as the render path's srt_path stash.
+    setattr(bundle, "srt_path", str(media.get("srt", "")))  # noqa: B010
+    setattr(bundle, "pdf_path", str(media.get("pdf", "")))  # noqa: B010
+    setattr(bundle, "review_status", dict(media.get("review_status", {})))  # noqa: B010
+    if missing:
+        setattr(bundle, "missing_media", missing)  # noqa: B010
+    if invalid:
+        setattr(bundle, "invalid_media", invalid)  # noqa: B010
+    return bundle
+
+
 class LessonPipeline:
     def __init__(self, settings: "AppSettings") -> None:
         self.settings = settings
@@ -66,6 +117,7 @@ class LessonPipeline:
         topic: str,
         *,
         audience: str = "undergrad",
+        language: str = "en",
         quality: str = "l",
         max_concurrent: int = 2,
         regenerate: bool = False,
@@ -75,16 +127,17 @@ class LessonPipeline:
         """Plan, render, narrate, and assemble a lesson. Never raises.
 
         The planned (and fact-checked) LessonPlan is cached on disk keyed by
-        topic+audience, so re-opening a topic is instant — it skips both the
-        planner LLM call and the grounding pass and goes straight to the
-        per-chapter render cache. ``regenerate=True`` ignores that cache (and
-        the chapter clips) to build the lesson fresh.
+        topic+audience+language, so re-opening a topic is instant — it skips
+        both the planner LLM call and the grounding pass and goes straight to
+        the per-chapter render cache. ``regenerate=True`` ignores that cache
+        (and the chapter clips) to build the lesson fresh.
 
-        ``cancel_check`` is polled cooperatively (before each chapter and before
-        assembly); when it returns True the lesson stops after the current
-        chapter and returns a ``cancelled`` bundle with whatever rendered so far
-        — the student never waits for a run they abandoned.
+        ``cancel_check`` is polled before chapters and propagated into
+        narration/assembly subprocesses; cancellation returns a ``cancelled``
+        bundle with whatever rendered so far.
         """
+        language = normalize_language(language)
+
         def report(msg: str, done: int, total: int) -> None:
             if progress:
                 try:
@@ -100,24 +153,70 @@ class LessonPipeline:
                 return False
 
         plan_cache = _PlanCache(self.settings)
-        plan = None if regenerate else plan_cache.get(topic, audience)
-        if plan is not None:
-            report("Reusing cached lesson plan", 0, 1)
+        # Curated ENT lessons must use the checked, shared content package, not
+        # an older free-form plan cached under the same topic name.
+        try:
+            plan = curated_ent_lesson(topic, language)
+        except PrebuiltLessonContentError as exc:
+            text = {
+                "kk": ("Дайын сабақ қолжетімсіз", "Дайын сабақ пакетін оқу мүмкін болмады. Сабақ файлдарын қалпына келтіріп, «Оқу» түймесін қайта басыңыз."),
+                "ru": ("Готовый урок недоступен", "Не удалось прочитать пакет готового урока. Восстановите файлы урока и снова нажмите «Изучить»."),
+                "en": ("Prepared lesson unavailable", "Could not read the prepared lesson package. Restore its files and press Learn again."),
+            }[language]
+            log.warning("Prebuilt lesson content failed: %s", exc.code)
+            report(text[1], 0, 0)
+            unavailable = LessonPlan(title=text[0], topic=topic, audience=audience, language=language, model_name="localized-prebuilt-error")
+            bundle = LessonBundle(plan=unavailable, status="package_error")
+            bundle.package_error_message = text[1]
+            bundle.invalid_media = {"manifest": exc.code}
+            return bundle
+        is_curated = plan is not None
+        if not is_curated:
+            plan = None if regenerate else plan_cache.get(topic, audience, language)
+        if is_curated:
+            report(lesson_message(language, "stage_source"), 0, 1)
+        elif plan is not None:
+            report(lesson_message(language, "stage_cache"), 0, 1)
         else:
-            report("Planning lesson", 0, 1)
-            plan = await plan_lesson(topic, self.settings, audience=audience)
-            # Ground the plan in textbooks: attach citations + fact-check
-            # narration (fail-soft — corrected narration then flows into render
-            # + voiceover).
-            report("Grounding in textbooks", 0, 1)
-            try:
-                from aetherlab.services.fact_check import fact_check_lesson
+            report(lesson_message(language, "stage_plan"), 0, 1)
+            plan = await plan_lesson(
+                topic, self.settings, audience=audience, language=language
+            )
+            if plan.model_name not in {
+                "localized-offline-notice",
+                "localized-planning-error",
+            } and not is_curated:
+                # Ground the plan in textbooks: attach citations + fact-check
+                # narration (fail-soft — corrected narration then flows into render
+                # + voiceover).
+                report(lesson_message(language, "stage_ground"), 0, 1)
+                try:
+                    from aetherlab.services.fact_check import fact_check_lesson
 
-                plan = await fact_check_lesson(plan, self.settings)
-            except Exception:  # noqa: BLE001 — grounding must never block a lesson
-                pass
-            plan_cache.put(topic, audience, plan)
+                    plan = await fact_check_lesson(plan, self.settings)
+                except Exception:  # noqa: BLE001 — grounding must never block a lesson
+                    pass
+                plan_cache.put(topic, audience, language, plan)
+        if not plan.kazakh_terms and plan.model_name != "localized-offline-notice":
+            from aetherlab.services.ent_physics_bank import glossary_for_language
+
+            plan.kazakh_terms = list(glossary_for_language(language))
         render_jobs = [(i, c) for i, c in enumerate(plan.chapters) if c.kind in _RENDERED_KINDS]
+        if plan.model_name == "localized-planning-error":
+            report(plan.chapters[0].goal if plan.chapters else lesson_message(language, "stage_plan_failed"), 0, 0)
+            return LessonBundle(plan=plan, status="planning_error")
+        if plan.model_name == "localized-offline-notice":
+            report(lesson_message(language, "stage_offline"), 0, 0)
+            return LessonBundle(
+                plan=plan,
+                status="offline_practice_available",
+            )
+        if plan.model_name == ACCELERATED_MOTION_5MIN_VERSION:
+            # Prebuilt v2 lesson: serve the frozen video/subtitles/PDF instead
+            # of rendering. Missing media is an explicit error bundle, never a
+            # silent empty page.
+            report(lesson_message(language, "stage_load"), 0, 1)
+            return _prebuilt_5min_bundle(plan)
         chapters = [c for _, c in render_jobs]
         chapter_plan_indexes = [i for i, _ in render_jobs]
         total = len(chapters) or 1
@@ -135,7 +234,7 @@ class LessonPipeline:
             async with sem:
                 if cancelled():
                     return index, None  # skip cheaply once cancel is requested
-                report(f"Chapter {index + 1}/{total}: {ch.title}", done, total)
+                report(lesson_message(language, "stage_chapter", index=index + 1, total=total, title=ch.title), done, total)
                 bundle = await self._render_chapter(
                     ch,
                     plan,
@@ -146,7 +245,7 @@ class LessonPipeline:
                 )
                 async with lock:
                     done += 1
-                    report(f"Chapter {index + 1}/{total} done", done, total)
+                    report(lesson_message(language, "stage_chapter_done", index=index + 1, total=total), done, total)
                 return index, bundle
 
         results = await asyncio.gather(
@@ -161,28 +260,44 @@ class LessonPipeline:
         rendered = [scene for _, _, scene in rendered_items]
         rendered_chapter_indexes = [idx for idx, _, _ in rendered_items]
 
-        if cancelled():
-            report("Lesson cancelled", done, total)
+        def cancelled_bundle() -> LessonBundle:
             return LessonBundle(
                 plan=plan,
-                chapter_scenes=[b for b in rendered if b is not None],
+                chapter_scenes=[scene for scene in rendered if scene is not None],
                 video_path="",
                 status="cancelled",
                 rendered_chapter_indexes=rendered_chapter_indexes,
             )
 
-        # Narrate each rendered chapter + accumulate a transcript timeline.
-        report("Narrating chapters", total, total)
-        clips, segments, titles = await self._narrate_chapters(rendered_items, out_dir)
+        if cancelled():
+            report(lesson_message(language, "stage_cancelled"), done, total)
+            return cancelled_bundle()
 
-        # Assemble into one produced lesson (title cards + crossfades) + .srt.
-        report("Assembling lesson", total, total)
-        video_path, srt_path, offsets = await self._assemble(
-            clips, segments, titles, plan, out_dir
-        )
+        try:
+            # Narrate each rendered chapter + accumulate a transcript timeline.
+            report(lesson_message(language, "stage_narrate"), total, total)
+            clips, segments, titles = await self._narrate_chapters(
+                rendered_items, out_dir, language=plan.language,
+                cancel_check=cancelled,
+            )
+            if cancelled():
+                report(lesson_message(language, "stage_cancelled"), done, total)
+                return cancelled_bundle()
+
+            # Assemble into one produced lesson (title cards + crossfades) + .srt.
+            report(lesson_message(language, "stage_assemble"), total, total)
+            video_path, srt_path, offsets = await self._assemble(
+                clips, segments, titles, plan, out_dir, cancel_check=cancelled,
+            )
+        except ProcessCancelledError:
+            report(lesson_message(language, "stage_cancelled"), done, total)
+            return cancelled_bundle()
+        if cancelled():
+            report(lesson_message(language, "stage_cancelled"), done, total)
+            return cancelled_bundle()
 
         status = "assembled" if video_path else ("rendering" if rendered else "error")
-        report("Lesson ready" if video_path else "Lesson incomplete", total, total)
+        report(lesson_message(language, "stage_ready" if video_path else "stage_incomplete"), total, total)
         bundle = LessonBundle(
             plan=plan,
             chapter_scenes=[b for b in rendered if b is not None],
@@ -215,7 +330,12 @@ class LessonPipeline:
 
         solver = _chapter_solver(ch, plan)
         rag = RagResult(keywords=list(solver.keywords), hits=[], backend="lesson")
-        request = ProblemRequest(prompt=_chapter_prompt(ch, plan))
+        request = ProblemRequest(
+            prompt=(
+                f"{_chapter_prompt(ch, plan)}\n\n"
+                f"All visible labels and captions must be in {LANGUAGE_PROMPT_NAMES[plan.language]}."
+            )
+        )
         aspect = _chapter_aspect(ch, plan)
         brief = json.dumps({"chapter": ch.title, "goal": ch.goal, "beats": ch.beats,
                             "key_symbols": ch.key_symbols, "narration": ch.narration})
@@ -236,6 +356,7 @@ class LessonPipeline:
                     quality=quality,
                     brief=brief,
                     cancel_check=cancel_check,
+                    duration_target_s=request.duration_target_s,
                 )
         except ProcessCancelledError:
             return None
@@ -266,6 +387,8 @@ class LessonPipeline:
         self,
         rendered_items: list[tuple[int, LessonChapter, SceneBundle | None]],
         out_dir: Path,
+        language: str = "en",
+        cancel_check: Callable[[], bool] | None = None,
     ) -> tuple[list[Path], list[tuple[str, float]], list[str]]:
         from aetherlab.services.voiceover import narrate_segment
 
@@ -273,13 +396,17 @@ class LessonPipeline:
         segments: list[tuple[str, float]] = []
         titles: list[str] = []
         for _plan_index, ch, scene in rendered_items:
+            if cancel_check is not None and cancel_check():
+                raise ProcessCancelledError("Lesson narration cancelled")
             if not scene or scene.status != "rendered" or not scene.video_path:
                 continue
             video = Path(scene.video_path)
             if self.settings.narration_enabled and ch.narration.strip():
                 narrated, dur = await narrate_segment(
                     video, ch.narration, out_dir,
-                    voice=self.settings.tts_voice, rate=self.settings.tts_rate,
+                    voice=tts_voice_for_language(self.settings.tts_voice, language),
+                    rate=self.settings.tts_rate,
+                    cancel_check=cancel_check,
                 )
                 clip = narrated or video
             else:
@@ -294,6 +421,7 @@ class LessonPipeline:
     async def _assemble(
         self, clips: list[Path], segments: list[tuple[str, float]],
         titles: list[str], plan: LessonPlan, out_dir: Path,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> tuple[Path | None, Path | None, list[float]]:
         from aetherlab.services.assembly import assemble_lesson
         from aetherlab.services.scene_templates import load_scene_palette
@@ -310,6 +438,7 @@ class LessonPipeline:
             chapter_titles=titles,
             palette=palette,
             return_offsets=True,
+            cancel_check=cancel_check,
         )
         srt_path = None
         # Time the subtitles to the PRODUCED timeline (offsets account for the
@@ -421,12 +550,13 @@ _DOMAIN_VARS: dict[str, dict[str, float]] = {
 
 
 def _lesson_id(plan: LessonPlan) -> str:
-    return _topic_id(plan.topic, plan.audience)
+    return _topic_id(plan.topic, plan.audience, plan.language)
 
 
-def _topic_id(topic: str, audience: str) -> str:
+def _topic_id(topic: str, audience: str, language: str = "en") -> str:
+    language = normalize_language(language)
     return hashlib.sha256(
-        ((topic or "").strip().lower() + "|" + audience).encode("utf-8")
+        ((topic or "").strip().lower() + "|" + audience + "|" + language).encode("utf-8")
     ).hexdigest()[:12]
 
 
@@ -442,11 +572,13 @@ class _PlanCache:
         base = getattr(settings, "data_dir", None) or _LESSON_DIR
         self.dir = Path(base) / "lesson_plans"
 
-    def _path(self, topic: str, audience: str) -> Path:
-        return self.dir / f"{_topic_id(topic, audience)}.json"
+    def _path(self, topic: str, audience: str, language: str = "en") -> Path:
+        language = normalize_language(language)
+        return self.dir / f"{_topic_id(topic, audience, language)}.json"
 
-    def get(self, topic: str, audience: str) -> LessonPlan | None:
-        path = self._path(topic, audience)
+    def get(self, topic: str, audience: str, language: str = "en") -> LessonPlan | None:
+        language = normalize_language(language)
+        path = self._path(topic, audience, language)
         if not path.exists():
             return None
         with path_lock(path):
@@ -461,12 +593,26 @@ class _PlanCache:
         except (TypeError, ValueError):
             return None
         plan.cached = True  # from_json honours a stored cached=False; force it
-        # Older cached plans predate prediction/retrieval gates and symbol
-        # pretraining. Miss those once so they are upgraded on the next run.
-        return plan if plan.chapters and _has_learning_scaffolds(plan) else None
+        # Checks may be null by schema; preserve the authored chapter plan and
+        # let the lesson UI omit checks that were not safely supplied.
+        if plan.language != language:
+            return None
+        return plan if _prepare_lesson_plan(plan) else None
 
-    def put(self, topic: str, audience: str, plan: LessonPlan) -> None:
-        path = self._path(topic, audience)
+    def put(
+        self,
+        topic: str,
+        audience: str,
+        language: str | LessonPlan,
+        plan: LessonPlan | None = None,
+    ) -> None:
+        # Preserve the old three-argument form for existing callers and caches.
+        if plan is None and isinstance(language, LessonPlan):
+            plan = language
+            language = plan.language
+        if plan is None:
+            return
+        path = self._path(topic, audience, language)
         try:
             with path_lock(path):
                 atomic_write_json(path, plan.to_json(), indent=1)
@@ -476,7 +622,8 @@ class _PlanCache:
 
 def _chapter_key(ch: LessonChapter, plan: LessonPlan) -> str:
     payload = json.dumps(
-        {"topic": plan.topic, "audience": plan.audience, "chapter": ch.to_json()},
+        {"topic": plan.topic, "audience": plan.audience,
+         "language": plan.language, "chapter": ch.to_json()},
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

@@ -28,50 +28,49 @@ _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 @dataclass
 class Theme:
-    """Semantic palette. Defaults are the classic "Aether Dark" look —
-    every hex here matches the pre-theming hardcoded values exactly."""
+    """Semantic palette for the bright UNT study studio."""
 
-    name: str = "Aether Dark"
+    name: str = "Studio Light"
 
     # ── surfaces ──
-    bg: str = "#0A0A0F"             # window backdrop / canvas gradient edge
-    bg_deep: str = "#0F1520"        # canvas gradient center, focused inputs
-    surface: str = "#13131A"        # cards, menus
-    surface_alt: str = "#0D0D14"    # sidebar, top bars, stepper
-    surface_input: str = "#0F0F17"  # text edits, list widgets, spinboxes
+    bg: str = "#F4F7FB"             # window backdrop
+    bg_deep: str = "#EDF2F8"        # secondary surface
+    surface: str = "#FFFFFF"        # cards, menus
+    surface_alt: str = "#FFFFFF"    # sidebar, top bars, stepper
+    surface_input: str = "#EDF2F8"  # text edits, list widgets, spinboxes
 
     # ── lines ──
-    border: str = "#1E293B"
-    border_strong: str = "#334155"
+    border: str = "#D8E1EC"
+    border_strong: str = "#A5B6CB"
 
     # ── text ramp (bright → faint) ──
-    text_bright: str = "#F8FAFC"
-    text: str = "#E2E8F0"
-    text_soft: str = "#CBD5E1"
-    text_dim: str = "#94A3B8"
-    text_muted: str = "#64748B"
-    text_faint: str = "#475569"
+    text_bright: str = "#18283D"
+    text: str = "#24364B"
+    text_soft: str = "#53647A"
+    text_dim: str = "#65758A"
+    text_muted: str = "#65758A"
+    text_faint: str = "#8292A5"
 
     # ── accent family ──
-    accent: str = "#22D3EE"
-    accent_hover: str = "#67E8F9"
-    accent_deep: str = "#0E7490"
-    accent_pressed: str = "#06B6D4"
-    accent_soft: str = "#164E63"    # checked/selected backgrounds
+    accent: str = "#486A91"
+    accent_hover: str = "#3B587A"
+    accent_deep: str = "#304A69"
+    accent_pressed: str = "#304A69"
+    accent_soft: str = "#E9EFF7"    # checked/selected backgrounds
 
     # ── semantics ──
-    success: str = "#10B981"
-    warning: str = "#F59E0B"
-    error: str = "#F43F5E"
-    error_bg: str = "#1C0A0A"
-    error_deep: str = "#7F1D1D"
-    error_text: str = "#FDA4AF"
+    success: str = "#26725C"
+    warning: str = "#8A5A24"
+    error: str = "#AC4055"
+    error_bg: str = "#F9EBEF"
+    error_deep: str = "#8E3147"
+    error_text: str = "#8E3147"
 
     # ── data-viz curves (canvas + manim) ──
-    curve1: str = "#22D3EE"
-    curve2: str = "#10B981"
-    curve3: str = "#8B5CF6"
-    curve4: str = "#F59E0B"
+    curve1: str = "#486A91"
+    curve2: str = "#26725C"
+    curve3: str = "#536F90"
+    curve4: str = "#8A5A24"
 
     # ── fonts ──
     font_ui: str = "Segoe UI"
@@ -177,14 +176,26 @@ def _solar_light() -> Theme:
 
 
 _PRESET_FACTORIES = {
-    "Aether Dark": Theme,
+    "Studio Light": Theme,
+        "Aether Dark": lambda: Theme(
+        name="Aether Dark", bg="#0B1220", bg_deep="#102033",
+        surface="#152338", surface_alt="#101B2B", surface_input="#0D1828",
+        border="#263750", border_strong="#3B506C", text_bright="#F1F5F9",
+        text="#E2E8F0", text_soft="#CBD5E1", text_dim="#A5B4C6",
+        text_muted="#7D8EA4", text_faint="#596B83", accent="#60A5FA",
+        accent_hover="#93C5FD", accent_deep="#8296B2", accent_pressed="#4B6385",
+        accent_soft="#1E3A5F", success="#34D399", warning="#FBBF24",
+        error="#FB7185", error_bg="#25151E", error_deep="#7F1D1D",
+        error_text="#FDA4AF", curve1="#60A5FA", curve2="#34D399",
+        curve3="#A78BFA", curve4="#FBBF24",
+    ),
     "Nebula": _nebula,
     "Emerald": _emerald,
     "Solar Light": _solar_light,
 }
 
 PRESET_NAMES: tuple[str, ...] = tuple(_PRESET_FACTORIES)
-DEFAULT_PRESET = "Aether Dark"
+DEFAULT_PRESET = "Studio Light"
 
 
 def get_preset(name: str) -> Theme:
@@ -220,7 +231,13 @@ def load_theme(data_dir: Path) -> Theme:
     except Exception as exc:  # noqa: BLE001 — a broken prefs file must not break boot
         log.debug("ui prefs unreadable, using default theme: %s", exc)
         return Theme()
-    return Theme.from_json(payload.get("theme") if isinstance(payload, dict) else None)
+    theme = Theme.from_json(payload.get("theme") if isinstance(payload, dict) else None)
+    # Replace the previous default palette after the user-requested redesign.
+    if theme.name == "UNT Study" and theme.bg == "#F8F5EF" and theme.accent == "#6D2932":
+        return get_preset(DEFAULT_PRESET)
+    if theme.name == "Aether Dark" and theme.bg == "#0B1220" and theme.accent == "#60A5FA":
+        return get_preset(DEFAULT_PRESET)
+    return theme
 
 
 def save_theme(theme: Theme, data_dir: Path) -> None:

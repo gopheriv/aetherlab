@@ -213,7 +213,7 @@ def test_segmented_run_resumes_valid_segments_without_regenerating(tmp_path, mon
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
     first = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert first.status == "rendered"
     assert calls == {"generated": 3, "rendered": 3, "assembled": 1}
@@ -223,7 +223,7 @@ def test_segmented_run_resumes_valid_segments_without_regenerating(tmp_path, mon
     assert all(segment["state"] == "rendered" for segment in manifest["segments"])
 
     second = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert second.status == "rendered"
     assert calls == {"generated": 3, "rendered": 3, "assembled": 1}
@@ -299,7 +299,7 @@ def test_long_form_assembly_requires_every_requested_segment(
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
     result = asyncio.run(segmented.render_segmented_scene(
-        request, solver, rag, settings, runtime=Runtime(),
+        request, solver, rag, settings, runtime=Runtime(), max_segment_seconds=28.0,
     ))
     assert result.status == "rendered"
     assert counters == {
@@ -320,10 +320,17 @@ def test_command_bar_exposes_only_bounded_duration_choices(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     bar = CommandBar()
     assert bar.get_duration_target() == 30.0
+    assert [bar._duration.itemData(i) for i in range(bar._duration.count())] == [
+        30.0, 60.0, 120.0, 180.0,
+    ]
+    assert [bar._duration.itemText(i) for i in range(bar._duration.count())] == [
+        "30 сек", "1 мин", "2 мин", "3 мин",
+    ]
+    bar.set_language("en")
     assert [bar._duration.itemText(i) for i in range(bar._duration.count())] == [
         "30 sec", "60 sec", "2 min", "3 min",
     ]
-    bar._duration.setCurrentText("2 min")
+    bar._duration.setCurrentIndex(bar._duration.findData(120.0))
     assert bar.get_duration_target() == 120.0
     bar.deleteLater()
     app.processEvents()
@@ -382,9 +389,11 @@ def test_resumed_narrated_lesson_keeps_every_segment_subtitle(tmp_path, monkeypa
     monkeypatch.setattr("aetherlab.services.assembly.assemble_lesson", fake_assemble)
     monkeypatch.setattr("aetherlab.services.voiceover._duration_sync", lambda _path: 20.0)
 
-    first = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime()))
+    first = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime(),
+        max_segment_seconds=28.0))
     assert first.status == "rendered", first.diagnostics[-1:]
-    second = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime()))
+    second = asyncio.run(segmented.render_segmented_scene(request, solver, rag, settings, runtime=Runtime(),
+        max_segment_seconds=28.0))
     assert rendered["n"] == 3                                  # all three reused
     assert second.status == "rendered", second.diagnostics[-1:]
     merged = Path(second.subtitle_path).read_text(encoding="utf-8")
@@ -425,8 +434,8 @@ def test_pipeline_resumes_segmented_lesson_instead_of_rerendering_joined_code(tm
     # only the last segment.
     from dataclasses import replace as dc_replace
 
-    from aetherlab.core.settings import load_settings
     from aetherlab.core.cache import SessionCache
+    from aetherlab.core.settings import load_settings
     from aetherlab.services.pipeline import AetherLabPipeline
 
     settings = dc_replace(load_settings(), data_dir=tmp_path, cache_path=tmp_path / "cache.sqlite3",

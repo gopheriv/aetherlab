@@ -42,10 +42,6 @@ _RENDER_DIR.mkdir(parents=True, exist_ok=True)
 _RUNS_DIR = _RENDER_DIR / "runs"
 _MAX_KEPT_RUNS = 24
 
-# Manim Community render quality: 480p for speed
-_RENDER_QUALITY = "l"  # low = 480p15
-
-
 @dataclass
 class SceneCandidate:
     index: int
@@ -136,12 +132,13 @@ def detect_latex() -> bool:
 
 
 def _detect_render_tier() -> dict:
-    """Hardware-aware render tier, ported from the manim-bot project.
+    """Choose a predictable 30 fps tier unless cinematic rendering is explicit.
 
-    Governs fps and process priority: capable boxes get 60fps, constrained
-    ones render at 30fps below normal priority so the UI stays responsive.
-    Always passing an explicit --fps prevents Manim from silently producing
-    15fps output at low quality.
+    Standard machines render at 30 fps. Constrained machines keep that cadence
+    at below-normal process priority so the UI stays responsive. The 60 fps
+    tiers remain available through AETHERLAB_RENDER_TIER=cinematic or
+    cloud_cinematic. Always passing an explicit --fps prevents Manim from
+    silently producing 15 fps output at low quality.
     """
     tiers = {
         "cinematic": {"name": "cinematic", "fps": 60, "below_normal": False},
@@ -157,13 +154,10 @@ def _detect_render_tier() -> dict:
             import psutil
 
             total_gb = psutil.virtual_memory().total / 1024**3
-            cpu = os.cpu_count() or 2
         except Exception:
-            total_gb, cpu = 8.0, 2
+            total_gb = 8.0
 
-        if total_gb >= 16 and cpu >= 6:
-            tier = dict(tiers["cinematic"])
-        elif total_gb >= 10:
+        if total_gb >= 10:
             tier = dict(tiers["standard"])
         else:
             tier = dict(tiers["constrained"])
@@ -242,6 +236,7 @@ class ManimRuntime:
             from aetherlab.services.scene_validation import (
                 count_construct_play_calls,
                 estimate_duration,
+                normalize_timeline_markers,
                 scene_hygiene_warnings,
                 validate_scene,
             )
@@ -266,6 +261,9 @@ class ManimRuntime:
                     compile(repaired, "<aetherlab-generated-scene-repair>", "exec")
                     repaired_safe, safety_issues = validate_code_safety(repaired)
                     repaired_board = dict(generator._last_storyboard or {})
+                    repaired = normalize_timeline_markers(
+                        repaired, repaired_board.get("timeline")
+                    )
                     repaired_lint_ok, lint_issues = validate_scene(
                         repaired,
                         require_motion=True,
@@ -339,6 +337,10 @@ class ManimRuntime:
                     )
                     compile(repaired, "<aetherlab-duration-repair>", "exec")
                     repaired_safe, safety_issues = validate_code_safety(repaired)
+                    repair_board = dict(generator._last_storyboard or {})
+                    repaired = normalize_timeline_markers(
+                        repaired, repair_board.get("timeline")
+                    )
                     repaired_lint_ok, lint_issues = validate_scene(
                         repaired,
                         require_motion=True,
@@ -441,6 +443,10 @@ class ManimRuntime:
                         else:
                             continue
                 storyboard = dict(generator._last_storyboard or {})
+                code = normalize_timeline_markers(
+                    code,
+                    storyboard.get("timeline") if isinstance(storyboard, dict) else None,
+                )
                 # Fail-closed safety gate: generated scenes run with full
                 # interpreter privileges in the render subprocess.
                 safe, issues = validate_code_safety(code)
@@ -526,11 +532,12 @@ class ManimRuntime:
                         )
                     if missing_markers and marker_lines:
                         repair_instructions.append(
-                            "The scene is otherwise usable, but its timing gate "
-                            "requires these exact source comments. Add every line "
-                            "verbatim and in order inside AetherLabScene.construct(), "
-                            "immediately before the corresponding visual beat. Keep "
-                            "the existing visuals, positions, and animation timings.\n"
+                            "The timeline gate found missing, duplicate, or out-of-order "
+                            "beat comments. Replace the complete set of existing BEAT "
+                            "comments with exactly these lines, one per visual beat and "
+                            "in this order inside AetherLabScene.construct(), immediately "
+                            "before the corresponding action. Keep the visuals, positions, "
+                            "physics, and timing unchanged.\n"
                             + "\n".join(marker_lines)
                         )
                     if timing_runtime_issues:
@@ -598,6 +605,10 @@ class ManimRuntime:
                                 repaired_code = await generator.repair(
                                     repair_candidate, repair_error, class_name,
                                     full_scene=False,
+                                )
+                                repaired_code = normalize_timeline_markers(
+                                    repaired_code,
+                                    storyboard.get("timeline") if isinstance(storyboard, dict) else None,
                                 )
                                 compile(
                                     repaired_code,
@@ -907,12 +918,17 @@ class ManimRuntime:
                 quality=quality,
                 brief=final_brief,
                 progress=progress,
+                duration_target_s=request.duration_target_s,
                 **kwargs,
             )
 
         async def score_candidates(items: list[SceneCandidate]) -> list[SceneCandidate]:
             kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
-            return await self._render_and_score_candidates(items, s, progress, **kwargs)
+            return await self._render_and_score_candidates(
+                items, s, progress,
+                duration_target_s=request.duration_target_s,
+                **kwargs,
+            )
 
         if not self.scene_tournament_enabled(s):
             scene = await self.generate_scene_async(request, solver, rag, s, aspect=aspect)
@@ -1135,10 +1151,8 @@ class ManimRuntime:
 
         cap = effective_candidate_cap(settings)
         n = cap if count is None else max(0, int(count))
-        engine, base_diagnostics = self.detect_engine()
         generator = SceneGenerator(settings)
         candidates: list[SceneCandidate] = []
-        class_name = "AetherLabScene"
         for i in range(start_index, start_index + n):
             try:
                 if progress:
@@ -1153,9 +1167,27 @@ class ManimRuntime:
                 )
                 if board is None:
                     continue
-                code = await generator.generate_from_storyboard(
-                    request, solver, rag, class_name, board
+                # Tournament candidates must go through the same bounded
+                # compile/safety/Manim/timing repair loop as a normal AI scene.
+                # Previously this path generated raw code and discarded it on
+                # the first lint issue, so API hallucinations and beat drift
+                # silently collapsed every tournament to the single-scene path.
+                scene = await self.generate_scene_async(
+                    request,
+                    solver,
+                    rag,
+                    settings=settings,
+                    max_retries=1,
+                    aspect=aspect,
+                    locked_storyboard=board,
+                    force_ai=True,
                 )
+                if scene.status != "compiled" or scene.used_fallback:
+                    reason = scene.fallback_reason or "; ".join(scene.diagnostics[-3:])
+                    log.info("Candidate %d generation/repair did not produce AI code: %s", i + 1, reason)
+                    continue
+                code = scene.code
+                board = scene.storyboard if isinstance(scene.storyboard, dict) else board
                 compile(code, "<aetherlab-candidate-scene>", "exec")
                 safe, safety_issues = validate_code_safety(code)
                 if not safe:
@@ -1174,21 +1206,13 @@ class ManimRuntime:
                         i + 1, est.total_seconds, request.duration_target_s,
                     )
                     continue
-                diagnostics = list(base_diagnostics)
-                diagnostics.append(
+                scene.diagnostics.append(
                     f"Tournament candidate {i + 1}: estimated duration ~{est.total_seconds:.0f}s."
                 )
                 hygiene = scene_hygiene_warnings(code)
                 if hygiene:
-                    diagnostics.append("Scene hygiene warnings: " + "; ".join(hygiene[:4]))
-                scene = SceneBundle(
-                    class_name=class_name,
-                    code=code,
-                    engine=engine,
-                    status="compiled",
-                    diagnostics=diagnostics,
-                    storyboard=board,
-                )
+                    scene.diagnostics.append("Scene hygiene warnings: " + "; ".join(hygiene[:4]))
+                scene.storyboard = board
                 candidates.append(
                     SceneCandidate(
                         index=i,
@@ -1212,6 +1236,7 @@ class ManimRuntime:
         settings: "AppSettings",
         progress: Callable[[str], None] | None,
         cancel_check: Callable[[], bool] | None = None,
+        duration_target_s: float | None = None,
     ) -> list[SceneCandidate]:
         import json as _json
 
@@ -1228,20 +1253,26 @@ class ManimRuntime:
             async with sem:
                 if progress:
                     progress(f"Draft rendering candidate {candidate.index + 1}")
-                # variant isolates this candidate's cloud job/artifact so
-                # byte-identical candidates dispatched concurrently never collide.
-                kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
-                draft = await self._render_once(
+                brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
+                # Reuse the normal bounded crash-repair path for candidate
+                # drafts. Syntactically valid scenes can still fail at runtime
+                # (for example, putting a ValueTracker in a VGroup); dropping
+                # them on the first error prevented vision ranking.
+                draft = await self.render_scene_with_repair(
                     candidate.scene,
                     settings,
-                    "l",
-                    progress,
-                    variant=f"cand{candidate.index}",
-                    **kwargs,
+                    quality="l",
+                    max_repairs=1,
+                    max_revisions=0,
+                    brief=brief,
+                    progress=progress,
+                    cancel_check=cancel_check,
+                    render_variant=f"cand{candidate.index}",
+                    add_narration=False,
+                    duration_target_s=duration_target_s,
                 )
                 if draft.status != "rendered" or not draft.video_path:
                     return None
-                brief = _json.dumps(candidate.storyboard) if candidate.storyboard else "Scene candidate"
                 expected_physics = (
                     draft.storyboard.get("physics_expectations", [])
                     if isinstance(draft.storyboard, dict) else []
@@ -1498,6 +1529,9 @@ class ManimRuntime:
         brief: str = "",
         progress: Callable[[str], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        render_variant: str = "",
+        add_narration: bool = True,
+        duration_target_s: float | None = None,
     ) -> SceneBundle:
         """Render; repair crashes/timeouts; then (optionally) critique and revise.
 
@@ -1527,13 +1561,19 @@ class ManimRuntime:
             bundle: SceneBundle,
             render_quality: str,
             *,
+            variant: str | None = None,
             partial_animation_range: tuple[int, int] | None = None,
         ) -> SceneBundle:
-            kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
+            kwargs = {}
+            if cancel_check is not None:
+                kwargs["cancel_check"] = cancel_check
+            if cache_lineage is not None:
+                kwargs["cache_lineage"] = cache_lineage
+            if partial_animation_range is not None:
+                kwargs["partial_animation_range"] = partial_animation_range
             return await self._render_once(
                 bundle, s, render_quality, progress,
-                cache_lineage=cache_lineage,
-                partial_animation_range=partial_animation_range,
+                variant=render_variant if variant is None else variant,
                 **kwargs
             )
 
@@ -1562,7 +1602,18 @@ class ManimRuntime:
             # Preflight: run the scene's code in seconds (dry run, 2 fps) and fix
             # runtime crashes / off-screen geometry before paying for a render.
             scene_bundle = await self._preflight_and_repair(scene_bundle, s, timeline)
-            scene_bundle = await render_once(scene_bundle, draft_quality)
+            admission_issues = _cloud_render_admission_issues(
+                scene_bundle.code, s, duration_target_s, timeline
+            )
+            if admission_issues:
+                scene_bundle.status = "render-error"
+                scene_bundle.failure_kind = "budget"
+                scene_bundle.diagnostics.append(
+                    "Cloud render rejected before dispatch: "
+                    + "; ".join(admission_issues)
+                )
+            else:
+                scene_bundle = await render_once(scene_bundle, draft_quality)
 
         learner = None
         if s is not None:
@@ -1579,8 +1630,15 @@ class ManimRuntime:
         ):
             from aetherlab.services.code_safety import validate_code_safety
             from aetherlab.services.scene_generator import SceneGenerator
+            from aetherlab.services.scene_validation import normalize_timeline_markers
 
             error = scene_bundle.diagnostics[-1] if scene_bundle.diagnostics else "unknown"
+            if "cloud render timed out" in error.lower():
+                scene_bundle.diagnostics.append(
+                    "Skipped code repair: the cloud render timed out while waiting for "
+                    "the runner, so changing scene code cannot address this failure."
+                )
+                break
             if scene_bundle.status == "render-timeout":
                 # Timeouts punish the most ambitious scenes — give the repair
                 # model actionable direction instead of dropping the attempt.
@@ -1608,6 +1666,7 @@ class ManimRuntime:
                     full_scene=repairs > 1,
                 )
                 compile(fixed, "<aetherlab-repaired-scene>", "exec")
+                fixed = normalize_timeline_markers(fixed, timeline)
             except Exception as exc:  # noqa: BLE001
                 scene_bundle.diagnostics.append(f"Render repair {repairs} failed: {exc}")
                 break
@@ -1618,19 +1677,29 @@ class ManimRuntime:
                 )
                 break
             lint_ok, lint_issues = _blocking_scene_issues(fixed, timeline)
-            if not lint_ok:
+            admission_issues = _cloud_render_admission_issues(
+                fixed, s, duration_target_s, timeline
+            )
+            if not lint_ok or admission_issues:
                 # The repair itself introduced a provable render failure —
                 # feed the lint report back as the next round's error instead
                 # of wasting a render on it.
                 scene_bundle.diagnostics.append(
                     f"Render repair {repairs} failed pre-render lint: "
-                    + "; ".join(lint_issues[:4])
+                    + "; ".join([*lint_issues, *admission_issues][:4])
                 )
                 continue
             scene_bundle.code = fixed
             scene_bundle.status = "compiled"
             scene_bundle.diagnostics.append(f"Applied render repair {repairs}.")
-            scene_bundle = await render_once(scene_bundle, draft_quality)
+            scene_bundle = await render_once(
+                scene_bundle,
+                draft_quality,
+                variant=(
+                    f"{render_variant}-repair-{repairs}"
+                    if render_variant else ""
+                ),
+            )
 
         # ── Promote the working code to the requested quality (Bug 4) ──
         # The draft rendered; render the final at the target quality. If that
@@ -1718,13 +1787,24 @@ class ManimRuntime:
                     expected_physics=expected_physics,
                     event_times_s=beat_centers or None,
                 )
+                if crit.verdict == "skipped":
+                    if best is not None and scene_bundle is not best:
+                        best.diagnostics.append(
+                            f"Visual critique round {round_no} was skipped; "
+                            "kept the last scored render."
+                        )
+                        scene_bundle = best
+                    else:
+                        scene_bundle.diagnostics.append(
+                            f"Visual critique round {round_no} was skipped; "
+                            "the current render has no critic score."
+                        )
+                    break
                 scene_bundle.quality_score = float(crit.score or 0.0)
                 scene_bundle.critique_verdict = str(crit.verdict or "")
                 scene_bundle.critique_issues = list(crit.issues)
                 scene_bundle.critique_model = str(crit.model_used or "")
                 scene_bundle.critique_breakdown = dict(crit.breakdown)
-                if crit.verdict == "skipped":
-                    break
                 scene_bundle.diagnostics.append(
                     f"Visual critique round {round_no}: {crit.verdict} "
                     f"(score {crit.score:.1f})"
@@ -1765,6 +1845,11 @@ class ManimRuntime:
                         static_issues.extend(safety_issues)
                     if not lint_ok:
                         static_issues.extend(lint_issues)
+                    static_issues.extend(
+                        _cloud_render_admission_issues(
+                            revised, s, duration_target_s, timeline
+                        )
+                    )
                 if static_issues:
                     scene_bundle.diagnostics.append(
                         f"Visual revision {round_no} failed static gates: "
@@ -1781,8 +1866,15 @@ class ManimRuntime:
                         compile(revised, "<aetherlab-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(revised)
                         lint_ok, lint_issues = _blocking_scene_issues(revised, timeline)
-                        if not safe or not lint_ok:
-                            raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
+                        admission_issues = _cloud_render_admission_issues(
+                            revised, s, duration_target_s, timeline
+                        )
+                        if not safe or not lint_ok or admission_issues:
+                            raise ValueError(
+                                "; ".join(
+                                    [*safety_issues, *lint_issues, *admission_issues][:6]
+                                )
+                            )
                         scene_bundle.diagnostics.append(
                             f"Repaired visual revision {round_no} before rendering."
                         )
@@ -1840,8 +1932,15 @@ class ManimRuntime:
                         compile(repaired, "<aetherlab-render-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(repaired)
                         lint_ok, lint_issues = _blocking_scene_issues(repaired, timeline)
-                        if not safe or not lint_ok:
-                            raise ValueError("; ".join([*safety_issues, *lint_issues][:6]))
+                        admission_issues = _cloud_render_admission_issues(
+                            repaired, s, duration_target_s, timeline
+                        )
+                        if not safe or not lint_ok or admission_issues:
+                            raise ValueError(
+                                "; ".join(
+                                    [*safety_issues, *lint_issues, *admission_issues][:6]
+                                )
+                            )
                         retry_trial = SceneBundle(
                             class_name=scene_bundle.class_name,
                             code=repaired,
@@ -1875,13 +1974,18 @@ class ManimRuntime:
                     scene_bundle.video_path, board_brief, s,
                     frame_count=frame_count, expected_physics=expected_physics,
                 )
-                if crit.verdict != "skipped" and float(crit.score or 0.0) <= best.quality_score:
+                if crit.verdict == "skipped":
+                    best.diagnostics.append(
+                        "Final visual critique was skipped; kept the last scored render."
+                    )
+                    scene_bundle = best
+                elif float(crit.score or 0.0) <= best.quality_score:
                     best.diagnostics.append(
                         f"Final visual revision scored {float(crit.score or 0.0):.1f}, not "
                         f"above {best.quality_score:.1f}; kept the earlier cut."
                     )
                     scene_bundle = best
-                elif crit.verdict != "skipped":
+                else:
                     scene_bundle.quality_score = float(crit.score or 0.0)
                     scene_bundle.critique_verdict = str(crit.verdict or "")
                     scene_bundle.critique_issues = list(crit.issues)
@@ -1898,6 +2002,7 @@ class ManimRuntime:
         if (
             scene_bundle.status == "rendered"
             and s is not None
+            and add_narration
             and getattr(s, "narration_enabled", False)
             and scene_bundle.video_path
         ):
@@ -2053,33 +2158,58 @@ class ManimRuntime:
 
         # Narration is placed at each beat's planned start, so a late or early
         # beat is a sync bug the viewer hears. Fix it before paying for a render.
-        worst, drift_lines = drift_summary(bundle.code, latest)
-        if drift_lines and getattr(s, "narration_enabled", False):
+        # The total length matters too: a long-video segment must fill its slot
+        # (live 2026-10-02: 15.40 s for 13.76 s, then 13.17 s for 14.24 s,
+        # each stopping the lesson), and the dry run measures it exactly.
+        planned_end = 0.0
+        if isinstance(timeline, list) and timeline and isinstance(timeline[-1], dict):
+            try:
+                planned_end = float(timeline[-1].get("end_s") or 0.0)
+            except (TypeError, ValueError):
+                planned_end = 0.0
+        length_tolerance = max(1.0, planned_end * 0.05)
+        narrated = bool(getattr(s, "narration_enabled", False))
+
+        def timing_score(code: str, checked) -> tuple[float, list[str]]:
+            worst, lines = drift_summary(code, checked)
+            score = worst if narrated else 0.0
+            if planned_end > 0:
+                off = checked.duration_s - planned_end
+                if abs(off) > length_tolerance:
+                    lines = lines + [
+                        f"[PREFLIGHT:DURATION] the scene runs {checked.duration_s:.2f}s but its "
+                        f"schedule ends at {planned_end:.2f}s ({off:+.2f}s)."
+                    ]
+                score = max(score, abs(off) if abs(off) > length_tolerance else 0.0)
+            return score, (lines if narrated else [line for line in lines if "DURATION" in line])
+
+        score, timing_lines = timing_score(bundle.code, latest)
+        if timing_lines:
             result, why = await try_repair(
-                "A dry run measured when each beat's first animation starts. The narration "
-                "for every beat starts exactly at the time in its # BEAT marker, so these "
-                "beats would be out of sync with the voice. Adjust run_time and wait() "
-                "values (do not move or edit the # BEAT markers) so each beat starts at its "
-                "marker time and the total length stays the same. Keep the visual design "
-                "and physics:\n" + "\n".join(drift_lines),
+                "A dry run measured this scene's timing. The narration for every beat starts "
+                "exactly at the time in its # BEAT marker, and the scene must end when its "
+                "schedule ends. Adjust run_time and wait() values (do not move or edit the "
+                "# BEAT markers) so each beat starts at its marker time and the total length "
+                "matches the schedule. Keep the visual design and physics:\n"
+                + "\n".join(timing_lines),
                 full_scene=False,
             )
             if result is None:
                 bundle.diagnostics.append(f"Preflight timing repair: {why}")
                 return bundle
             fixed, checked = result
-            new_worst = drift_summary(fixed, checked)[0] if checked.ran and checked.ok else worst
+            new_score = timing_score(fixed, checked)[0] if checked.ran and checked.ok else score
             if (
-                checked.ran and checked.ok and new_worst < worst
+                checked.ran and checked.ok and new_score < score
                 and len(checked.off_frame) <= len(latest.off_frame)
             ):
                 bundle.code = fixed
                 bundle.diagnostics.append(
-                    f"Preflight timing repair kept: largest beat drift {worst:.2f}s -> {new_worst:.2f}s."
+                    f"Preflight timing repair kept: worst timing error {score:.2f}s -> {new_score:.2f}s."
                 )
             else:
                 bundle.diagnostics.append(
-                    f"Preflight timing repair did not reduce beat drift ({worst:.2f}s); kept the original."
+                    f"Preflight timing repair did not reduce the timing error ({score:.2f}s); kept the original."
                 )
         return bundle
 
@@ -2251,6 +2381,11 @@ class ManimRuntime:
                 (d for d in reversed(rendered.diagnostics) if "unavailable" in d.lower()),
                 "Cloud render unavailable; rendered locally.",
             )
+            if reason == "Cloud render unavailable; rendered locally.":
+                ledger_row = ledger.get(jid) or {}
+                failure_tail = str(ledger_row.get("log_tail", "") or "").strip()
+                if failure_tail:
+                    reason = f"Cloud render unavailable: {failure_tail}"
             RenderJobLedger(s.data_dir / "render_ledger.json").fallback(
                 jid, reason, local.video_path if local.status == "rendered" else ""
             )
@@ -2296,6 +2431,25 @@ class ManimRuntime:
                     if isinstance(board, dict) and isinstance(board.get("speech"), dict):
                         speech = board["speech"]
                         break
+                measured_starts = None
+                if speech.get("cache_dir") and scene_bundle.code:
+                    # Measure the FINAL code's beat starts (repairs and
+                    # revisions change timing) and place each line there.
+                    from aetherlab.services.scene_preflight import (
+                        beat_timings,
+                        preflight_enabled,
+                        preflight_scene,
+                    )
+
+                    if preflight_enabled():
+                        report = await asyncio.to_thread(
+                            preflight_scene, scene_bundle.code, scene_bundle.class_name
+                        )
+                        if report.ran and report.ok:
+                            measured_starts = {
+                                t.beat_id: t.measured_s
+                                for t in beat_timings(scene_bundle.code, report)
+                            }
                 aligned = await voiceover.add_timed_beat_voiceover(
                     Path(scene_bundle.video_path),
                     narration_storyboard,
@@ -2303,7 +2457,10 @@ class ManimRuntime:
                     voice=str(speech.get("voice") or s.tts_voice),
                     rate=str(speech.get("rate") or s.tts_rate),
                     speech_cache_dir=Path(speech["cache_dir"]) if speech.get("cache_dir") else None,
+                    measured_starts=measured_starts or None,
                 )
+                if aligned and measured_starts:
+                    aligned["sync"]["timing_source"] = "measured beat starts (final code)"
                 if aligned:
                     scene_bundle.narration_text = beat_script
                     scene_bundle.silent_video_path = scene_bundle.video_path
@@ -2587,7 +2744,9 @@ def _animation_range_for_times(
             elapsed += duration
         located.append(index)
     start = max(0, min(located) - 1)
-    end = min(len(events) - 1, max(located) + 1)
+    # Manim's -n START,END range is end-exclusive. Include the final event
+    # containing a sampled timestamp by returning its index + 1.
+    end = min(len(events), max(located) + 1)
     return start, end
 
 
@@ -2699,6 +2858,62 @@ def _is_advisory_issue(issue: str) -> bool:
     return text.startswith(_ADVISORY_ISSUE_PREFIXES) and not text.startswith(_CLOUD_BUDGET_PREFIXES)
 
 
+def _cloud_render_admission_issues(
+    code: str,
+    settings: object | None,
+    duration_target_s: float | None = None,
+    timeline: object = None,
+) -> list[str]:
+    """Return cloud-only hard-budget findings before dispatching a scene.
+
+    Generation validates its candidates against these same limits. Render-time
+    repairs and visual revisions must pass the gate too, since those are new
+    code and can be substantially heavier than the accepted draft.
+    """
+    render_mode = str(getattr(settings, "render_mode", "local") or "local").strip().lower()
+    if render_mode not in {"cloud", "auto"}:
+        return []
+
+    issues: list[str] = []
+    cost = _estimate_render_cost(code)
+    if cost > 3.5:
+        issues.append(f"[PERF:CLOUD_COST] estimate {cost:.1f} exceeds 3.5.")
+
+    target = 0.0
+    try:
+        candidate = float(duration_target_s or 0.0)
+        if math.isfinite(candidate) and candidate > 0:
+            target = candidate
+    except (TypeError, ValueError):
+        pass
+    if target <= 0 and isinstance(timeline, (list, tuple)):
+        for event in timeline:
+            if not isinstance(event, dict):
+                continue
+            try:
+                end_s = float(event.get("end_s", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(end_s):
+                target = max(target, end_s)
+    if target <= 0:
+        try:
+            from aetherlab.services.scene_validation import estimate_duration
+
+            target = float(estimate_duration(code).total_seconds)
+        except Exception:  # noqa: BLE001 - budget gate must remain fail-soft
+            target = 0.0
+    if target >= 24.0:
+        from aetherlab.services.scene_validation import count_construct_play_calls
+
+        play_calls = count_construct_play_calls(code)
+        if play_calls > 16:
+            issues.append(
+                f"[PERF:PLAY_BUDGET] {play_calls} top-level self.play calls exceed 16."
+            )
+    return issues
+
+
 def _blocking_scene_issues(code: str, timeline: object) -> tuple[bool, list[str]]:
     """validate_scene for a repair/revision of an already-accepted scene.
 
@@ -2765,6 +2980,9 @@ _FAILURE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def _classify_failure(stderr: str) -> str:
     """Bucket a render stderr into a failure class for repair + metrics."""
     low = (stderr or "").lower()
+    output_failure = re.search(r"expected one final mp4 for scene [^;\n]+; found (\d+)\b", low)
+    if output_failure:
+        return "artifact_missing" if int(output_failure.group(1)) == 0 else "artifact_ambiguous"
     # The raised exception is at the end of the log; classify that first so
     # earlier INFO noise (dvisvgm, ffmpeg banners) cannot decide the class.
     for text in (low[-1200:], low):

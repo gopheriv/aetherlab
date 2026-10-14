@@ -232,7 +232,7 @@ def build_research_pdf(
 
 def _matplotlib_pdf(
     request: Any, solver: Any, citations: list[str], figure_path: Path | None, out_path: Path,
-    verification: list[str] | None = None,
+    verification: list[str] | None = None, claim_review: dict[str, Any] | None = None,
 ) -> Path | None:
     """pdflatex-free fallback: a two-page PDF (text + figure) via matplotlib."""
     try:
@@ -257,6 +257,18 @@ def _matplotlib_pdf(
         if verification:
             lines += ["", "Verification:"]
             lines += ["  " + line for line in verification]
+        if claim_review:
+            lines += ["", "Prose claim review (advisory):"]
+            lines += textwrap.wrap(str(claim_review.get("note", "Prose was not independently checked.")), 90)
+            for check in claim_review.get("known_fact_checks", []) or []:
+                if check.get("status") in {"corrected", "needs_review"}:
+                    lines += textwrap.wrap(
+                        f"  {check.get('status')}: {check.get('note') or check.get('replacement') or check.get('claim', '')}",
+                        90,
+                    )
+            source_review = claim_review.get("source_review", {}) or {}
+            for issue in source_review.get("issues", []) or []:
+                lines += textwrap.wrap(f"  {issue.get('status')}: {issue.get('reason', '')}", 90)
         lines += ["", "References:"]
         lines += (["  - " + c for c in citations] or ["  (none)"])
 

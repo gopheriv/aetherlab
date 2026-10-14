@@ -10,9 +10,8 @@ the 2-D canvas; a static definition skips the render entirely).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
+from dataclasses import replace
 
 from aetherlab.core.models import OutputPlan, ProblemRequest
 from aetherlab.core.settings import AppSettings
@@ -86,9 +85,14 @@ class Planner:
             return floor
 
         attempts = max(1, int(getattr(self.settings, "planner_attempts", PLANNER_ATTEMPTS)))
+        correction = ""
         for attempt in range(attempts):
             try:
-                remote = await self._plan_remote(request)
+                attempt_request = (
+                    replace(request, prompt=request.prompt + "\n\n" + correction)
+                    if correction else request
+                )
+                remote = await self._plan_remote(attempt_request)
                 return _union(remote, floor)
             except Exception as exc:  # noqa: BLE001 — retried, then floor
                 log.warning(
@@ -96,6 +100,14 @@ class Planner:
                     attempt + 1, attempts, type(exc).__name__, exc,
                 )
                 if attempt < attempts - 1:
+                    correction = (
+                        "The previous planner response could not be used. "
+                        "Return one non-empty JSON object only, with exactly these "
+                        "keys and value types: needs_numeric (boolean), needs_2d "
+                        "(boolean), needs_3d (boolean), needs_animation (boolean), "
+                        "needs_pdf (boolean), rationale (string). Do not include "
+                        "Markdown or commentary."
+                    )
                     await asyncio.sleep(PLANNER_BACKOFF_SECONDS[
                         min(attempt, len(PLANNER_BACKOFF_SECONDS) - 1)
                     ])
@@ -104,6 +116,7 @@ class Planner:
 
     async def _plan_remote(self, request: ProblemRequest) -> OutputPlan:
         from aetherlab.services.llm_client import make_client
+        from aetherlab.services.model_json import load_model_json
 
         if self._client is None:
             self._client = make_client(self.settings)
@@ -117,8 +130,16 @@ class Planner:
             temperature=request_temperature(self.settings, 0.0),
             max_tokens=400,
         )
-        content = response.choices[0].message.content or ""
-        payload = _parse_json(content)
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise ValueError("Planner response contained no choices.")
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        content = str(getattr(message, "content", "") or "").strip()
+        if not content:
+            finish = getattr(choice, "finish_reason", "unknown")
+            raise ValueError(f"Planner returned empty content (finish_reason={finish}).")
+        payload = load_model_json(content)
         return OutputPlan.from_json(payload, model_name=self.settings.llm_model)
 
     def heuristic_plan(self, request: ProblemRequest) -> OutputPlan:
@@ -208,11 +229,7 @@ def _enabled(*flags: bool) -> list[str]:
 
 
 def _parse_json(content: str) -> dict[str, object]:
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        raise
+    """Compatibility wrapper around the shared conservative model parser."""
+    from aetherlab.services.model_json import load_model_json
+
+    return load_model_json(content)

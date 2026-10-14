@@ -8,6 +8,7 @@ Physics/substance and pacing/structure are explicitly treated as proxy axes.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -47,6 +48,7 @@ def analyze_reviews(
     errors: list[str] = []
     missing_videos: list[str] = []
     complete_ids: list[str] = []
+    unpaired_critic_ids: list[str] = []
     human_case_scores: list[float] = []
     critic_case_scores: list[float] = []
     paired_human_scores: list[float] = []
@@ -62,12 +64,15 @@ def analyze_reviews(
             continue
         case_id = str(case.get("id") or f"case-{index}")
         video_value = case.get("video_path")
+        video_sha256 = ""
         if video_value:
             video_path = Path(str(video_value))
             if not video_path.is_absolute():
                 video_path = base_dir / video_path
             if not video_path.is_file():
                 missing_videos.append(case_id)
+            else:
+                video_sha256 = hashlib.sha256(video_path.read_bytes()).hexdigest()
         else:
             missing_videos.append(case_id)
 
@@ -99,14 +104,19 @@ def analyze_reviews(
         if not isinstance(breakdown, dict):
             breakdown = {}
         overall_critic = _score(scores.get("score"), 0.0, 10.0)
-        if overall_critic is not None:
+        critic_video_hash = str(scores.get("video_sha256", ""))
+        critic_matches_video = bool(video_sha256 and critic_video_hash == video_sha256)
+        if overall_critic is not None and critic_matches_video:
             critic_count += 1
+        elif overall_critic is not None:
+            unpaired_critic_ids.append(case_id)
         if len(human) == len(HUMAN_AXES) and overall_critic is not None:
-            paired_human_scores.append(mean(human.values()))
-            critic_case_scores.append(overall_critic)
+            if critic_matches_video:
+                paired_human_scores.append(mean(human.values()))
+                critic_case_scores.append(overall_critic)
 
         for human_axis, critic_axis in CRITIC_AXIS_MAP.items():
-            if human_axis not in human:
+            if human_axis not in human or not critic_matches_video:
                 continue
             critic_value = _score(breakdown.get(critic_axis), 0.0, 2.0)
             if critic_value is not None:
@@ -137,6 +147,7 @@ def analyze_reviews(
         "complete_human_ratings": len(complete_ids),
         "complete_case_ids": complete_ids,
         "critic_scored_cases": critic_count,
+        "unpaired_critic_case_ids": unpaired_critic_ids,
         "paired_human_critic_cases": paired_complete,
         "human_axis_means_1_to_5": human_means,
         "overall_mean_human_score_1_to_5": (

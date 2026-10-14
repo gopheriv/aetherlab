@@ -1,8 +1,8 @@
-; Inno Setup script for AetherLab.
+; Inno Setup script for PhysLab.
 ; Compile after PyInstaller has produced dist/aetherlab (see build.py):
 ;   iscc packaging\installer.iss
 
-#define MyAppName "AetherLab"
+#define MyAppName "PhysLab"
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
@@ -12,11 +12,11 @@
 AppId={{7A3E1F7E-32B1-4A76-9C29-AETHERLAB01}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=AetherLab
+AppPublisher=PhysLab
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
-OutputBaseFilename=AetherLab-Setup-{#MyAppVersion}
+OutputBaseFilename=PhysLab-Setup-{#MyAppVersion}
 OutputDir=..\dist
 SetupIconFile=..\assets\aetherlab.ico
 Compression=lzma2
@@ -39,5 +39,5 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
-; Per-user data (settings, cache, library, logs) lives in %LOCALAPPDATA%\AetherLab
-; and intentionally survives uninstall (textbooks are large downloads).
+; Per-user data remains in %LOCALAPPDATA%\AetherLab for upgrade continuity and
+; intentionally survives uninstall (textbooks are large downloads).

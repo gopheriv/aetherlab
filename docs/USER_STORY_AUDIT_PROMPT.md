@@ -13,8 +13,8 @@ test every user behaviour again post-fix.
 
 ## Project snapshot
 
-You are working on **AetherLab** at `C:\Users\sunak\Projects\aetherlab`
-(branch `codex/stabilize-current-branch`), a PySide6 desktop physics
+You are working on **PhysLab** at `C:\Users\sunak\Projects\aetherlab`
+(inspect the actual current branch), a Python/Qt desktop physics
 workbench. One prompt bar drives:
 
 - **Solve**: derivation → RAG citations → storyboarded Manim scene →
@@ -23,20 +23,22 @@ workbench. One prompt bar drives:
   subtitles, chapter seeking, quizzes, course progress, share/export bundles.
 
 Rendering is local (Manim Community) or cloud (provisioned GitHub Actions
-backend with artifact download and local fallback).
+backend with artifact download). Explicit Cloud mode reports remote failures
+without local fallback; Auto mode may fall back locally.
 
-Current baseline (verify it still holds before you begin; if not, stop and
-report):
+Establish the current baseline before editing. A red check is an audit finding
+to diagnose, not a reason to stop independent work. Historical counts are not
+current proof. As of the 2026-10-12 catalog update there are 250 feature stories;
+derive the current count and status from code, workbook and fresh run output:
 
-- `python test_features.py` → 168/168 passed
+- `python test_features.py` → record actual total, passes, failures and time
 - `python build_feature_tracker.py` regenerates CSV/XLSX cleanly
 - `python tools\tracker_integrity_audit.py --check` passes
 - `python tools\feature_surface_audit.py --check` passes
-- `python -m pytest -q` → 37 passed
+- `python -m pytest tests -q` → record actual total and failures
 - `python -m compileall -q aetherlab test_features.py build_feature_tracker.py tools` passes
-- Strict visual regression: 7/7, 0 warnings, 0 regressions
-- Last documented defect: **BUG-23** in `ERRORS_FOUND.md` — your numbering
-  continues from BUG-24.
+- Strict visual regression: record current evidence; an older green run is historical.
+- Allocate new BUG IDs after the highest actual ID in `ERRORS_FOUND.md`.
 
 ## Why this mission exists (read before trusting anything)
 
@@ -58,11 +60,13 @@ behaviour-level user stories and adversarial execution.
    that is itself a finding.
 2. **One canonical spreadsheet.** `AetherLab_Feature_Tracker.xlsx` (CSV
    mirror for diffs) stays the single source of truth, generated ONLY by
-   `build_feature_tracker.py` from its in-code `FEATURES` list. Never hand-edit
-   the XLSX/CSV. All new story data lives in the generator and flows out.
+   `build_feature_tracker.py` from its in-code `FEATURES` list. Workbook tooling
+   may preserve formatting while applying those exact generated rows; the
+   integrity gate must prove parity. Do not maintain a second status catalog.
+   Keep check time, verification scope and remaining acceptance visible.
 3. **Canonical defect workflow** for every fix:
    `DEFECTS["Fxx"]` entry in `build_feature_tracker.py` → row in
-   `ERRORS_FOUND.md` (BUG-24, BUG-25, …) → regression assertion in
+   `ERRORS_FOUND.md` (next unused BUG ID) → regression assertion in
    `test_features.py` → rerun `test_features.py` → rerun
    `build_feature_tracker.py` → `tools\tracker_integrity_audit.py --check`.
 4. **Never fix by weakening.** No loosened assertions, no widened tolerances,
@@ -106,7 +110,7 @@ behaviour-level user stories and adversarial execution.
 
 ---
 
-# PHASE 1 — User stories for every feature (F01–F168)
+# PHASE 1 — User stories for every current feature
 
 For **every** feature in the `FEATURES` list, write one primary user story
 plus edge-case expectations, derived from the code.
@@ -151,7 +155,7 @@ the gate is machine-checked.
   fields, CLI/module entry points, `aetherlab_watchdog.py`, `start.bat`).
   Every orphan surface gets a new feature id + story.
 - Group work in passes of ~20 features and commit each pass; do not attempt
-  all 168 in one sitting without checkpoints.
+  the entire catalog in one sitting without checkpoints.
 
 ### Phase-1 exit gate
 

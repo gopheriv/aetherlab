@@ -1,0 +1,136 @@
+{
+  "route_id": "constant_acceleration_cloud_5min",
+  "version": "physlab-ent-constant-acceleration-cloud-5min-v1",
+  "audience": "Kazakhstan high-school students preparing for the 2026+ physics UNT",
+  "duration_seconds": 300,
+  "video_layout": "one MP4 with selectable Kazakh, Russian, and English audio and subtitle tracks; Russian audio is the default",
+  "content_review": {
+    "physics_and_calculations": "cross-checked against textbook, formula references, and source answer key",
+    "question_source": "visually checked against supplied Testcenter-3.pdf page 2 and answer key page 37",
+    "kazakh_russian_english_wording": "clear-draft; native physics-teacher review remains recommended",
+    "voice_timing": "generated from the same narration chunks and verified against the 300-second video timeline"
+  },
+  "official_exam_alignment": {
+    "title": "2026 UNT Physics specification",
+    "url": "https://testcenter.kz/wp-content/uploads/2025/10/11_%D0%A4%D0%B8%D0%B7%D0%B8%D0%BA%D0%B0_%D0%BA%D0%B0%D0%B7.pdf",
+    "finding": "Kinematics is topic 01 in Mechanics; the specification lists 40 physics tasks and an average of about two minutes per task.",
+    "used_for": "confirming that the lesson topic is in scope and adding a realistic test-taking reminder"
+  },
+  "sources": [
+    {
+      "file": "Физика Закирова 10 ЖМ.pdf",
+      "pages_pdf_1based": [15, 16, 17, 18, 20],
+      "role": "theory, signed kinematics equations, v-t graph interpretation, exercise-format cross-check",
+      "use": "reference only; no textbook paragraph, figure, or exercise is reproduced"
+    },
+    {
+      "file": "Физика Закирова 9.pdf",
+      "pages_pdf_1based": [19, 20, 21, 22, 23, 24, 25, 26],
+      "role": "cross-grade check of acceleration, velocity-time graphs, and displacement wording"
+    },
+    {
+      "file": "Физика Закирова 11 ЖМ.pdf",
+      "pages_pdf_1based": [8, 9, 10, 11, 12],
+      "role": "later-grade notation and acceleration definition cross-check"
+    },
+    {
+      "file": "Testcenter -3.pdf",
+      "question_page_pdf_1based": 2,
+      "answer_key_page_pdf_1based": 37,
+      "question_number": 1,
+      "answer": "B",
+      "graph_points_time_s_velocity_mps": [[0, 0], [1, 4], [3, 4], [4, 0]],
+      "checked_area_segments_m": [2, 8, 2],
+      "checked_answer_m": 12,
+      "role": "adapted exam-style worked problem; graph and key were visually inspected"
+    },
+    {
+      "file": "369 формула.pdf",
+      "pages_pdf_1based": [6, 7],
+      "role": "formula cross-check only",
+      "distribution_note": "The source page carries a redistribution restriction; no page image or copied table is included."
+    },
+    {
+      "file": "FBS (1).pdf",
+      "pages_pdf_1based": [6, 7],
+      "role": "independent notation and unit cross-check"
+    },
+    {
+      "file": "7. ЕНТ-1.zip",
+      "members_reviewed": [
+        "ЕНТ Физика/1- 400 теория.pdf",
+        "ЕНТ Физика/2300 ФОРМУЛА (ФИЗИКА)(1).pdf",
+        "ЕНТ Физика/Physics RU/Физика 9 кл Основы кинематики.pdf",
+        "ЕНТ Физика/Physics RU/Основы физики и кинематика ЕНТ физика.pdf",
+        "ЕНТ Физика/Physics RU/Кодификатор по физике.pdf",
+        "ЕНТ Физика/Physics RU/Вариант с ответами.pdf",
+        "ЕНТ Физика/Physics KZ/Бірқалыпты айнымалы.pdf",
+        "ЕНТ Физика/Physics KZ/Теория - 01.pdf",
+        "ЕНТ Физика/Physics KZ/Физика теория 2022.pdf",
+        "ЕНТ Физика/Physics RU/2023 Физика Задачник Кембридж.pdf"
+      ],
+      "role": "topic and formula cross-check; not treated as a public or official answer source"
+    },
+    {
+      "file": "7. ЕНТ-2.zip",
+      "members_reviewed": ["ЕНТ Физика/Physics KZ/Testcenter -6.pdf", "ЕНТ Физика/Physics KZ/ҰБТ спецификация _ ATOK AGAY.pdf"],
+      "role": "reference inventory; current NCT specification remains authoritative"
+    }
+  ],
+  "formulas": {
+    "scope": "straight-line motion with constant acceleration along a chosen axis",
+    "velocity": "v = v0 + a t",
+    "acceleration": "a = (v - v0) / t",
+    "displacement": "s = v0 t + (a t^2) / 2",
+    "average_velocity_check": "s = ((v0 + v) / 2) t",
+    "graph": "slope of v-t graph = acceleration; signed area under v-t graph = displacement; when v remains nonnegative, that area also equals distance traveled",
+    "units": {"v": "m/s", "v0": "m/s", "a": "m/s^2", "t": "s", "s": "m"}
+  },
+  "segments": [
+    {"id": "hook", "seconds": 43, "visual": "A cyclist/bus speeds up; same velocity increase each second reveals constant acceleration."},
+    {"id": "quantities", "seconds": 43, "visual": "Define v0, v, a, t, displacement, direction, and SI units."},
+    {"id": "formula-choice", "seconds": 43, "visual": "Show formula choice and the straight-line/constant-acceleration conditions."},
+    {"id": "worked-example", "seconds": 43, "visual": "Solve v0=2 m/s, a=1.5 m/s^2, t=4 s; get v=8 m/s and s=20 m."},
+    {"id": "vt-graph", "seconds": 43, "visual": "Use slope and trapezoid area for the worked example; area is 20 m."},
+    {"id": "ent-question", "seconds": 43, "visual": "Recreate the supplied NCT graph; split into 2 m, 8 m, and 2 m; reveal answer B, 12 m."},
+    {"id": "practice-recap", "seconds": 42, "visual": "Self-check: 18 to 6 m/s in 4 s; a=-3 m/s^2, s=48 m; recap."}
+  ],
+  "languages": {
+    "kk": {
+      "voice": "kk-KZ-AigulNeural",
+      "sections": [
+        "Автобус аялдамадан қозғала бастады делік: алғашқы секундта жылдамдығы нөлден екі метр секундына, келесі секундта төртке өсті. Әр секундтағы өзгеріс бірдей болса, үдеу тұрақты болады. Үдеу жылдамдықтың өзі емес; ол жылдамдықтың уақыт ішінде қанша өзгеретінін көрсетеді. Бүгін формуланы жаттап қана қоймай, қай кезде қолдануға болатынын түсінеміз. Алдымен шамаларды ажыратамыз, бір мысалды толық шығарамыз, содан кейін жылдамдық графигін оқимыз. Соңында берілген Testcenter жинағындағы тапсырманы жауап кілтімен тексеріп, өзіміз тағы бір есеп шығарамыз.",
+        "Есепте әуелі белгілі шамаларды жаз. Бастапқы жылдамдықты v нөл дейміз; соңғы жылдамдықты v, уақытты t, үдеуді a деп белгілейміз. Орын ауыстыруды s әрпімен жазамыз. Жылдамдық метр секундпен, үдеу метр секунд квадратпен, уақыт секундпен өлшенеді; орын ауыстыру метрмен беріледі. Орын ауыстыру дененің бастапқы орнынан соңғы орнына дейінгі бағытталған өзгеріс. Жүрілген жол бүкіл траекторияның ұзындығын санайды. Дене бағытын өзгертпесе, жол орын ауыстыру модуліне тең; бұрылса немесе кері жүрсе, бөліктерді жеке қарастыр. Есепте оң бағытты басында таңда.",
+        "Түзу сызық бойымен қозғалып, үдеу өзгермесе, жылдамдық v нөл плюс a t болады. Мысалы, a оң болса, таңдалған оң бағытта жылдамдық артады; a теріс болса, жылдамдық кеми алады. Орын ауыстыру формуласы: s тең v нөл t плюс a t квадраттың жартысы. Бұл екі формуланы үдеу тұрақты кезде қолданамыз. Бағыт өзгерсе, s таңбасын сақта; жүрілген жолды табу үшін қозғалысты бөліктерге бөліп, әр бөліктің жолын қос. Формуладан кейін бірліктерді тексер: метр секундына мен секунд көбейтілсе, метр шығады; үдеудің бірлігі метр секундына квадрат болуы керек.",
+        "Бірге есептейік. Велосипедші бастапқыда секундына екі метр жылдамдықпен жүріп келеді. Үдеуі секундына квадрат бір бүтін оннан бес метр, ал уақыт төрт секунд. Соңғы жылдамдық v тең екі плюс бір бүтін оннан бес көбейту төрт. Бұл сегіз метр секунд. Енді орын ауыстыру: s тең екі көбейту төрт плюс бір бүтін оннан бес көбейту төрттің квадраты, бөлінген екі. Бірінші бөлік сегіз метр, екінші бөлік он екі метр; барлығы жиырма метр. Тексеру үшін орташа жылдамдықты аламыз: екі мен сегіздің жарты қосындысы бес. Бес көбейту төрт те жиырма метр береді.",
+        "Жылдамдық уақыт графигінде көлбеу сызықтың еңістігі үдеуді көрсетеді: жылдамдық қанша өзгерді, соны уақытқа бөлеміз. График астындағы таңбалы аудан орын ауыстыруға тең. Біздің мысалда жылдамдық екіден сегіз метр секундқа төрт секундта өсті. Ауданды тіктөртбұрыш пен үшбұрышқа бөл: тіктөртбұрыштың ауданы екі көбейту төрт, яғни сегіз метр. Үшбұрыштың ауданы табаны төрт, биіктігі алты болғандықтан он екі метр. Қосындысы жиырма метр. Егер график уақыт осінен төмен түссе, орын ауыстыру теріс болуы мүмкін; жол үшін аудандардың модульдерін қос.",
+        "Енді жинақтағы графикті оқиық. Нөлден бір секундқа дейін жылдамдық нөлден төртке дейін өседі: үшбұрыш ауданы екі метр. Бірден үш секундқа дейін жылдамдық төрт метр секунд болып тұрақты; тіктөртбұрыш ауданы сегіз метр. Соңғы секундта жылдамдық төрттен нөлге түседі: тағы бір үшбұрыш, екі метр. Барлығы екі плюс сегіз плюс екі, яғни он екі метр. Жауап кілтінің бірінші тапсырмасы B нұсқасын көрсетеді. Мұнда төрт секундтағы соңғы жылдамдық нөл болғанымен, жүрген жол нөл емес: жол график астындағы ауданнан табылады.",
+        "Өзіңді тексер: дененің жылдамдығы он сегізден алты метр секундқа төрт секундта азайды. Үдеу: алтыдан он сегізді азайт та, төртке бөл; минус үш метр секундына квадрат. Бағыт өзгермегендіктен, орташа жылдамдық он екі; төрт секундтағы орын ауыстыру қырық сегіз метр. Есте сақта: тұрақты үдеуде жылдамдық формуласы v тең v нөл плюс a t, орын ауыстыру формуласы s тең v нөл t плюс a t квадраттың жартысы. Кинематика 2026 жылғы ЕНТ спецификациясында бар; бір тапсырмаға орташа екі минут беріледі. Алдымен шамаларды белгіле, содан кейін формула мен бірлікті тексер."
+      ]
+    },
+    "ru": {
+      "voice": "ru-RU-SvetlanaNeural",
+      "sections": [
+        "Представь, что автобус трогается от остановки: за первую секунду скорость выросла с нуля до двух метров в секунду, за следующую — до четырёх. Если одинаковая прибавка повторяется каждую секунду, ускорение постоянно. Ускорение — не сама скорость; оно показывает, насколько скорость меняется за время. Сегодня разберём не только формулы, но и условия их применения. Сначала обозначим величины, затем решим пример, прочитаем график скорости и разберём задачу из предоставленного сборника Testcenter-3. В конце проверим себя ещё одной короткой задачей.",
+        "В начале решения выпиши известные величины. Начальную скорость обозначим v ноль, конечную — v, время — t, ускорение — a. Перемещение обозначим s. Скорость измеряют в метрах в секунду, ускорение — в метрах на секунду в квадрате, время — в секундах, перемещение — в метрах. Перемещение показывает направленное изменение положения от старта к финишу. Путь — полная длина траектории. Если тело не меняет направление, путь равен модулю перемещения. При развороте считай участки отдельно. До вычислений выбери положительное направление оси.",
+        "Для движения по прямой с постоянным ускорением конечная скорость равна v ноль плюс a, умноженное на t. При выбранном направлении положительное a увеличивает проекцию скорости, а отрицательное может уменьшать её. Перемещение равно v ноль, умноженному на t, плюс половина a t в квадрате. Эти формулы применяются, когда ускорение не меняется. Если тело разворачивается, сохраняй знак перемещения, а для пути раздели движение на участки и сложи длины участков. После подстановки проверь единицы: метр в секунду, умноженный на секунды, даёт метры; ускорение должно иметь единицы метр на секунду в квадрате.",
+        "Решим пример. Велосипедист движется со скоростью два метра в секунду. Ускорение — один и пять десятых метра на секунду в квадрате, время — четыре секунды. Конечная скорость: два плюс один и пять десятых, умноженные на четыре. Получаем восемь метров в секунду. Теперь перемещение: два умножить на четыре плюс один и пять десятых умножить на квадрат четырёх и разделить на два. Первая часть равна восьми метрам, вторая — двенадцати. Итого двадцать метров. Проверка: средняя скорость равна половине суммы двух и восьми, то есть пяти. Пять умножить на четыре тоже даёт двадцать метров.",
+        "На графике скорости от времени наклон линии показывает ускорение: изменение скорости делим на прошедшее время. Подписанная площадь под графиком равна перемещению. В нашем примере скорость выросла с двух до восьми метров в секунду за четыре секунды. Разобьём площадь трапеции на прямоугольник и треугольник. Прямоугольник: два умножить на четыре — восемь метров. Треугольник: половина, умноженная на основание четыре и высоту шесть, — двенадцать метров. Сумма — двадцать метров. Если график опускается ниже оси времени, перемещение может быть отрицательным; для пути складывай модули площадей.",
+        "Разберём график из задания номер один в предоставленном сборнике. От нуля до одной секунды скорость растёт от нуля до четырёх: площадь треугольника два метра. С первой по третью секунду скорость равна четырём метрам в секунду: прямоугольник даёт восемь метров. За последнюю секунду скорость падает до нуля: ещё два метра. Итого два плюс восемь плюс два — двенадцать метров. В таблице ответов напротив первого задания указано B. Не путай конечную скорость с путём: нулевая скорость в конце не отменяет площадь, пройденную раньше.",
+        "Проверь себя. Скорость уменьшилась с восемнадцати до шести метров в секунду за четыре секунды. Ускорение равно шесть минус восемнадцать, разделить на четыре: минус три метра на секунду в квадрате. Направление не менялось, поэтому средняя скорость — двенадцать, а перемещение за четыре секунды — сорок восемь метров. Запомни две основные формулы: v равно v ноль плюс a t; s равно v ноль t плюс половина a t в квадрате. Кинематика входит в спецификацию ЕНТ 2026 года; среднее время на один вопрос — около двух минут. Сначала подпиши величины, затем проверь знак, формулу и единицы."
+      ]
+    },
+    "en": {
+      "voice": "en-US-AndrewMultilingualNeural",
+      "sections": [
+        "Imagine a bus pulling away from a stop. Its speed rises from zero to two metres per second in one second, then to four. If the same speed increase happens each second, the acceleration is constant. Acceleration is not speed itself; it tells us how quickly velocity changes over time. In this lesson we will choose the right formula, solve one example, read a velocity-time graph, and work through a problem from the supplied Testcenter-3 collection. At the end, try a short check question yourself.",
+        "Start a solution by listing the known quantities. Let v naught be the initial velocity, v the final velocity, t the time, a the acceleration, and s the displacement. Velocity is measured in metres per second, acceleration in metres per second squared, time in seconds, and displacement in metres. Displacement is the directed change from the starting position to the ending position. Distance is the full length of the path. If the object never turns back, distance equals the magnitude of displacement. If it reverses, split the motion into sections. Choose the positive axis before calculating.",
+        "For straight-line motion with constant acceleration, final velocity equals v naught plus a times t. With our chosen axis, positive a increases the velocity component; negative a can reduce it. Displacement equals v naught times t plus one half a t squared. Use these equations only while acceleration stays constant. If the object turns around, keep the sign of displacement and split the path to find total distance. Check the units after substitution: metres per second times seconds gives metres, and acceleration must be in metres per second squared.",
+        "Let us solve an example. A cyclist starts at two metres per second. Acceleration is one point five metres per second squared, and time is four seconds. Final velocity is two plus one point five times four, which equals eight metres per second. Displacement is two times four plus one point five times four squared, divided by two. The first part is eight metres; the second is twelve. Total displacement is twenty metres. Check it using average velocity: half of two plus eight is five metres per second. Five times four is also twenty metres.",
+        "On a velocity-time graph, the slope gives acceleration: change in velocity divided by elapsed time. The signed area beneath the graph gives displacement. In our example, velocity rises from two to eight metres per second over four seconds. Split the trapezoid into a rectangle and a triangle. The rectangle is two times four, or eight metres. The triangle is one half times a base of four and a height of six, or twelve metres. Together they give twenty metres. If the graph drops below the time axis, displacement can be negative; add the magnitudes of areas to find total distance.",
+        "Now read question one from the supplied test collection. From zero to one second, velocity rises from zero to four; the triangle area is two metres. From one to three seconds, velocity stays at four, so the rectangle area is eight metres. During the last second it falls to zero, adding another two metres. The total is two plus eight plus two, or twelve metres. The printed key marks answer B. Do not mistake the final velocity for the distance travelled: a zero speed at the end does not erase the earlier area under the graph.",
+        "Your turn. Speed falls from eighteen to six metres per second in four seconds. Acceleration is six minus eighteen, divided by four: minus three metres per second squared. The object does not reverse, so average velocity is twelve and displacement is forty-eight metres. Remember the two core equations: v equals v naught plus a t; s equals v naught t plus one half a t squared. Kinematics is in the 2026 UNT physics specification, which gives about two minutes per task on average. Label the quantities first, then check the sign, formula, and units."
+      ]
+    }
+  }
+}

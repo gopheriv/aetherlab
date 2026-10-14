@@ -1,0 +1,15 @@
+{
+  "path": "C:\\Users\\sunak\\AppData\\Local\\Temp\\aetherlab\\renders\\runs\\cloud_c9d514c0387f3dd44208db12_m\\c9d514c0387f3dd44208db12.mp4",
+  "bytes": 111842,
+  "video_streams": 1,
+  "width": 1280,
+  "height": 720,
+  "fps": 30.0,
+  "duration_s": 5.0,
+  "codec": "h264",
+  "status": "rendered",
+  "wall_s": 143.8,
+  "requested": {
+    "quality": "m"
+  }
+}

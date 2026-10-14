@@ -48,6 +48,7 @@ class StudyDocResult:
     repaired_blocks: int = 0        # equations replaced by a safe rendering
     checks: list[str] = field(default_factory=list)
     note: str = ""
+    claim_review: dict[str, Any] = field(default_factory=dict)
 
 
 # ── mode ───────────────────────────────────────────────────────────────────
@@ -81,6 +82,9 @@ _RULES = """Formatting rules (strict):
 - Write units in math as \\,\\mathrm{m/s}, \\,\\mathrm{kg}, etc.
 - Do not use \\label, \\ref, \\cite, \\eqref, custom macros, tables or figures.
 - Keep numbers to 3 significant figures and show substitutions explicitly.
+- Make quantitative comparisons only when the compared quantities and locations match; do not equate
+  surface-emitted flux with irradiance at a distant location. Ground numerical claims in the supplied
+  solver values or source excerpts. Do not call prose verified when evidence is absent.
 - Write in clear English for a university student. Explain WHY each step is taken, not only what."""
 
 _TOPIC_PROMPT = """You are AetherLab's physics author. Write a well-explained study guide on the topic below.
@@ -181,6 +185,290 @@ def _valid(doc: dict[str, Any] | None, mode: str) -> bool:
     if mode == "problem":
         return bool(doc.get("steps")) and isinstance(doc.get("final_answer"), dict)
     return bool(doc.get("sections"))
+
+
+_SOLAR_IRRADIANCE = 1361.0
+_SOLAR_IRRADIANCE_CITATION = (
+    "NASA Earth Fact Sheet: https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html"
+)
+_SOLAR_COMPARISON_RE = re.compile(
+    r"(?P<phrase>(?:(?:roughly|approximately|about|nearly|around)\s+)?"
+    r"(?:one[- ]half|half|50\s*(?:%|percent)|twice|double|two\s+times|"
+    r"the\s+same\s+as|equal\s+to|equivalent\s+to))\s+"
+    r"(?:of\s+)?(?:the\s+)?(?P<fact>solar constant|total solar irradiance|TSI)"
+    r"(?:\s+at\s+(?:the\s+)?Earth(?:'s|’s)\s+orbit)?\b",
+    re.I,
+)
+_SCIENTIFIC_VALUE_RE = re.compile(
+    r"(?<![\w.])(?P<mantissa>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?:×|\\times|[xX])\s*10\s*"
+    r"(?:\^\s*\{(?P<exp_braced>[+-]?\d+)\}|\^?\s*(?P<exp_plain>[+-]?\d+))"
+    r"|(?<![\w.])(?P<scientific>\d+(?:\.\d+)?[eE][+-]?\d+)(?![\w.])"
+)
+_PLAIN_VALUE_RE = re.compile(r"(?<![\w.^{])\d+(?:,\d{3})*(?:\.\d+)?(?![\w.])")
+_FLUX_UNIT_RE = re.compile(
+    r"(?:W\s*/\s*m\s*(?:\^\s*\{?2\}?|²)|"
+    r"\\mathrm\{W/m\^?\{?2\}?\}|watts?\s+per\s+square\s+(?:metre|meter))",
+    re.I,
+)
+
+
+def _iter_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def _replace_content_text(value: Any, original: str, replacement: str) -> tuple[Any, int]:
+    if isinstance(value, str):
+        count = value.count(original)
+        return value.replace(original, replacement), count
+    if isinstance(value, dict):
+        result, changed = {}, 0
+        for key, item in value.items():
+            result[key], count = _replace_content_text(item, original, replacement)
+            changed += count
+        return result, changed
+    if isinstance(value, list):
+        result, changed = [], 0
+        for item in value:
+            rewritten, count = _replace_content_text(item, original, replacement)
+            result.append(rewritten)
+            changed += count
+        return result, changed
+    return value, 0
+
+
+def _numbers_before(text: str, end: int) -> list[tuple[int, int, float]]:
+    matches: list[tuple[int, int, float]] = []
+    scientific_spans: list[tuple[int, int]] = []
+    for match in _SCIENTIFIC_VALUE_RE.finditer(text, 0, end):
+        mantissa = match.group("mantissa")
+        if mantissa is not None:
+            exponent = match.group("exp_braced") or match.group("exp_plain")
+            value = float(mantissa.replace(",", "")) * (10 ** int(exponent))
+        else:
+            value = float(match.group("scientific"))
+        matches.append((match.start(), match.end(), value))
+        scientific_spans.append(match.span())
+    for match in _PLAIN_VALUE_RE.finditer(text, 0, end):
+        if any(start <= match.start() < stop for start, stop in scientific_spans):
+            continue
+        matches.append((match.start(), match.end(), float(match.group().replace(",", ""))))
+    return sorted(matches)
+
+
+def audit_known_numeric_claims(content: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Check named solar-irradiance comparisons against NASA's Earth-orbit value.
+
+    This narrow deterministic audit exists because a blackbody surface flux and
+    the solar irradiance received at Earth are easy to confuse. Other prose is
+    left for the source-based review below or explicitly marked not checked.
+    """
+    revised = content
+    checks: list[dict[str, Any]] = []
+    citations: list[str] = []
+    for text in list(_iter_strings(revised)):
+        if not re.search(r"\b(?:solar constant|total solar irradiance|TSI)\b", text, re.I):
+            continue
+        citations.append(_SOLAR_IRRADIANCE_CITATION)
+        relation = _SOLAR_COMPARISON_RE.search(text)
+        if not relation:
+            continue
+        if not _FLUX_UNIT_RE.search(text):
+            checks.append({
+                "check": "solar_irradiance_comparison",
+                "status": "not_checked",
+                "claim": relation.group("phrase"),
+                "note": "A comparison was found, but no W/m² quantity was available to calculate its ratio.",
+                "source": _SOLAR_IRRADIANCE_CITATION,
+            })
+            continue
+        candidates = [row for row in _numbers_before(text, relation.start()) if row[2] > 0]
+        if not candidates:
+            checks.append({
+                "check": "solar_irradiance_comparison",
+                "status": "not_checked",
+                "claim": relation.group("phrase"),
+                "note": "A comparison was found, but its numerical flux value could not be read.",
+                "source": _SOLAR_IRRADIANCE_CITATION,
+            })
+            continue
+        value = candidates[-1][2]
+        ratio = value / _SOLAR_IRRADIANCE
+        phrase = relation.group("phrase").lower()
+        expected = (
+            0.5 if "half" in phrase or "50" in phrase
+            else 2.0 if any(word in phrase for word in ("twice", "double", "two times"))
+            else 1.0
+        )
+        if abs(ratio - expected) <= max(0.15 * expected, 0.05):
+            checks.append({
+                "check": "solar_irradiance_comparison",
+                "status": "passed",
+                "claim": relation.group(0),
+                "ratio": round(ratio, 4),
+                "reference_value_w_m2": _SOLAR_IRRADIANCE,
+                "source": _SOLAR_IRRADIANCE_CITATION,
+            })
+            continue
+
+        multiplier = f"{ratio:,.0f}" if ratio >= 10 else f"{ratio:.3g}"
+        replacement = (
+            f"about {multiplier} times the solar irradiance at Earth's orbit "
+            "(approximately 1,361 W/m²); this compares flux emitted per unit area "
+            "at the blackbody surface with incoming irradiance at Earth's orbit"
+        )
+        revised, replaced = _replace_content_text(revised, relation.group(0), replacement)
+        checks.append({
+            "check": "solar_irradiance_comparison",
+            "status": "corrected" if replaced else "needs_review",
+            "claim": relation.group(0),
+            "replacement": replacement if replaced else "",
+            "value_w_m2": value,
+            "reference_value_w_m2": _SOLAR_IRRADIANCE,
+            "ratio": round(ratio, 4),
+            "note": (
+                "The stated comparison did not match the calculated ratio and was corrected."
+                if replaced else "A mismatch was detected, but the text could not be safely replaced."
+            ),
+            "source": _SOLAR_IRRADIANCE_CITATION,
+        })
+    return revised, checks, list(dict.fromkeys(citations))
+
+
+async def review_study_claims(content: dict[str, Any], rag: Any, settings: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Correct a small set of source-backed known facts and review prose against RAG excerpts.
+
+    The model review is advisory; missing sources, malformed replies, timeouts,
+    and unsupported claims never become a "verified" status.
+    """
+    revised, known_checks, known_citations = audit_known_numeric_claims(content)
+    hits = [hit for hit in list(getattr(rag, "hits", []) or [])[:5]
+            if str(getattr(hit, "excerpt", "") or "").strip()]
+    report: dict[str, Any] = {
+        "schema": "aetherlab.study_claim_review.v1",
+        "status": "not_checked",
+        "note": "No source-based review completed; prose claims should not be treated as independently verified.",
+        "known_fact_checks": known_checks,
+        "source_review": {"status": "not_checked", "sources": [], "issues": []},
+        "inline_citations": known_citations,
+    }
+    citations = list(known_citations)
+    if getattr(settings, "openai_api_key", None) and hits:
+        from aetherlab.services.llm_client import make_client
+        from aetherlab.services.model_json import load_model_json
+        from aetherlab.services.model_policy import (
+            codegen_request_kwargs,
+            effective_llm_timeout,
+            request_temperature,
+        )
+
+        sources = []
+        for hit in hits:
+            name = str(getattr(hit, "source_name", None) or "reference")
+            page = getattr(hit, "page_number", None)
+            label = f"{name}" + (f", p.{page}" if page else "")
+            sources.append({"source": label, "excerpt": " ".join(str(hit.excerpt).split())[:900]})
+        prompt = (
+            "Review the factual prose and equations in this physics study document using ONLY the "
+            "reference excerpts below plus elementary arithmetic. Be conservative. Return status "
+            "'supported' only if every specific claim you assess is supported; return 'issues_found' "
+            "for a clear contradiction or arithmetic error; return 'not_checked' if the excerpts "
+            "cannot assess the claims. Do not infer that absence from an excerpt proves a claim false. "
+            "For each issue, quote an exact substring from the document and give a precise correction. "
+            "Return JSON: {\"status\":\"supported|issues_found|not_checked\",\"note\":\"...\","
+            "\"issues\":[{\"original\":\"exact quote\",\"correction\":\"replacement\","
+            "\"reason\":\"...\",\"source\":\"source label\"}]}.\n\n"
+            "DOCUMENT CONTENT JSON:\n" + json.dumps(revised, ensure_ascii=False)[:24000]
+            + "\n\nREFERENCE EXCERPTS:\n" + json.dumps(sources, ensure_ascii=False)
+        )
+        source_review = {"status": "not_checked", "sources": [row["source"] for row in sources], "issues": []}
+        try:
+            client = make_client(settings)
+            timeout = max(5.0, min(90.0, effective_llm_timeout(settings)))
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=settings.llm_model,
+                    messages=[
+                        {"role": "system", "content": "You are a conservative source-based physics fact reviewer. Output strict JSON only."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=request_temperature(settings, 0.0),
+                    max_tokens=1800,
+                    **codegen_request_kwargs(settings, minimax_thinking=False),
+                ),
+                timeout=timeout,
+            )
+            payload = load_model_json(response.choices[0].message.content or "")
+            status = str(payload.get("status", "not_checked")).lower()
+            if status not in {"supported", "issues_found", "not_checked"}:
+                status = "not_checked"
+            source_review["status"] = status
+            source_review["note"] = str(payload.get("note", "")).strip()
+            for item in payload.get("issues", [])[:8] if isinstance(payload.get("issues"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                original = str(item.get("original", "")).strip()
+                correction = str(item.get("correction", "")).strip()
+                reason = str(item.get("reason", "")).strip()
+                source = str(item.get("source", "")).strip()
+                revised_next, replaced = _replace_content_text(revised, original, correction) if original and correction else (revised, 0)
+                if replaced:
+                    revised = revised_next
+                issue = {
+                    "original": original,
+                    "correction": correction if replaced else "",
+                    "reason": reason,
+                    "source": source,
+                    "status": "corrected" if replaced else "needs_review",
+                }
+                source_review["issues"].append(issue)
+            if source_review["issues"]:
+                source_review["status"] = "issues_found"
+        except Exception as exc:  # noqa: BLE001 - prose review must not block a PDF
+            source_review["error"] = type(exc).__name__
+        report["source_review"] = source_review
+        for hit in hits:
+            name = str(getattr(hit, "source_name", None) or "reference")
+            page = getattr(hit, "page_number", None)
+            label = f"{name}" + (f", p.{page}" if page else "")
+            # Cite only source types already supported by the document exporter.
+            path = str(getattr(hit, "source_path", "") or "")
+            if path.startswith(("http://", "https://")):
+                site = "Wikibooks" if "wikibooks.org" in path.lower() else "Wikipedia"
+                citations.append(f"{name}, {site}: {path}")
+            else:
+                citations.append(label)
+
+    statuses = [str(item.get("status", "")) for item in known_checks]
+    issue_statuses = [str(item.get("status", "")) for item in report["source_review"].get("issues", [])]
+    if (
+        "needs_review" in statuses
+        or "needs_review" in issue_statuses
+        or report["source_review"].get("status") == "issues_found" and not issue_statuses
+    ):
+        report["status"] = "needs_review"
+    elif "corrected" in statuses or "corrected" in issue_statuses:
+        report["status"] = "corrected"
+    elif report["source_review"].get("status") == "supported":
+        report["status"] = "source_reviewed"
+    elif any(status == "passed" for status in statuses):
+        report["status"] = "partially_checked"
+    if report["status"] == "corrected":
+        report["note"] = "One or more claims were corrected using a source-backed check; remaining prose is not certified."
+    elif report["status"] == "source_reviewed":
+        report["note"] = "A model compared the document with supplied source excerpts; this is advisory, not proof."
+    elif report["status"] == "partially_checked":
+        report["note"] = "A known-constant check ran; remaining prose was not independently checked."
+    elif report["status"] == "needs_review":
+        report["note"] = "A possible mismatch was found that could not be safely corrected; review the flagged claim."
+    return revised, {**report, "citations": list(dict.fromkeys(citations))}
 
 
 _CONNECTION_RETRIES = 2
@@ -473,13 +761,15 @@ _PREAMBLE = r"""\documentclass[11pt,a4paper]{article}
 \newtcolorbox{answerbox}{enhanced,colback=aeteal!6,colframe=aeteal!80!black,fonttitle=\bfseries,title={Final answer}}
 \newtcolorbox{warnbox}{enhanced,breakable,colback=aered!4,colframe=aered!70,fonttitle=\bfseries,title={Common mistakes}}
 \newtcolorbox{notebox}[1]{enhanced,breakable,colback=aegold!6,colframe=aegold!70,fonttitle=\bfseries,title={#1}}
+\newtcolorbox{claimreviewbox}[2]{enhanced,breakable,colback=#1!4,colframe=#1!70,fonttitle=\bfseries,title={#2}}
 \pagestyle{fancy}
 \fancyhf{}
 """
 
 
 def build_document(content: dict[str, Any], mode: str, request: Any, citations: list[str],
-                   checks: list[str], figure_path: Path | None, authored_by: str) -> _Doc:
+                   checks: list[str], figure_path: Path | None, authored_by: str,
+                   claim_review: dict[str, Any] | None = None) -> _Doc:
     d = _Doc()
     title = str(content.get("title") or request.normalized_prompt())
     kind = "Worked solution" if mode == "problem" else "Study guide"
@@ -496,6 +786,8 @@ def build_document(content: dict[str, Any], mode: str, request: Any, citations: 
         _problem_body(d, content, request)
     else:
         _topic_body(d, content)
+    if claim_review:
+        _claim_review_box(d, claim_review)
     if figure_path is not None:
         path = str(figure_path).replace("\\", "/")
         d.raw("\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.78\\textwidth]{" + path + "}\n"
@@ -512,6 +804,8 @@ def build_document(content: dict[str, Any], mode: str, request: Any, citations: 
             d.prose(s, "\\item {}")
         d.raw("\\end{itemize}")
     d.raw("\\section*{References}")
+    inline_citations = set((claim_review or {}).get("inline_citations", []) or [])
+    citations = [citation for citation in citations if citation not in inline_citations]
     if citations:
         d.raw("\\begin{enumerate}")
         for c in citations:
@@ -522,10 +816,45 @@ def build_document(content: dict[str, Any], mode: str, request: Any, citations: 
             else:
                 d.prose(c, "\\item {}")
         d.raw("\\end{enumerate}")
-    else:
-        d.raw("No library references matched this request; the material is derived from first principles.")
+    # An empty bibliography is omitted. Its heading and boilerplate can force
+    # a nearly blank final page when a source-backed review already cites a fact inline.
     d.raw("\\end{document}")
     return d
+
+
+def _claim_review_box(d: _Doc, review: dict[str, Any]) -> None:
+    status = str(review.get("status", "not_checked"))
+    heading = "Prose claim review (advisory)"
+    color = "aered" if status in {"needs_review", "not_checked"} else "aegold"
+    d.raw(f"\\begin{{claimreviewbox}}{{{color}}}{{{heading}}}")
+    d.prose(review.get("note", "Prose claims are not independently verified."))
+    details: list[str] = []
+    for item in review.get("known_fact_checks", []) or []:
+        check_status = str(item.get("status", "not_checked"))
+        if check_status in {"corrected", "needs_review"}:
+            details.append(
+                f"{check_status.replace('_', ' ').title()}: {item.get('claim', '')}. "
+                f"{item.get('replacement') or item.get('note', '')}"
+            )
+    source_review = review.get("source_review", {}) or {}
+    for item in source_review.get("issues", []) or []:
+        details.append(
+            f"{str(item.get('status', 'needs_review')).replace('_', ' ').title()}: "
+            f"{item.get('reason') or item.get('original', '')}"
+        )
+    if details:
+        d.raw("\\begin{itemize}")
+        for detail in details:
+            d.prose(detail, "\\item {}")
+        d.raw("\\end{itemize}")
+    for citation in review.get("inline_citations", []) or []:
+        label, _, url = str(citation).partition(": http")
+        if url and re.fullmatch(r"s?://[^\s{}\\]+", url):
+            d.prose("Source: " + label)
+            d.raw("\\url{http" + url + "}")
+        else:
+            d.prose("Source: " + str(citation))
+    d.raw("\\end{claimreviewbox}")
 
 
 def _sections(d: _Doc, sections: list[dict[str, Any]], numbered: bool = True) -> None:
@@ -800,30 +1129,45 @@ async def write_study_document(request: Any, solver: Any, rag: Any, settings: An
     if content is None:
         note = f"Model authoring unavailable ({authored_by}); built from the solver's derivation."
         content, authored_by = deterministic_document(request, solver, mode), "AetherLab (deterministic)"
+    content, claim_review = await review_study_claims(content, rag, settings)
     (out_dir / "content.json").write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
+    (out_dir / "claim_review.json").write_text(
+        json.dumps(claim_review, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     if progress:
         progress("Typesetting the PDF…")
     figure = render_numeric_figure(solver, out_dir / "figure.png") if getattr(solver, "numeric_spec", None) else None
     checks = independent_checks(request, solver)
     citations = relevant_citations(build_citations(rag), content, request)
-    doc = build_document(content, mode, request, citations, checks, figure, authored_by)
+    for citation in claim_review.get("citations", []):
+        if citation == _SOLAR_IRRADIANCE_CITATION and citation not in citations:
+            citations.append(citation)
+    doc = build_document(content, mode, request, citations, checks, figure, authored_by, claim_review)
     tex_path = out_dir / "document.tex"
     pdf, repaired, error = compile_healing(doc, tex_path, cancel_check)
     if pdf is not None:
         if repaired:
             note = (note + " " if note else "") + f"{repaired} equation(s) shown as plain text after a LaTeX error."
-        return StudyDocResult(mode, tex_path, pdf, "pdflatex", authored_by, repaired, checks, note.strip())
+        return StudyDocResult(
+            mode, tex_path, pdf, "pdflatex", authored_by, repaired, checks, note.strip(), claim_review
+        )
     try:
         from aetherlab.services.research import _matplotlib_pdf
 
-        fallback = _matplotlib_pdf(request, solver, citations, figure, out_dir / "document.pdf", checks)
+        fallback = _matplotlib_pdf(
+            request, solver, citations, figure, out_dir / "document.pdf", checks, claim_review
+        )
     except Exception:  # noqa: BLE001
         fallback = None
     # Keep the authoring note (for example "Model authoring unavailable"): a
     # missing pdflatex used to overwrite it, hiding why the content is generic.
     why = (note + " " if note else "") + f"pdflatex failed ({error})"
     if fallback is not None:
-        return StudyDocResult(mode, tex_path, fallback, "matplotlib", authored_by, repaired, checks,
-                              f"{why}; rendered a simplified PDF instead.")
-    return StudyDocResult(mode, tex_path, None, "tex-only", authored_by, repaired, checks,
-                          f"{why}; wrote the LaTeX source only.")
+        return StudyDocResult(
+            mode, tex_path, fallback, "matplotlib", authored_by, repaired, checks,
+            f"{why}; rendered a simplified PDF instead.", claim_review,
+        )
+    return StudyDocResult(
+        mode, tex_path, None, "tex-only", authored_by, repaired, checks,
+        f"{why}; wrote the LaTeX source only.", claim_review,
+    )

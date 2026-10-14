@@ -32,6 +32,9 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
         "cmath",
         "fractions",
         "decimal",
+        # Pure colour-space maths (HSV/HLS <-> RGB), no I/O. MiniMax reaches
+        # for it to colour blackbody glows (live 2026-10-02).
+        "colorsys",
     }
 )
 
@@ -102,6 +105,7 @@ BANNED_IO_ATTRIBUTES: frozenset[str] = frozenset(
         "load",
         "loadtxt",
         "genfromtxt",
+        "dump",
         "memmap",
         "DataSource",
     }

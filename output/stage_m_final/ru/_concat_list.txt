@@ -1,0 +1,8 @@
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB0.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB1.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB2.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB3.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB4.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB5.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB6.mp4'
+file 'C:/Users/sunak/Projects/aetherlab/output/stage_m_final/ru/BlockB7.mp4'

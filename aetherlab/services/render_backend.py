@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MANIM_VERSION_PIN = "0.21.0"
-CLOUD_WORKFLOW_VERSION = "3"  # bumped for structured render telemetry
+CLOUD_WORKFLOW_VERSION = "7"  # reject missing/ambiguous scene outputs; no size fallback
 CLOUD_UNAVAILABLE = "cloud-unavailable"
 DEFAULT_GITHUB_WORKFLOW = "render.yml"
 DEFAULT_GITHUB_BRANCH = "renders"
@@ -79,6 +79,9 @@ def _render_error_excerpt(log_text: str, limit: int = 8000) -> str:
     the last Python traceback, then the last exception line, then the tail.
     """
     text = _GH_TIMESTAMP_RE.sub("", str(log_text or ""))
+    output_failure = re.search(r"(?m)^Expected one final MP4 for scene [^;\r\n]+; found \d+\s*$", text)
+    if output_failure:
+        return output_failure.group().strip()[-limit:]
     start = text.rfind("Traceback (most recent call last)")
     if start < 0:
         match = None
@@ -162,7 +165,7 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -173,27 +176,42 @@ jobs:
           python-version: "3.14"
 
       - name: Install system render dependencies
+        timeout-minutes: 7
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update
           sudo apt-get install -y --no-install-recommends \
-            ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+            libcairo2-dev libpango1.0-dev pkg-config
           if [ "${{ inputs.needs_latex }}" = "true" ]; then
             sudo apt-get install -y --no-install-recommends \
-              texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+              texlive-latex-extra dvisvgm
           fi
 
       - name: Install pinned Manim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "manim==0.21.0"
+          python -m pip install "manim==0.21.0" "imageio-ffmpeg==0.6.0"
           python - <<'PY'
           import importlib.metadata as m
+          import os
+          from pathlib import Path
+          import imageio_ffmpeg
+
+          ffmpeg_dir = Path(os.environ["RUNNER_TEMP"]) / "aetherlab-bin"
+          ffmpeg_dir.mkdir(parents=True, exist_ok=True)
+          (ffmpeg_dir / "ffmpeg").symlink_to(imageio_ffmpeg.get_ffmpeg_exe())
+          with Path(os.environ["GITHUB_PATH"]).open("a", encoding="utf-8") as path_file:
+              path_file.write(str(ffmpeg_dir) + "\n")
           print("manim", m.version("manim"))
+          print("ffmpeg", imageio_ffmpeg.get_ffmpeg_exe())
           PY
 
       - name: Render scene
         id: render
         shell: bash
+        env:
+          SCENE_CLASS: ${{ inputs.class_name }}
+          RENDER_JOB_ID: ${{ inputs.job_id }}
         run: |
           set +e
           mkdir -p out
@@ -210,12 +228,28 @@ jobs:
           if [ "$code" -ne 0 ]; then
             exit "$code"
           fi
-          mp4="$(find out -type f -name '*.mp4' -print0 | xargs -0 ls -S | head -n 1)"
-          if [ -z "$mp4" ]; then
-            echo "No MP4 produced" | tee -a "${{ inputs.job_id }}.log"
-            exit 2
-          fi
-          cp "$mp4" "${{ inputs.job_id }}.mp4"
+          # Select exactly one final output for the requested scene.
+          # A larger unrelated video or partial fragment is never a substitute.
+          python - <<'PY'
+          import os
+          import shutil
+          import sys
+          from pathlib import Path
+
+          scene_class = os.environ["SCENE_CLASS"]
+          matches = [
+              path for path in Path("out/videos").rglob("*.mp4")
+              if path.name == f"{scene_class}.mp4"
+              and "partial_movie_files" not in path.parts
+          ]
+          if len(matches) != 1:
+              message = f"Expected one final MP4 for scene {scene_class}; found {len(matches)}"
+              print(message, file=sys.stderr)
+              with Path(f"{os.environ['RENDER_JOB_ID']}.log").open("a", encoding="utf-8") as output:
+                  output.write(message + "\n")
+              sys.exit(2)
+          shutil.copyfile(matches[0], f"{os.environ['RENDER_JOB_ID']}.mp4")
+          PY
 
       - name: Upload rendered MP4
         if: success()
@@ -429,7 +463,7 @@ class CloudRenderBackend:
         run_id = None
         try:
             say("Checking cloud render cache")
-            video = await asyncio.to_thread(self._download_cached, client, manifest, job_id, run_dir, cached)
+            video = await asyncio.to_thread(self._download_cached, client, manifest, job_id, run_dir, cached, quality)
             ensure_active()
             if video:
                 scene.video_path = str(video)
@@ -493,6 +527,7 @@ class CloudRenderBackend:
             deadline = time.monotonic() + effective_timeout
             poll = max(2, int(getattr(settings, "cloud_poll_seconds", 8)))
             run = None
+            was_rate_limited = False
             current_stage = "poll"
             while time.monotonic() < deadline:
                 ensure_active()
@@ -506,11 +541,24 @@ class CloudRenderBackend:
                 except urllib.error.HTTPError as exc:
                     # Authentication, permission, and missing-run errors will not
                     # heal by polling again. Retry only GitHub's transient statuses.
-                    if exc.code not in {408, 425, 429, 500, 502, 503, 504}:
+                    remaining = exc.headers.get("X-RateLimit-Remaining") if exc.headers else None
+                    rate_limited = exc.code == 429 or (
+                        exc.code == 403 and str(remaining or "").strip() == "0"
+                    )
+                    if exc.code not in {408, 425, 429, 500, 502, 503, 504} and not rate_limited:
                         raise
                     log.warning("Transient GitHub run-poll response %s; retrying", exc.code)
                     say("Cloud status check was delayed; retrying")
-                    await asyncio.sleep(min(poll, max(0.0, deadline - time.monotonic())))
+                    delay = float(poll)
+                    if rate_limited:
+                        was_rate_limited = True
+                        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                        try:
+                            delay = max(1.0, float(retry_after)) if retry_after else delay
+                        except (TypeError, ValueError):
+                            pass
+                        ledger.status(job_id, "rate_limited", f"GitHub API rate limit; retrying in {delay:g}s.")
+                    await asyncio.sleep(min(delay, max(0.0, deadline - time.monotonic())))
                     continue
                 except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as exc:
                     # A status-read timeout does not mean the remote render failed.
@@ -520,22 +568,47 @@ class CloudRenderBackend:
                     say("Cloud status check was delayed; retrying")
                     await asyncio.sleep(min(poll, max(0.0, deadline - time.monotonic())))
                     continue
+                if was_rate_limited:
+                    ledger.status(job_id, "in_progress", "GitHub status polling resumed after rate limit.")
+                    was_rate_limited = False
                 status = (run.get("status") or "").lower()
                 conclusion = (run.get("conclusion") or "").lower()
                 if status == "completed":
                     if conclusion == "success":
+                        run_page = safe_github_run_url(settings, run)
+                        if run_page:
+                            ledger.urls(job_id, run_url=run_page)
+                        ledger.status(job_id, "completed", "GitHub Actions workflow completed successfully.")
                         break
+                    run_page = safe_github_run_url(settings, run)
+                    if run_page:
+                        ledger.urls(job_id, run_url=run_page)
                     log_text = await asyncio.to_thread(client.download_run_logs, int(run["id"]))
                     stderr = (
                         _render_error_excerpt(log_text)
                         if log_text else f"GitHub Actions concluded {conclusion or 'failure'}."
                     )
                     kind = _classify_failure(stderr)
+                    if kind == "artifact_missing":
+                        scene.diagnostics.append(
+                            "Cloud output missing: the requested scene produced no final MP4. "
+                            "Check that the scene contains a timed animation or wait, then retry."
+                        )
+                    elif kind == "artifact_ambiguous":
+                        scene.diagnostics.append(
+                            "Cloud output ambiguous: multiple final MP4s match the requested scene. "
+                            "Check worker output isolation, then retry."
+                        )
+                    if _note_missing_latex(log_text or ""):
+                        scene.diagnostics.append(
+                            "The cloud runner had no LaTeX for this scene; later cloud "
+                            "renders will install it."
+                        )
                     dump = _dump_render_failure(settings.data_dir, scene.code, stderr, kind)
                     note = f"Cloud render failed [{kind}]: {stderr[-8000:]}"
                     if dump:
                         note += f"\n(full log: {dump})"
-                    scene.diagnostics.append(note)
+                    scene.diagnostics.append(_mask(note))
                     scene.status = "render-error"
                     scene.failure_kind = kind
                     ledger.failure(job_id, stderr, kind=kind)
@@ -583,6 +656,10 @@ class CloudRenderBackend:
                 log.warning(reason)
                 return _cloud_unavailable(scene, reason)
 
+            run_page = safe_github_run_url(settings, run)
+            if run_page:
+                ledger.urls(job_id, run_url=run_page)
+
             say("Downloading cloud video")
             current_stage = "download_logs"
             ensure_active()
@@ -593,7 +670,8 @@ class CloudRenderBackend:
             if not artifact:
                 scene.diagnostics.append("Cloud render succeeded but MP4 artifact was not found.")
                 scene.status = "render-error"
-                scene.failure_kind = "unknown"
+                scene.failure_kind = "artifact_missing"
+                ledger.failure(job_id, "Cloud render succeeded but MP4 artifact was not found.", kind="artifact_missing")
                 record_metrics(
                     prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
                     dispatch_seconds=dispatch_seconds, failure_kind="artifact_missing",
@@ -602,14 +680,21 @@ class CloudRenderBackend:
                     **runner_metrics,
                 )
                 return scene
+            artifact_page = safe_github_artifact_url(settings, run, artifact)
+            if artifact_page:
+                ledger.urls(job_id, artifact_url=artifact_page)
             download_started = time.monotonic()
             current_stage = "download_artifact"
-            video = await asyncio.to_thread(self._download_artifact, client, artifact, run_dir, job_id)
+            video, reject_reason = await asyncio.to_thread(
+                self._download_artifact, client, artifact, run_dir, job_id, quality
+            )
             ensure_active()
             if not video:
-                scene.diagnostics.append("Cloud MP4 artifact failed validation.")
+                detail = f"Cloud MP4 artifact failed validation: {reject_reason}."
+                scene.diagnostics.append(detail)
                 scene.status = "render-error"
-                scene.failure_kind = "ffmpeg"
+                scene.failure_kind = "artifact_invalid"
+                ledger.failure(job_id, detail, kind="artifact_invalid")
                 record_metrics(
                     prepare_seconds=prepare_seconds, upload_seconds=upload_seconds,
                     dispatch_seconds=dispatch_seconds,
@@ -625,7 +710,7 @@ class CloudRenderBackend:
             scene.status = "rendered"
             scene.failure_kind = ""
             scene.diagnostics.append(f"Rendered via GitHub Actions ({job_id}).")
-            ledger.status(job_id, "artifact_downloaded", "MP4 downloaded")
+            ledger.status(job_id, "artifact_downloaded", "MP4 downloaded and validated")
             ledger.finish(job_id, "rendered", str(video))
             record_metrics(
                 cache_hit=False, prepare_seconds=prepare_seconds,
@@ -650,12 +735,20 @@ class CloudRenderBackend:
                 == "cloud"
             )
             detail = _mask(str(exc))
+            if isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403}:
+                detail = (
+                    "GitHub denied access (HTTP " + str(exc.code)
+                    + "); check that the token can access the repository, workflow, and Actions runs."
+                )
             if cloud_only:
                 log.warning("Cloud render unavailable; local fallback skipped: %s", detail)
                 detail += " Cloud-only mode is selected, so local fallback was skipped."
             else:
                 log.warning("Cloud render unavailable; falling back to local: %s", detail)
-            ledger.status(job_id, "failed", detail)
+            if _is_token_scope_failure(exc, detail):
+                ledger.failure(job_id, detail, kind="token_scope", status="action_required")
+            else:
+                ledger.failure(job_id, detail, kind=current_stage)
             record_metrics(
                 failure_kind=scene.failure_kind or "unavailable",
                 failure_stage=current_stage,
@@ -670,23 +763,32 @@ class CloudRenderBackend:
         job_id: str,
         run_dir: Path,
         cached: dict | None,
+        quality: str,
     ) -> Path | None:
         if cached and cached.get("artifact_id"):
             try:
                 artifact = client.get_artifact(int(cached["artifact_id"]))
                 if artifact and not artifact.get("expired"):
-                    return self._download_artifact(client, artifact, run_dir, job_id)
+                    video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality)
+                    return video
             except Exception:  # noqa: BLE001
                 pass
         artifact = client.find_repo_artifact(f"{job_id}.mp4")
         if artifact and not artifact.get("expired"):
             manifest.put(job_id, {"artifact_id": artifact["id"], "run_id": artifact.get("workflow_run", {}).get("id")})
-            return self._download_artifact(client, artifact, run_dir, job_id)
+            video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality)
+            return video
         return None
 
     def _download_artifact(
-        self, client: "GitHubActionsClient", artifact: dict, run_dir: Path, job_id: str
-    ) -> Path | None:
+        self,
+        client: "GitHubActionsClient",
+        artifact: dict,
+        run_dir: Path,
+        job_id: str,
+        quality: str,
+    ) -> tuple[Path | None, str]:
+        """Download one MP4 artifact; the reason is "" on success."""
         data = client.download_artifact_zip(int(artifact["id"]))
         with zipfile.ZipFile(BytesReader(data)) as zf:
             for name in zf.namelist():
@@ -695,8 +797,33 @@ class CloudRenderBackend:
                     continue
                 out = run_dir / target.name
                 out.write_bytes(zf.read(name))
-                return out if validate_mp4(out) else None
-        return None
+                if not validate_mp4(out):
+                    return None, "not an MP4 container (ftyp missing)"
+                ok, reason = self._profile_matches(out, quality)
+                return (out, "") if ok else (None, reason)
+        return None, "job MP4 missing from the artifact zip"
+
+    @staticmethod
+    def _profile_matches(path: Path, quality: str) -> tuple[bool, str]:
+        """Deep media gate: a video stream, a positive duration, and the
+        resolution of the requested quality flag and a decodable frame."""
+        facts = probe_mp4(path)
+        if facts is None:
+            return False, "video validation unavailable: install or repair PyAV (av) and retry"
+        if facts["video_streams"] < 1:
+            return False, "no video stream in the downloaded MP4"
+        if facts["duration_s"] <= 0:
+            return False, "downloaded MP4 has no measurable duration"
+        if not facts["decoded_frame"]:
+            return False, "downloaded MP4 has no decodable video frame"
+        expected = CLOUD_QUALITY_DIMS.get(quality)
+        actual = (facts["width"], facts["height"])
+        if expected is not None and actual != expected:
+            return False, (
+                f"resolution {actual[0]}x{actual[1]}, expected "
+                f"{expected[0]}x{expected[1]} for quality '{quality}'"
+            )
+        return True, ""
 
 
 def select_backend(settings: "AppSettings", code: str = "", quality: str = "l") -> RenderBackend:
@@ -819,14 +946,88 @@ def scan_cloud_payload(code: str) -> str | None:
 
 def validate_mp4(path: Path) -> bool:
     try:
-        data = path.read_bytes()[:4096]
+        with path.open("rb") as video:
+            size = os.fstat(video.fileno()).st_size
+            header = video.read(64)
     except OSError:
         return False
-    return path.exists() and path.stat().st_size > 128 and b"ftyp" in data[:64]
+    return size > 128 and b"ftyp" in header
+
+
+# Pinned-Manim (0.21.0) output dimensions per quality flag. A cloud MP4 that
+# comes back at the wrong profile is rejected instead of silently shipping.
+CLOUD_QUALITY_DIMS = {
+    "l": (854, 480),
+    "m": (1280, 720),
+    "h": (1920, 1080),
+    "k": (3840, 2160),
+}
+
+
+def probe_mp4(path: Path) -> dict[str, float | int] | None:
+    """Video-stream facts for a downloaded MP4.
+
+    None when PyAV cannot load; callers must not certify the video in that case.
+    Invalid files report zero facts. Sampling one decoded frame verifies actual
+    video data without reading every frame of a long lesson into memory.
+    """
+    try:
+        import av
+    except Exception:  # noqa: BLE001 — missing/broken decoder is diagnosed by caller
+        return None
+    try:
+        with av.open(str(path)) as container:
+            video = container.streams.video
+            if not video:
+                return {"video_streams": 0, "duration_s": 0.0, "width": 0, "height": 0, "decoded_frame": 0}
+            stream = video[0]
+            duration = 0.0
+            if stream.duration and stream.time_base:
+                duration = float(stream.duration * stream.time_base)
+            elif container.duration:
+                duration = container.duration / 1_000_000.0
+            return {
+                "video_streams": len(video),
+                "duration_s": duration,
+                "width": int(stream.width or 0),
+                "height": int(stream.height or 0),
+                "decoded_frame": int(next(container.decode(video=0), None) is not None),
+            }
+    except Exception:  # noqa: BLE001 — undecodable file reads as no facts
+        return {"video_streams": 0, "duration_s": 0.0, "width": 0, "height": 0, "decoded_frame": 0}
+
+
+# Manim objects that typeset with LaTeX internally. A render that uses one
+# without LaTeX installed dies with FileNotFoundError: 'latex' (live
+# 2026-10-02: a DecimalNumber readout failed three cloud renders in a row).
+_LATEX_CONSTRUCTORS = re.compile(
+    r"\b(?:MathTex|Tex|SingleStringMathTex|TexTemplate|DecimalNumber|Integer|Variable"
+    r"|Matrix|IntegerMatrix|DecimalMatrix|MobjectMatrix|MathTable|DecimalTable"
+    r"|IntegerTable|BarChart|BraceLabel|BraceText|Title|BulletedList)\s*\("
+)
+_LATEX_HELPERS = re.compile(
+    r"\b(?:include_numbers|numbers_to_include|add_coordinates|get_axis_labels"
+    r"|get_x_axis_label|get_y_axis_label|get_axis_label|get_graph_label|get_tex"
+    r"|decimal_number_config)\b|\.get_text\("
+)
+# Set once a cloud render fails for lack of LaTeX; later renders in this
+# process (render repairs, other segments) then always install it.
+_latex_missing_seen = False
 
 
 def _needs_latex(code: str) -> bool:
-    return any(token in code for token in ("MathTex", "Tex(", "TexTemplate"))
+    if _latex_missing_seen:
+        return True
+    return bool(_LATEX_CONSTRUCTORS.search(code) or _LATEX_HELPERS.search(code))
+
+
+def _note_missing_latex(log_text: str) -> bool:
+    """Remember a render that failed because the runner had no LaTeX."""
+    global _latex_missing_seen
+    if re.search(r"No such file or directory: '(?:latex|dvisvgm)'", log_text or ""):
+        _latex_missing_seen = True
+        return True
+    return False
 
 
 def _github_token(settings: "AppSettings") -> str:
@@ -869,10 +1070,52 @@ def _cloud_unavailable(scene: SceneBundle, reason: str) -> SceneBundle:
 
 
 def _mask(text: str) -> str:
-    text = re.sub(r"github_pat_[A-Za-z0-9_]+", "github_pat_***", text)
-    text = re.sub(r"gh[pousr]_[A-Za-z0-9_]{8,}", "gh_***", text)
-    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-***", text)
-    return text
+    from aetherlab.services.render_ledger import scrub
+
+    # Keep the render diagnostic's historical short-token protection too;
+    # fixture credentials and truncated provider errors can be shorter than
+    # the ledger's conservative high-confidence patterns.
+    text = re.sub(r"github_pat_[A-Za-z0-9_]+", "<redacted>", str(text))
+    text = re.sub(r"gh[pousr]_[A-Za-z0-9_]{8,}", "<redacted>", text)
+    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "<redacted>", text)
+    return scrub(text)
+
+
+def _is_token_scope_failure(exc: Exception, detail: str) -> bool:
+    if isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403}:
+        remaining = exc.headers.get("X-RateLimit-Remaining") if exc.headers else None
+        if not (exc.code == 403 and str(remaining or "").strip() == "0"):
+            return True
+    text = f"{type(exc).__name__}: {detail}".lower()
+    return any(marker in text for marker in (
+        "lacks the 'workflow' scope", "insufficient scope", "resource not accessible",
+        "workflow scope", "token scope", "permission to", "not authorized",
+    ))
+
+
+def safe_github_run_url(settings: "AppSettings", run: dict) -> str:
+    """Return a validated human-facing URL for a GitHub Actions run."""
+    from aetherlab.services.render_ledger import safe_github_url
+
+    repo = str(getattr(settings, "github_repo", "") or "").strip()
+    run_id = run.get("id")
+    candidate = str(run.get("html_url", "") or "")
+    if not candidate and repo and str(run_id or "").isdigit():
+        candidate = f"https://github.com/{repo}/actions/runs/{run_id}"
+    return safe_github_url(candidate)
+
+
+def safe_github_artifact_url(settings: "AppSettings", run: dict, artifact: dict) -> str:
+    """Build a safe artifact page link; never persist GitHub's signed ZIP URL."""
+    from aetherlab.services.render_ledger import safe_github_url
+
+    repo = str(getattr(settings, "github_repo", "") or "").strip()
+    run_id, artifact_id = run.get("id"), artifact.get("id")
+    if not repo or not str(run_id or "").isdigit() or not str(artifact_id or "").isdigit():
+        return ""
+    return safe_github_url(
+        f"https://github.com/{repo}/actions/runs/{run_id}/artifacts/{artifact_id}"
+    )
 
 
 def _workflow_name(value: str | None) -> str:

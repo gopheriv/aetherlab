@@ -9,9 +9,12 @@ bar at the bottom. Screens follow design/ui_kits/aetherlab-desktop/.
 from __future__ import annotations
 
 import subprocess
-import sys
+from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
+from aetherlab.core.language import normalize_language
+from aetherlab.core.lesson_messages import lesson_message
 from aetherlab.core.models import (
     PipelineError,
     PipelineResult,
@@ -22,13 +25,18 @@ from aetherlab.core.models import (
 )
 from aetherlab.core.settings import AppSettings
 from aetherlab.services.pdf import (
-    compile_latex_to_pdf,
     export_derivation_to_latex,
     export_scene_code,
 )
 from aetherlab.ui import icons
 from aetherlab.ui.background_task import BackgroundTask
+from aetherlab.ui.fonts import install_ui_fonts
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
+from aetherlab.ui.student_views import (
+    ProgressOverview,
+    StudentDashboard,
+    TopicCatalogView,
+)
 from aetherlab.ui.style import AETHERLAB_QSS
 from aetherlab.ui.widgets import (
     AnalysisPanel,
@@ -51,31 +59,9 @@ from aetherlab.ui.workers import LessonWorker, PipelineWorker
 require_qt()
 
 
-_FONTS_INSTALLED = False
-
-
 def _install_ui_fonts() -> None:
-    """Load bundled UI fonts so Qt renders text consistently offscreen/frozen."""
-    global _FONTS_INSTALLED
-    if _FONTS_INSTALLED:
-        return
-    candidates = []
-    for root in (
-        Path(__file__).resolve().parents[2],
-        Path(getattr(sys, "_MEIPASS", ".")),
-    ):
-        candidates.extend([
-            root / "assets" / "fonts" / "DejaVuSans.ttf",
-            root / "assets" / "fonts" / "DejaVuSans-Bold.ttf",
-        ])
-    loaded = False
-    for path in candidates:
-        if path.exists():
-            loaded = QtGui.QFontDatabase.addApplicationFont(str(path)) >= 0 or loaded
-    app = QtWidgets.QApplication.instance()
-    if app is not None and loaded:
-        app.setFont(QtGui.QFont("DejaVu Sans", 10))
-    _FONTS_INSTALLED = True
+    """Backward-compatible hook for the shared UI font loader."""
+    install_ui_fonts()
 
 
 # Workspace stack pages
@@ -86,6 +72,74 @@ PAGE_SCENE = 3
 PAGE_LIBRARY = 4
 PAGE_HISTORY = 5
 PAGE_LESSON = 6
+PAGE_STUDENT_HOME = 7
+PAGE_TOPICS = 8
+PAGE_PROGRESS = 9
+
+
+_SETTINGS_COPY = {
+    "kk": {
+        "Settings": "Баптаулар", "PROVIDER": "AI ПРОВАЙДЕРІ", "RENDERING": "РЕНДЕР", "VISION · CRITIQUE": "КӨРУ · САПАНЫ БАҒАЛАУ",
+        "REFERENCES": "ДЕРЕККӨЗДЕР", "NARRATION": "ДИКТОР ДАУЫСЫ", "LEARNING": "ОҚУ", "PATHS": "ЖОЛДАР",
+        "Provider": "Провайдер", "API key": "API кілті", "Base URL": "Негізгі URL", "Model": "Модель",
+        "Model timeout": "Модельді күту уақыты", "Timeout retries": "Қайталау саны", "Test connection": "Қосылымды тексеру",
+        "Render engine": "Рендер қозғалтқышы", "Default quality": "Әдепкі сапа", "Render mode": "Рендер режимі",
+        "GitHub render repo": "GitHub рендер репозиторийі", "GitHub token": "GitHub токені", "Workflow file": "Workflow файлы",
+        "Render branch": "Рендер тармағы", "Auto cloud threshold": "Бұлтқа автоматты жіберу шегі", "Test cloud render": "Бұлтты рендерді тексеру",
+        "View render ledger": "Рендер тарихын көру", "Get token": "Токен алу", "Vision model": "Көру моделі",
+        "Voice": "Диктор дауысы", "Review intervals (days)": "Қайталау аралығы (күн)", "Library path": "Кітапхана бумасы",
+        "Data path": "Деректер бумасы", "Cancel": "Болдырмау", "Save": "Сақтау", "Browse…": "Шолу…",
+        "Custom endpoint": "Теңшелетін сервер", "Local Ollama": "Жергілікті Ollama", "No AI (offline)": "ЖИ жоқ (офлайн)",
+        "No automatic retries": "Автоматты қайталау жоқ", "Retry once": "Бір рет қайталау", "Manim (Community)": "Manim (Community)",
+        "Draft (480p)": "Нобай (480p)", "Standard (720p · 30 fps)": "Қалыпты (720p · 30 кадр/сек)", "High (1080p)": "Жоғары (1080p)",
+        "Local": "Жергілікті", "Cloud": "Бұлт", "Auto": "Автоматты",
+        "When set, rendered videos are watched frame-by-frame and revised toward a quality rubric; blank skips the critique loop.": "Көрсетілсе, дайын бейне кадр бойынша тексеріліп, сапа өлшеміне сай түзетіледі. Бос қалса, тексеру жүргізілмейді.",
+        "Multi-candidate quality (auto): render extra takes only when the first is weak": "Бірнеше нұсқаны бағалау: алғашқы рендер әлсіз болса ғана қосымша нұсқалар жасалады",
+        "When a vision model is set, PhysLab renders one scene and only generates more candidates (picking the best) if that first render scores low — so most runs still cost a single render. No effect without a vision model.": "Көру моделі таңдалса, PhysLab алдымен бір нұсқаны рендерлейді. Бағасы төмен болса, қосымша нұсқалар жасап, ең жақсысын таңдайды. Көру моделі болмаса, бұл баптау әсер етпейді.",
+        "Pull web references (Wikipedia) alongside the local library": "Жергілікті кітапханамен бірге веб-дереккөздерді (Wikipedia) іздеу",
+        "Fetches relevant encyclopedia intros for each run; fail-soft and time-boxed, so it never blocks a solve. Turn off for offline use.": "Әр есепке қатысты энциклопедия түсіндірмелерін іздейді. Уақыты шектелген, қате болса есепті тоқтатпайды. Офлайн режимде өшіріңіз.",
+        "Add a voiceover fit to the rendered video": "Дайын бейнеге сай диктор дауысын қосу",
+        "Narration is derived from the finished animation, then time-fit to the video (whole-clip sync). Needs edge-tts; fail-soft — a problem just keeps the silent render.": "Диктор мәтіні дайын анимацияға бейімделіп, бейнемен синхрондалады. edge-tts қажет. Қате болса, бейне дыбыссыз сақталады.",
+        "Days between successful retrieval checks, as comma-separated values (1 to 365).": "Дұрыс жауаптан кейін қайталау аралығы, күнмен және үтір арқылы (1–365).",
+        "Where indexed textbooks are stored": "Индекстелген оқулықтар сақталатын бума", "Where cache and history are stored": "Кэш пен тарих сақталатын бума",
+        "Saved to the app config and applied to the next pipeline run. Environment variables (AETHERLAB_*) still take precedence.": "Баптаулар келесі іске қосылғанда қолданылады. AETHERLAB_* орта айнымалыларының басымдығы сақталады.",
+        "Local Ollama runs models on this computer — free, private, no key.\nNo AI still solves with built-in templates and textbook references.": "Жергілікті Ollama модельді осы компьютерде іске қосады: тегін, жеке және кілт қажет емес.\nЖИ өшірулі болса да, кіріктірілген үлгілер мен оқулықтар қолжетімді.",
+        "Scene generation and rendering both target Manim Community.": "Сахнаны құрастыру мен рендер үшін Manim Community қолданылады.",
+        "Local renders on this computer. Cloud uses GitHub Actions. Auto uses cloud only for heavy scenes.": "Жергілікті режим осы компьютерде рендерлейді. Бұлт GitHub Actions қызметін қолданады. Автоматты режим бұлтты тек күрделі сахналарға қосады.",
+        "Show / hide": "Көрсету / жасыру", "Lesson and practice language": "Сабақ пен жаттығу тілі",
+    },
+    "ru": {
+        "Settings": "Настройки", "PROVIDER": "ПРОВАЙДЕР", "RENDERING": "РЕНДЕРИНГ", "VISION · CRITIQUE": "ВИЗУАЛЬНАЯ ОЦЕНКА",
+        "REFERENCES": "ИСТОЧНИКИ", "NARRATION": "ОЗВУЧКА", "LEARNING": "ОБУЧЕНИЕ", "PATHS": "ПУТИ",
+        "Provider": "Провайдер", "API key": "Ключ API", "Base URL": "Базовый URL", "Model": "Модель",
+        "Model timeout": "Тайм-аут модели", "Timeout retries": "Повторы при тайм-ауте", "Test connection": "Проверить подключение",
+        "Render engine": "Движок рендера", "Default quality": "Качество по умолчанию", "Render mode": "Режим рендера",
+        "GitHub render repo": "Репозиторий рендера GitHub", "GitHub token": "Токен GitHub", "Workflow file": "Файл workflow",
+        "Render branch": "Ветка рендера", "Auto cloud threshold": "Порог облачного рендера", "Test cloud render": "Проверить облачный рендер",
+        "View render ledger": "Журнал рендеров", "Get token": "Получить токен", "Vision model": "Модель для анализа видео",
+        "Voice": "Голос", "Review intervals (days)": "Интервалы повторения (дни)", "Library path": "Папка библиотеки",
+        "Data path": "Папка данных", "Cancel": "Отмена", "Save": "Сохранить", "Browse…": "Обзор…",
+        "Custom endpoint": "Другой сервер", "Local Ollama": "Локальная Ollama", "No AI (offline)": "Без ИИ (офлайн)",
+        "No automatic retries": "Без автоматических повторов", "Retry once": "Повторить один раз", "Manim (Community)": "Manim (Community)",
+        "Draft (480p)": "Черновик (480p)", "Standard (720p · 30 fps)": "Обычное (720p · 30 кадров/с)", "High (1080p)": "Высокое (1080p)",
+        "Local": "Локально", "Cloud": "Облако", "Auto": "Авто",
+        "When set, rendered videos are watched frame-by-frame and revised toward a quality rubric; blank skips the critique loop.": "Если указана модель, готовое видео анализируется покадрово и при необходимости улучшается. Пустое поле отключает проверку.",
+        "Multi-candidate quality (auto): render extra takes only when the first is weak": "Несколько вариантов: дополнительные рендеры создаются, только если первый получился слабым",
+        "When a vision model is set, PhysLab renders one scene and only generates more candidates (picking the best) if that first render scores low — so most runs still cost a single render. No effect without a vision model.": "С моделью анализа видео PhysLab сначала создаёт один вариант. Если оценка низкая, создаёт ещё несколько и выбирает лучший. Без модели настройка не действует.",
+        "Pull web references (Wikipedia) alongside the local library": "Искать материалы в интернете (Wikipedia) вместе с локальной библиотекой",
+        "Fetches relevant encyclopedia intros for each run; fail-soft and time-boxed, so it never blocks a solve. Turn off for offline use.": "Ищет подходящие энциклопедические материалы для каждой задачи. Ошибка или тайм-аут не блокируют решение. Для офлайн-режима отключите.",
+        "Add a voiceover fit to the rendered video": "Добавить озвучку, синхронизированную с видео",
+        "Narration is derived from the finished animation, then time-fit to the video (whole-clip sync). Needs edge-tts; fail-soft — a problem just keeps the silent render.": "Текст озвучки создаётся по готовой анимации и синхронизируется с видео. Нужен edge-tts. При ошибке видео останется без звука.",
+        "Days between successful retrieval checks, as comma-separated values (1 to 365).": "Интервалы повторения после правильных ответов, через запятую (1–365 дней).",
+        "Where indexed textbooks are stored": "Папка для проиндексированных учебников", "Where cache and history are stored": "Папка для кэша и истории",
+        "Saved to the app config and applied to the next pipeline run. Environment variables (AETHERLAB_*) still take precedence.": "Настройки сохраняются и применяются при следующем запуске. Переменные AETHERLAB_* имеют приоритет.",
+        "Local Ollama runs models on this computer — free, private, no key.\nNo AI still solves with built-in templates and textbook references.": "Локальная Ollama запускает модель на компьютере: бесплатно, конфиденциально и без ключа.\nБез ИИ доступны встроенные шаблоны и учебники.",
+        "Scene generation and rendering both target Manim Community.": "Сцены создаются и рендерятся через Manim Community.",
+        "Local renders on this computer. Cloud uses GitHub Actions. Auto uses cloud only for heavy scenes.": "Локальный режим работает на компьютере. Облачный использует GitHub Actions. Авто включает облако только для сложных сцен.",
+        "Show / hide": "Показать / скрыть", "Lesson and practice language": "Язык урока и тренировки",
+    },
+    "en": {},
+}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -116,15 +170,18 @@ class SettingsDialog(QtWidgets.QDialog):
         header_layout = QtWidgets.QHBoxLayout(header)
         header_layout.setContentsMargins(20, 14, 14, 14)
         header_layout.setSpacing(8)
-        header_layout.addWidget(icons.icon_label("settings", 16, "#94A3B8"))
+        header_layout.addWidget(icons.icon_label("settings", 16, "#65758A"))
         title = QtWidgets.QLabel("Settings")
-        title.setStyleSheet("color: #F8FAFC; font-size: 17px; font-weight: 600;")
+        title.setStyleSheet("color: #18283D; font-size: 17px; font-weight: 600;")
         header_layout.addWidget(title)
         header_layout.addStretch()
         layout.addWidget(header)
         layout.addWidget(self._hairline())
 
         body = QtWidgets.QWidget()
+        body.setObjectName("SettingsBody")
+        body.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground)
+        body.setStyleSheet("QWidget#SettingsBody { background-color: #FFFFFF; }")
         form = QtWidgets.QVBoxLayout(body)
         form.setContentsMargins(20, 16, 20, 16)
         form.setSpacing(12)
@@ -192,7 +249,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._test_btn.clicked.connect(self._test_connection)
         test_row.addWidget(self._test_btn)
         self._test_result = QtWidgets.QLabel("")
-        self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._test_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._test_result.setWordWrap(True)
         test_row.addWidget(self._test_result, 1)
         form.addLayout(test_row)
@@ -209,10 +266,10 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addLayout(self._labeled("Render engine", self._engine_combo))
 
         self._quality_combo = QtWidgets.QComboBox()
-        self._quality_combo.addItems(["Draft (480p)", "Standard (720p)", "High (1080p)"])
+        self._quality_combo.addItems(["Draft (480p)", "Standard (720p · 30 fps)", "High (1080p)"])
         from aetherlab.core.settings import load_app_config
-        saved_quality = load_app_config().get("default_quality", "l")
-        self._quality_combo.setCurrentIndex({"l": 0, "m": 1, "h": 2}.get(saved_quality, 0))
+        saved_quality = load_app_config().get("default_quality", "m")
+        self._quality_combo.setCurrentIndex({"l": 0, "m": 1, "h": 2}.get(saved_quality, 1))
         form.addLayout(self._labeled("Default quality", self._quality_combo))
 
         self._render_mode_combo = QtWidgets.QComboBox()
@@ -266,7 +323,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._ledger_btn.clicked.connect(self._open_render_ledger)
         cloud_row.addWidget(self._ledger_btn)
         self._cloud_result = QtWidgets.QLabel("")
-        self._cloud_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._cloud_result.setWordWrap(True)
         cloud_row.addWidget(self._cloud_result, 1)
         form.addLayout(cloud_row)
@@ -288,7 +345,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "When set, rendered videos are watched frame-by-frame and revised "
             "toward a quality rubric; blank skips the critique loop."
         )
-        vision_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        vision_hint.setStyleSheet("color: #65758A; font-size: 11px;")
         vision_hint.setWordWrap(True)
         form.addWidget(vision_hint)
 
@@ -299,12 +356,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._auto_tournament_check.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         form.addWidget(self._auto_tournament_check)
         auto_hint = QtWidgets.QLabel(
-            "When a vision model is set, AetherLab renders one scene and only "
+            "When a vision model is set, PhysLab renders one scene and only "
             "generates more candidates (picking the best) if that first render "
             "scores low — so most runs still cost a single render. No effect "
             "without a vision model."
         )
-        auto_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        auto_hint.setStyleSheet("color: #65758A; font-size: 11px;")
         auto_hint.setWordWrap(True)
         form.addWidget(auto_hint)
 
@@ -321,7 +378,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Fetches relevant encyclopedia intros for each run; fail-soft and "
             "time-boxed, so it never blocks a solve. Turn off for offline use."
         )
-        web_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        web_hint.setStyleSheet("color: #65758A; font-size: 11px;")
         web_hint.setWordWrap(True)
         form.addWidget(web_hint)
 
@@ -343,7 +400,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "the video (whole-clip sync). Needs edge-tts; fail-soft — a problem "
             "just keeps the silent render."
         )
-        narr_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        narr_hint.setStyleSheet("color: #65758A; font-size: 11px;")
         narr_hint.setWordWrap(True)
         form.addWidget(narr_hint)
 
@@ -389,7 +446,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Saved to the app config and applied to the next pipeline run. "
             "Environment variables (AETHERLAB_*) still take precedence."
         )
-        note.setStyleSheet("color: #64748B; font-size: 11px;")
+        note.setStyleSheet("color: #65758A; font-size: 11px;")
         note.setWordWrap(True)
         form.addWidget(note)
 
@@ -400,7 +457,8 @@ class SettingsDialog(QtWidgets.QDialog):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self._settings_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea { background: #FFFFFF; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: #FFFFFF; }"
         )
         self._settings_scroll.setWidget(body)
         layout.addWidget(self._settings_scroll, 1)
@@ -422,7 +480,42 @@ class SettingsDialog(QtWidgets.QDialog):
         save_btn.clicked.connect(self.accept)
         footer_layout.addWidget(save_btn)
         layout.addWidget(footer)
+        self._cache_translatable_widgets()
+        self.set_language("kk")
         self._fit_to_screen()
+
+    def _cache_translatable_widgets(self) -> None:
+        self._translated_widgets = []
+        for widget in self.findChildren(QtWidgets.QWidget):
+            row = {"widget": widget}
+            if isinstance(widget, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
+                row["text"] = widget.text()
+            if isinstance(widget, QtWidgets.QComboBox):
+                row["items"] = [widget.itemText(index) for index in range(widget.count())]
+            if hasattr(widget, "toolTip"):
+                row["tooltip"] = widget.toolTip()
+            if isinstance(widget, QtWidgets.QLineEdit):
+                row["placeholder"] = widget.placeholderText()
+            self._translated_widgets.append(row)
+
+    def set_language(self, language: str) -> None:
+        self._language = language if language in _SETTINGS_COPY else "kk"
+        copy = _SETTINGS_COPY[self._language]
+        for row in self._translated_widgets:
+            widget = row["widget"]
+            if isinstance(widget, (QtWidgets.QLabel, QtWidgets.QAbstractButton)):
+                original = row.get("text", "")
+                widget.setText(copy.get(original, original))
+            if isinstance(widget, QtWidgets.QComboBox):
+                for index, original in enumerate(row.get("items", [])):
+                    if index < widget.count():
+                        widget.setItemText(index, copy.get(original, original))
+            if "tooltip" in row and row["tooltip"]:
+                widget.setToolTip(copy.get(row["tooltip"], row["tooltip"]))
+            if "placeholder" in row and row["placeholder"]:
+                widget.setPlaceholderText(copy.get(row["placeholder"], row["placeholder"]))
+        self._provider_status.set_language(self._language)
+        self.setWindowTitle(copy.get("Settings", "Settings"))
 
     def _fit_to_screen(self) -> None:
         screen = self.screen() or QtWidgets.QApplication.primaryScreen()
@@ -441,7 +534,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def _hairline(self) -> QtWidgets.QFrame:
         line = QtWidgets.QFrame()
         line.setFixedHeight(1)
-        line.setStyleSheet("background-color: #1E293B;")
+        line.setStyleSheet("background-color: #D8E1EC;")
         return line
 
     def _section(self, text: str) -> QtWidgets.QLabel:
@@ -453,7 +546,7 @@ class SettingsDialog(QtWidgets.QDialog):
         box = QtWidgets.QVBoxLayout()
         box.setSpacing(4)
         label = QtWidgets.QLabel(text)
-        label.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: 500;")
+        label.setStyleSheet("color: #65758A; font-size: 12px; font-weight: 500;")
         box.addWidget(label)
         if isinstance(field, QtWidgets.QLayout):
             box.addLayout(field)
@@ -466,13 +559,13 @@ class SettingsDialog(QtWidgets.QDialog):
         row.setSpacing(6)
         row.addWidget(edit, 1)
         reveal = QtWidgets.QPushButton()
-        reveal.setIcon(icons.icon("eye", 14, "#64748B"))
+        reveal.setIcon(icons.icon("eye", 14, "#65758A"))
         reveal.setFixedSize(32, 32)
         reveal.setCheckable(True)
         reveal.setToolTip("Show / hide")
         reveal.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #1E293B; border-radius: 8px; }"
-            "QPushButton:hover { border-color: #334155; }"
+            "QPushButton { background: transparent; border: 1px solid #D8E1EC; border-radius: 8px; }"
+            "QPushButton:hover { border-color: #A5B6CB; }"
         )
         reveal.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
@@ -482,7 +575,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 if checked
                 else QtWidgets.QLineEdit.EchoMode.Password
             )
-            reveal.setIcon(icons.icon("eye-off" if checked else "eye", 14, "#64748B"))
+            reveal.setIcon(icons.icon("eye-off" if checked else "eye", 14, "#65758A"))
 
         reveal.toggled.connect(_toggle)
         row.addWidget(reveal)
@@ -495,7 +588,7 @@ class SettingsDialog(QtWidgets.QDialog):
         row.addWidget(edit, 1)
         browse = QtWidgets.QPushButton("Browse…")
         browse.setObjectName("SecondaryButton")
-        browse.setIcon(icons.icon("folder-open", 13, "#94A3B8"))
+        browse.setIcon(icons.icon("folder-open", 13, "#65758A"))
         browse.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
         def _browse() -> None:
@@ -521,16 +614,16 @@ class SettingsDialog(QtWidgets.QDialog):
             if models:
                 self._model_edit.setText(models[0])
                 self._model_edit.setToolTip("Installed: " + ", ".join(models[:12]))
-                self._test_result.setStyleSheet("color: #10B981; font-size: 11px;")
+                self._test_result.setStyleSheet("color: #26725C; font-size: 11px;")
                 self._test_result.setText(f"Ollama detected — {len(models)} model(s) installed.")
             else:
-                self._test_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+                self._test_result.setStyleSheet("color: #8A5A24; font-size: 11px;")
                 self._test_result.setText(
                     "Ollama not detected. Install from ollama.com, then run "
                     "`ollama pull qwen2.5:7b` and reopen Settings."
                 )
         elif index == 2:  # No AI (offline)
-            self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+            self._test_result.setStyleSheet("color: #65758A; font-size: 11px;")
             self._test_result.setText(
                 "Offline mode: built-in domain templates + textbook references, no LLM."
             )
@@ -543,7 +636,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if self._provider_task and self._provider_task.is_running:
             return
         self._test_btn.setEnabled(False)
-        self._test_result.setStyleSheet("color: #64748B; font-size: 11px;")
+        self._test_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._test_result.setText("Testing…")
         probe = replace(
             self._settings,
@@ -576,7 +669,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Connection test returned an invalid result.",
         )
         self._test_result.setStyleSheet(
-            f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;"
+            f"color: {'#26725C' if ok else '#AC4055'}; font-size: 11px;"
         )
         self._test_result.setText(str(message))
 
@@ -614,7 +707,7 @@ class SettingsDialog(QtWidgets.QDialog):
             cloud_render_threshold=float(self._cloud_threshold.value()),
         )
         self._cloud_test_btn.setEnabled(False)
-        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._cloud_result.setText("Setting up render repo…")
 
         def setup_cloud(cancel, _progress):
@@ -655,16 +748,16 @@ class SettingsDialog(QtWidgets.QDialog):
             "Cloud setup returned an invalid result.",
         )
         self._cloud_result.setStyleSheet(
-            f"color: {'#10B981' if ok else '#F43F5E'}; font-size: 11px;"
+            f"color: {'#26725C' if ok else '#AC4055'}; font-size: 11px;"
         )
         self._cloud_result.setText(str(message))
 
     def _get_github_token(self) -> None:
         client_id = getattr(self._settings, "github_oauth_client_id", "") or ""
         if not client_id:
-            self._cloud_result.setStyleSheet("color: #F59E0B; font-size: 11px;")
+            self._cloud_result.setStyleSheet("color: #8A5A24; font-size: 11px;")
             self._cloud_result.setText(
-                "Device login needs an AetherLab GitHub OAuth client id. Set AETHERLAB_GITHUB_CLIENT_ID or paste a fine-grained token."
+                "Device login needs a PhysLab GitHub OAuth client id. Set AETHERLAB_GITHUB_CLIENT_ID or paste a fine-grained token."
             )
             return
         if self._github_task and self._github_task.is_running:
@@ -710,7 +803,7 @@ class SettingsDialog(QtWidgets.QDialog):
             raise TimeoutError("GitHub device login timed out.")
 
         self._get_token_btn.setEnabled(False)
-        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._cloud_result.setText("Requesting GitHub device code…")
         self._github_task = BackgroundTask(authorize)
         self._github_task.progress.connect(self._on_github_device_code)
@@ -728,7 +821,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not isinstance(payload, tuple) or len(payload) != 2:
             return
         url, code = str(payload[0]), str(payload[1])
-        self._cloud_result.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #65758A; font-size: 11px;")
         self._cloud_result.setText(f"Enter code {code} at {url}. Waiting for authorization…")
         webbrowser.open(url)
 
@@ -736,11 +829,11 @@ class SettingsDialog(QtWidgets.QDialog):
         if not token:
             return
         self._github_token_edit.setText(str(token))
-        self._cloud_result.setStyleSheet("color: #10B981; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #26725C; font-size: 11px;")
         self._cloud_result.setText("GitHub token received.")
 
     def _on_github_login_failed(self, message: str) -> None:
-        self._cloud_result.setStyleSheet("color: #F43F5E; font-size: 11px;")
+        self._cloud_result.setStyleSheet("color: #AC4055; font-size: 11px;")
         self._cloud_result.setText(f"GitHub device login failed: {message[:160]}")
 
     def _cancel_background_tasks(self) -> None:
@@ -769,7 +862,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "base_url": self._base_url_edit.text().strip() or None,
             "library_path": self._library_edit.text().strip(),
             "data_dir": self._data_edit.text().strip(),
-            "default_quality": quality_map.get(self._quality_combo.currentIndex(), "l"),
+            "default_quality": quality_map.get(self._quality_combo.currentIndex(), "m"),
             "render_mode": mode_map.get(self._render_mode_combo.currentIndex(), "local"),
             "github_repo": self._github_repo_edit.text().strip(),
             "github_token": self._github_token_edit.text().strip() or None,
@@ -815,16 +908,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_solver: SolverResult | None = None
         self._has_result = False
         self._timeline_started = False
-        from aetherlab.services.course_mode import CourseProgressStore
-
-        self.course_progress = CourseProgressStore(
-            self.settings.data_dir / "course_progress.json",
-            review_intervals_days=self.settings.review_intervals_days,
-        )
 
         self.setObjectName("MainWindow")
-        self.setWindowTitle("AetherLab")
-        self.setWindowIcon(icons.icon("atom", 24, "#06B6D4"))
+        self.setWindowTitle("PhysLab")
+        self.setWindowIcon(icons.icon("atom", 24, "#486A91"))
 
         # Responsive sizing (#15)
         screen = QtWidgets.QApplication.primaryScreen()
@@ -847,6 +934,53 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toast = Toast()
         self.stepper = PipelineStepper()
         self.command_bar = CommandBar()
+        # Apply the saved Settings default: without this a restart always falls
+        # back to Standard (m) even when the user saved Draft or High.
+        from aetherlab.core.settings import load_app_config
+
+        self.command_bar.set_quality(load_app_config().get("default_quality", "m"))
+
+        current_language = self.command_bar.get_language()
+        from aetherlab.services.course_mode import CourseProgressStore
+        from aetherlab.services.student_profiles import StudentProfileStore
+
+        default_profile_name = {
+            "kk": "Оқушы 1",
+            "ru": "Ученик 1",
+            "en": "Learner 1",
+        }[current_language]
+        self.student_profile_store = StudentProfileStore(
+            self.settings.data_dir, default_name=default_profile_name
+        )
+        self.active_student_profile = self.student_profile_store.active_profile()
+        from aetherlab.services.ai_help_quota import DAILY_AI_HELP_LIMIT
+        self._daily_ai_help_limit = DAILY_AI_HELP_LIMIT
+        self._update_ai_help_quota()
+        self.ent_progress_path = self.active_student_profile.progress_path
+        self.course_progress = CourseProgressStore(
+            self.active_student_profile.course_progress_path,
+            review_intervals_days=self.settings.review_intervals_days,
+        )
+        self.student_dashboard = StudentDashboard(
+            self.ent_progress_path,
+            language=current_language,
+            profile_name=self.active_student_profile.name,
+        )
+        self._dashboard_refresh_date = date.today()
+        self.student_dashboard.set_profile(
+            self.active_student_profile.name,
+            self.active_student_profile.avatar_path,
+        )
+        self.title_bar.set_profile(
+            self.active_student_profile.name,
+            self.active_student_profile.avatar_path,
+        )
+        self.topic_catalog = TopicCatalogView(
+            self.ent_progress_path, language=current_language
+        )
+        self.progress_overview = ProgressOverview(
+            self.ent_progress_path, language=current_language
+        )
 
         self.empty_view = EmptyStateView()
         self.running_view = RunningView()
@@ -858,6 +992,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history_panel = HistoryPanel()
         self.lesson_view = LessonView()
         self.lesson_worker: LessonWorker | None = None
+        self._pending_lesson_answers: dict = {}
 
         # ── Solve page: derivation | references ──
         solve_page = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -880,7 +1015,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         self._param_side.setStyleSheet(
-            "QFrame { background-color: #0D0D14; border-left: 1px solid #1E293B; }"
+            "QFrame { background-color: #FFFFFF; border-left: 1px solid #D8E1EC; }"
         )
         side_layout = QtWidgets.QVBoxLayout(self._param_side)
         side_layout.setContentsMargins(0, 8, 0, 8)
@@ -891,7 +1026,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ── Workspace stack (one workspace, rail-driven) ──
         self._workspace = QtWidgets.QStackedWidget()
-        # Transparent so the BlueprintBackdrop grid shows through card gaps.
+        # Transparent so the dark graphite backdrop shows through card gaps.
         self._workspace.setStyleSheet("QStackedWidget { background: transparent; }")
         self._workspace.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self._workspace.addWidget(self.empty_view)      # 0
@@ -901,14 +1036,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace.addWidget(self.library_panel)   # 4
         self._workspace.addWidget(self.history_panel)   # 5
         self._workspace.addWidget(self.lesson_view)     # 6
-        self._workspace.setCurrentIndex(PAGE_EMPTY)
+        self._workspace.addWidget(self.student_dashboard)  # 7
+        self._workspace.addWidget(self.topic_catalog)      # 8
+        self._workspace.addWidget(self.progress_overview)  # 9
+        self._workspace.setCurrentIndex(PAGE_STUDENT_HOME)
 
         # ── Timeline strip (hidden until first run) ──
         self._timeline_strip = QtWidgets.QWidget()
         strip_layout = QtWidgets.QVBoxLayout(self._timeline_strip)
         strip_layout.setContentsMargins(28, 8, 28, 4)
         strip_layout.addWidget(self.stepper)
-        self._timeline_strip.setStyleSheet("border-bottom: 1px solid #1E293B;")
+        self._timeline_strip.setStyleSheet("border-bottom: 1px solid #D8E1EC;")
         self._timeline_strip.hide()
 
         # ── Toast area ──
@@ -924,10 +1062,11 @@ class MainWindow(QtWidgets.QMainWindow):
         center_layout.setSpacing(0)
         center_layout.addWidget(toast_area)
         center_layout.addWidget(self._timeline_strip)
-        # Blueprint-grid backdrop behind the workspace (precision-instrument feel).
+        # Deep graphite backdrop behind the workspace.
         from aetherlab.ui.widgets import BlueprintBackdrop
         center_layout.addWidget(BlueprintBackdrop(self._workspace), 1)
         center_layout.addWidget(self.command_bar)
+        self.command_bar.hide()
 
         # ── Shell: title bar over (rail | center) ──
         shell = QtWidgets.QWidget()
@@ -950,6 +1089,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connect_signals()
 
         # Initial state
+        self.sidebar.set_language(current_language)
+        self.empty_view.set_language(current_language)
+        self.title_bar.set_language(current_language)
+        self.toast.set_language(current_language)
+        self.stepper.set_language(current_language)
+        self.command_bar.set_language(current_language)
+        self.simulation_panel.set_language(current_language)
+        self.library_panel.set_language(current_language)
+        self.history_panel.set_language(current_language)
+        self.lesson_view.set_language(current_language)
+        self.title_bar.set_page_title(self.sidebar.label_for(0))
         self.sidebar.set_result_available(False)
         self.library_panel.set_settings(settings)
         self.empty_view.set_status(
@@ -960,7 +1110,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history_panel.init_persistence(settings.data_dir / "history.sqlite3")
 
         provider_note = settings.llm_model if settings.openai_api_key else "No API key"
-        self.statusBar().showMessage(f"AetherLab ready · {provider_note}")
+        self.statusBar().showMessage(f"PhysLab ready · {provider_note}")
+
+        self._ai_quota_timer = QtCore.QTimer(self)
+        self._ai_quota_timer.setInterval(60_000)
+        self._ai_quota_timer.timeout.connect(self._refresh_ai_help_quota)
+        self._ai_quota_timer.start()
 
         # When no provider is configured, quietly look for a local Ollama and
         # offer one-click local AI on the empty state.
@@ -980,7 +1135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sc_toggle_code = QtGui.QShortcut("Ctrl+Shift+C", self)
         sc_toggle_code.activated.connect(self._toggle_code_view)
 
-        for i in range(5):
+        for i in range(len(SidebarNav._ITEMS)):
             sc = QtGui.QShortcut(f"Ctrl+{i + 1}", self)
             sc.activated.connect(lambda idx=i: self.sidebar.select(idx))
 
@@ -996,13 +1151,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def _connect_signals(self) -> None:
         self.sidebar.item_selected.connect(self._on_sidebar_select)
         self.title_bar.settings_requested.connect(self._open_settings)
+        self.title_bar.language_changed.connect(self._on_title_language_changed)
+        self.title_bar.profile_requested.connect(self._manage_student_profiles)
+        self.command_bar._language.currentIndexChanged.connect(
+            self._on_student_language_changed
+        )
 
         self.command_bar.submitted.connect(self.start_pipeline)
         self.command_bar.learn_requested.connect(self.start_lesson)
+        self.command_bar.practice_requested.connect(self.open_exam_practice)
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
         self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
+        self.lesson_view.study_pdf_requested.connect(self._open_study_pdf)
         self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
+        self.lesson_view.quiz_save_retry_requested.connect(self._retry_lesson_quiz_answer)
         self.lesson_view.review_due_clicked.connect(self._review_due_questions)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
         self.stepper.cancel_requested.connect(self._cancel_pipeline)
@@ -1012,9 +1175,46 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Empty-state calls to action
         self.empty_view.example_picked.connect(self._prefill_prompt)
+        self.empty_view.ent_requested.connect(
+            lambda: self.open_exam_practice(self.command_bar.get_language())
+        )
         self.empty_view.ollama_requested.connect(self._enable_ollama)
         self.empty_view.settings_requested.connect(self._open_settings)
-        self.empty_view.library_requested.connect(lambda: self.sidebar.select(1))
+        self.empty_view.library_requested.connect(lambda: self.sidebar.select(5))
+
+        self.student_dashboard.profile_requested.connect(self._manage_student_profiles)
+        self.student_dashboard.leaderboard_requested.connect(self._open_school_leaderboard)
+        self.student_dashboard.plan_settings_requested.connect(
+            lambda: self.open_exam_practice(self.command_bar.get_language())
+        )
+        self.student_dashboard.weekly_mock_requested.connect(
+            lambda: self.open_exam_practice(
+                self.command_bar.get_language(), start_mode="timed"
+            )
+        )
+        self.student_dashboard.learn_topic_requested.connect(self._start_ent_topic_lesson)
+        self.student_dashboard.topics_requested.connect(lambda: self.sidebar.select(1))
+        self.student_dashboard.progress_requested.connect(lambda: self.sidebar.select(3))
+        self.student_dashboard.mistakes_requested.connect(
+            lambda: self.open_exam_practice(self.command_bar.get_language(), review_mistakes=True)
+        )
+        self.student_dashboard.practice_topic_requested.connect(
+            lambda topic_id: self.open_exam_practice(
+                self.command_bar.get_language(), topic_id=topic_id
+            )
+        )
+        self.topic_catalog.learn_topic_requested.connect(self._start_ent_topic_lesson)
+        self.topic_catalog.practice_topic_requested.connect(
+            lambda topic_id: self.open_exam_practice(
+                self.command_bar.get_language(), topic_id=topic_id
+            )
+        )
+        self.progress_overview.mistakes_requested.connect(
+            lambda: self.open_exam_practice(self.command_bar.get_language(), review_mistakes=True)
+        )
+        self.progress_overview.practice_requested.connect(
+            lambda: self.open_exam_practice(self.command_bar.get_language())
+        )
 
         # In-context exports (design: actions live on the content, no menu bar)
         self.analysis_panel.export_latex_requested.connect(self._export_latex)
@@ -1045,6 +1245,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not hasattr(self, "_param_side"):
             return
         width = max(self.width(), self.minimumWidth())
+        if hasattr(self, "sidebar"):
+            self.sidebar.set_expanded(width >= 1320)
         side_width = max(220, min(320, int(width * 0.24)))
         if width < 900:
             side_width = 220
@@ -1075,14 +1277,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         model = self._ollama_models[0] if self._ollama_models else ""
-        save_app_config(
-            {
-                "provider_preset": "ollama",
-                "model": model,
-                "base_url": OLLAMA_OPENAI_BASE_URL,
-                "api_key": "ollama",
-            }
-        )
+        try:
+            save_app_config(
+                {
+                    "provider_preset": "ollama",
+                    "model": model,
+                    "base_url": OLLAMA_OPENAI_BASE_URL,
+                    "api_key": "ollama",
+                }
+            )
+        except (OSError, ValueError):
+            self._report_settings_save_failure()
+            return
         self.settings = load_settings()
         self._refresh_empty_status()
         self.toast.show_message(
@@ -1090,40 +1296,46 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Local AI enabled via Ollama ({self.settings.llm_model}). "
             "You can change the model in Settings.",
         )
-        self.statusBar().showMessage(f"AetherLab ready · {self.settings.llm_model} (local)")
+        self.statusBar().showMessage(f"PhysLab ready · {self.settings.llm_model} (local)")
 
     def _on_sidebar_select(self, index: int) -> None:
-        """Rail items are pure destinations (design spatial model).
-
-        0 Solve · 1 Refs · 2 Scene · 3 Params (Scene + parameter panel) ·
-        4 History. Solve/Scene show the running or empty state until a
-        result exists.
-        """
+        """Route the student-first rail while keeping the original lab available."""
+        previous_destination = getattr(self, "_current_nav_index", 0)
+        if index != 2:
+            self._current_nav_index = index
+        language = self.command_bar.get_language()
+        self.sidebar.set_language(language)
+        self.title_bar.set_page_title(self.sidebar.label_for(previous_destination if index == 2 else index))
         if index == 0:
-            if self._is_running():
-                self._workspace.setCurrentIndex(PAGE_RUNNING)
-            elif self._has_result:
-                self._workspace.setCurrentIndex(PAGE_SOLVE)
-            else:
-                self._refresh_empty_status()
-                self._workspace.setCurrentIndex(PAGE_EMPTY)
+            self.student_dashboard.set_language(language)
+            self._workspace.setCurrentIndex(
+                PAGE_RUNNING if self._is_running() else PAGE_STUDENT_HOME
+            )
         elif index == 1:
+            self.topic_catalog.set_language(language)
+            self._workspace.setCurrentIndex(PAGE_TOPICS)
+        elif index == 2:
+            self.sidebar.set_current(previous_destination)
+            self.open_exam_practice(language)
+            return
+        elif index == 3:
+            self.progress_overview.set_language(language)
+            self._workspace.setCurrentIndex(PAGE_PROGRESS)
+        elif index == 4:
+            self._refresh_empty_status()
+            self._workspace.setCurrentIndex(PAGE_EMPTY)
+        elif index == 5:
             self.library_panel.refresh()
             self._workspace.setCurrentIndex(PAGE_LIBRARY)
-        elif index == 2:
+        elif index == 6:
+            self._workspace.setCurrentIndex(PAGE_HISTORY)
+        elif index == 7:
             if self._is_running():
                 self._workspace.setCurrentIndex(PAGE_RUNNING)
             else:
-                self._workspace.setCurrentIndex(
-                    PAGE_SCENE if self._has_result else PAGE_EMPTY
-                )
-        elif index == 3:
-            # Params: reveal the parameter side panel on the Scene page
-            self._param_side.setVisible(not self._param_side.isVisible())
-            self._apply_responsive_layout()
-            self._workspace.setCurrentIndex(PAGE_SCENE)
-        elif index == 4:
-            self._workspace.setCurrentIndex(PAGE_HISTORY)
+                self._param_side.setVisible(self._has_result)
+                self._apply_responsive_layout()
+                self._workspace.setCurrentIndex(PAGE_SCENE)
 
         # The timeline belongs to the pipeline views (design: workspace strip);
         # keep Library and History uncluttered.
@@ -1131,6 +1343,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._timeline_started and self._workspace.currentIndex()
             in (PAGE_RUNNING, PAGE_SOLVE, PAGE_SCENE)
         )
+        # Keep the exam-preparation screens focused. The prompt dock remains
+        # available in the tutor and physics-workbench sections.
+        self.command_bar.setVisible(index >= 4)
 
     def _refresh_empty_status(self) -> None:
         self.empty_view.set_status(
@@ -1138,6 +1353,117 @@ class MainWindow(QtWidgets.QMainWindow):
             self.settings.llm_model,
             self.library_panel.library_file_count(),
         )
+
+    def _on_student_language_changed(self, _index: int = -1) -> None:
+        language = self.command_bar.get_language()
+        self.title_bar.set_language(language)
+        self.sidebar.set_language(language)
+        self.command_bar.set_language(language)
+        self.toast.set_language(language)
+        self.stepper.set_language(language)
+        self.simulation_panel.set_language(language)
+        self.library_panel.set_language(language)
+        self.history_panel.set_language(language)
+        self.lesson_view.set_language(language)
+        self.title_bar.set_page_title(
+            self.sidebar.label_for(self.sidebar.selected_index())
+        )
+        self.student_dashboard.set_language(language)
+        self.topic_catalog.set_language(language)
+        self.progress_overview.set_language(language)
+        self.empty_view.set_language(language)
+        if getattr(self, "_last_lesson", None) is not None:
+            self._refresh_course_summary(self._last_lesson)
+        self._refresh_prebuilt_lesson_language(language)
+
+    def _refresh_prebuilt_lesson_language(self, language: str) -> None:
+        """Select packaged content in the header language without an AI request."""
+        from aetherlab.services.ent_lesson_catalog import (
+            ACCELERATED_MOTION_5MIN_ID,
+            ACCELERATED_MOTION_5MIN_VERSION,
+            is_prebuilt_ent_topic,
+        )
+
+        worker = self.lesson_worker
+        if worker and worker.isRunning():
+            if is_prebuilt_ent_topic(getattr(worker, "topic", "")):
+                self._pending_prebuilt_language = language
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        bundle = getattr(self, "_last_lesson", None)
+        route_known = is_prebuilt_ent_topic(getattr(self, "_last_lesson_topic", ""))
+        if (bundle is not None and (route_known or bundle.plan.model_name == ACCELERATED_MOTION_5MIN_VERSION)
+                and bundle.plan.language != language):
+            self.start_lesson(ACCELERATED_MOTION_5MIN_ID, language=language)
+
+    def _manage_student_profiles(self) -> None:
+        from aetherlab.services.course_mode import CourseProgressStore
+        from aetherlab.ui.profile_dialog import _COPY, StudentProfileDialog
+
+        language = self.command_bar.get_language()
+        previous_profile_id = self.active_student_profile.id
+        dialog = None
+        try:
+            # Read before opening a modal dialog, so an inaccessible registry
+            # reports an error without stranding the user in an empty selector.
+            self.student_profile_store.active_profile()
+            dialog = StudentProfileDialog(self.student_profile_store, language=language, parent=self)
+            result = dialog.exec()
+            profile = (
+                dialog.selected_profile
+                if result == QtWidgets.QDialog.DialogCode.Accepted
+                else self.student_profile_store.active_profile()
+            )
+        except (OSError, ValueError):
+            self.statusBar().showMessage(_COPY[language]["load_error"])
+            if dialog is not None:
+                dialog.deleteLater()
+            return
+        if profile is None:
+            return
+
+        self.active_student_profile = profile
+        quota_ready = self._update_ai_help_quota()
+        self.ent_progress_path = profile.progress_path
+        self.student_dashboard.progress_path = profile.progress_path
+        self.student_dashboard.set_profile(profile.name, profile.avatar_path)
+        self.title_bar.set_profile(profile.name, profile.avatar_path)
+        self.topic_catalog.progress_path = profile.progress_path
+        self.progress_overview.progress_path = profile.progress_path
+        self.course_progress = CourseProgressStore(
+            profile.course_progress_path,
+            review_intervals_days=self.settings.review_intervals_days,
+        )
+        self.student_dashboard.refresh()
+        self.topic_catalog.refresh()
+        self.progress_overview.refresh()
+        if getattr(self, "_last_lesson", None) is not None:
+            if profile.id != previous_profile_id:
+                # Public lesson content can be shared; selected answers,
+                # confidence and completed gates belong to the learner.
+                self.lesson_view.set_lesson(self._last_lesson)
+                self.lesson_view.restart_for_student()
+                self._restore_pending_lesson_answers()
+            self._refresh_course_summary(self._last_lesson)
+        if quota_ready:
+            self.statusBar().showMessage(profile.name)
+
+    def _open_school_leaderboard(self) -> None:
+        from aetherlab.ui.leaderboard_dialog import LeaderboardDialog
+
+        dialog = LeaderboardDialog(
+            self.student_profile_store,
+            self.active_student_profile,
+            language=self.command_bar.get_language(),
+            parent=self,
+        )
+        dialog.exec()
+
+    def _on_title_language_changed(self, language: str) -> None:
+        index = self.command_bar._language.findData(language)
+        if index >= 0 and index != self.command_bar._language.currentIndex():
+            self.command_bar._language.setCurrentIndex(index)
 
     def _is_running(self) -> bool:
         return bool(self.worker and self.worker.isRunning())
@@ -1337,14 +1663,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_export_task("Converting video to GIF…", export_gif)
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = getattr(self, "_settings_save_draft", None)
+        if dialog is None:
+            dialog = SettingsDialog(self.settings, self)
+        dialog.set_language(self.command_bar.get_language())
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             vals = dialog.get_settings()
 
             # Persist to the app config so the values survive restarts.
             from aetherlab.core.settings import load_settings, save_app_config
-            save_app_config(
-                {
+            try:
+                save_app_config({
                     "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
                     "llm_timeout_seconds": vals["llm_timeout_seconds"],
@@ -1367,8 +1696,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
                     "review_intervals_days": vals["review_intervals_days"],
-                }
-            )
+                })
+            except (OSError, ValueError):
+                self._settings_save_draft = dialog
+                self._report_settings_save_failure(reopen=True)
+                return
+            self._settings_save_draft = None
 
             # Re-resolve the just-saved config through the canonical precedence
             # chain. Direct replacement made a saved key appear active until
@@ -1379,7 +1712,7 @@ class MainWindow(QtWidgets.QMainWindow):
             from aetherlab.services.course_mode import CourseProgressStore
 
             self.course_progress = CourseProgressStore(
-                self.settings.data_dir / "course_progress.json",
+                self.active_student_profile.course_progress_path,
                 review_intervals_days=self.settings.review_intervals_days,
             )
             self.library_panel.set_settings(self.settings)
@@ -1392,6 +1725,32 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.settings.llm_model if self.settings.openai_api_key else "No API key"
             )
             self.statusBar().showMessage(f"Settings saved · {provider_note}")
+        else:
+            self._settings_save_draft = None
+
+    def _report_settings_save_failure(self, *, reopen: bool = False) -> None:
+        message, retry = {
+            "kk": ("Баптауларды сақтау мүмкін болмады. Баптаулар папкасына қолжетімділікті тексеріңіз.",
+                   "Енгізілген мәндер сақталды. Қайталау үшін баптауларды қайта ашыңыз."),
+            "ru": ("Не удалось сохранить настройки. Проверьте доступ к папке настроек.",
+                   "Введённые значения сохранены. Откройте настройки снова, чтобы повторить."),
+            "en": ("Could not save settings. Check access to the settings folder.",
+                   "Your entries are retained. Open Settings again to retry."),
+        }[normalize_language(self.command_bar.get_language(), "kk")]
+        if reopen:
+            message += " " + retry
+        self.statusBar().showMessage(message)
+        self.toast.show_message("warning", message)
+
+    def _apply_reference_sources_settings(self, settings) -> None:
+        """Apply a folder chosen from either the library or ENT practice UI."""
+        self.settings = settings
+        if hasattr(self, "library_panel"):
+            self.library_panel.set_settings(settings)
+        path = getattr(settings, "reference_sources_path", None)
+        self.statusBar().showMessage(
+            f"Reference source folder saved · {path}" if path else "Reference source folder cleared."
+        )
 
     def _toggle_code_view(self) -> None:
         self._workspace.setCurrentIndex(PAGE_SCENE)
@@ -1416,6 +1775,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.toast.show_message("warning", "Cancelling lesson…")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        if self._pending_lesson_answers and not self._confirm_discard_pending_lesson_answers():
+            self._close_pending = False
+            event.ignore()
+            return
+        self._pending_lesson_answers.clear()
         probe = getattr(self, "_ollama_probe", None)
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
@@ -1444,7 +1808,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._close_pending = False
         super().closeEvent(event)
 
+    def _confirm_discard_pending_lesson_answers(self) -> bool:
+        language = self.command_bar.get_language()
+        title, message, discard_text, keep_text = {
+            "kk": ("Жауаптар әлі расталмады", "Кейбір жауаптардың сақталғаны расталмады. Барлық профильдердің расталмаған жауаптарын сақтамай жабу керек пе?", "Сақтамай жабу", "Қосымшада қалу"),
+            "ru": ("Сохранение ответов не подтверждено", "Для некоторых ответов сохранение не подтверждено. Закрыть приложение без сохранения этих ответов во всех профилях?", "Закрыть без сохранения", "Остаться в приложении"),
+            "en": ("Answer saving is unconfirmed", "Some answer saves could not be confirmed. Close without saving these answers in all profiles?", "Close without saving", "Stay in the app"),
+        }[language]
+        dialog = QtWidgets.QMessageBox(self)
+        dialog.setWindowTitle(title)
+        dialog.setText(message)
+        discard = dialog.addButton(discard_text, QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        keep = dialog.addButton(keep_text, QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(keep)
+        dialog.setEscapeButton(keep)
+        dialog.exec()
+        return dialog.clickedButton() is discard
+
     def _close_when_idle(self) -> None:
+        if not self._close_pending:
+            return
         threads = [
             getattr(self, "_ollama_probe", None),
             self.worker,
@@ -1460,17 +1843,36 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── topic explainer (Learn) ──
 
-    def start_lesson(self, topic: str, regenerate: bool = False) -> None:
+    def start_lesson(
+        self,
+        topic: str,
+        language: str | None = None,
+        voiceover: bool | None = None,
+        regenerate: bool = False,
+    ) -> None:
         if self.lesson_worker and self.lesson_worker.isRunning():
             self.statusBar().showMessage("A lesson is already being built.")
             return
         if self.worker and self.worker.isRunning():
             self.statusBar().showMessage("Finish or cancel the current run first.")
             return
+        from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
+
+        if not is_prebuilt_ent_topic(topic) and not self._try_consume_ai_help():
+            return
 
         self._last_lesson_topic = topic
+        language = normalize_language(language or self.command_bar.get_language(), "kk")
+        self._last_lesson_language = language
+        voiceover = (
+            self.command_bar.get_voiceover_enabled()
+            if voiceover is None else bool(voiceover)
+        )
+        self._last_lesson_voiceover = voiceover
+        lesson_settings = replace(self.settings, narration_enabled=voiceover)
         self.lesson_worker = LessonWorker(
-            topic, self.settings, quality=self.command_bar.get_render_quality(),
+            topic, lesson_settings, audience="high_school", language=language,
+            quality=self.command_bar.get_render_quality(),
             regenerate=regenerate,
         )
         self.lesson_worker.progress.connect(self._on_lesson_progress)
@@ -1494,141 +1896,357 @@ class MainWindow(QtWidgets.QMainWindow):
         if not topic:
             self.statusBar().showMessage("No lesson to regenerate yet.")
             return
-        self.start_lesson(topic, regenerate=True)
+        self.start_lesson(
+            topic,
+            language=getattr(self, "_last_lesson_language", self.command_bar.get_language()),
+            voiceover=getattr(
+                self, "_last_lesson_voiceover", self.command_bar.get_voiceover_enabled()
+            ),
+            regenerate=True,
+        )
+
+    def open_exam_practice(
+        self, language: str = "kk", *, topic_id: str | None = None,
+        review_mistakes: bool = False, start_mode: str | None = None,
+    ) -> None:
+        from aetherlab.ui.exam_practice import ExamPracticeDialog
+
+        active_dialog = getattr(self, "_practice_dialog", None)
+        if active_dialog is not None:
+            active_dialog.raise_()
+            active_dialog.activateWindow()
+            return
+        dialog = ExamPracticeDialog(
+            language, self, progress_path=self.ent_progress_path, topic_id=topic_id,
+            start_mode=start_mode,
+        )
+        self._practice_dialog = dialog
+        if review_mistakes:
+            dialog._start_mistake_review()
+        try:
+            dialog.exec()
+        finally:
+            self._practice_dialog = None
+            dialog.deleteLater()
+        self.student_dashboard.refresh()
+        self.topic_catalog.refresh()
+        self.progress_overview.refresh()
+
+    def _start_ent_topic_lesson(self, topic: str) -> None:
+        from aetherlab.services.ent_lesson_catalog import is_prebuilt_ent_topic
+
+        language = self.command_bar.get_language()
+        normalized = str(topic or "").casefold().replace("_", " ").replace("-", " ")
+        if is_prebuilt_ent_topic(topic) or normalized == "constant acceleration":
+            self.start_lesson(
+                "constant_acceleration_5min", language=language,
+                voiceover=self.command_bar.get_voiceover_enabled(),
+            )
+            return
+        if "кинематик" in normalized or "kinematic" in normalized or "кинематика" in normalized:
+            # The prebuilt 5-minute lesson covers this specific kinematics unit.
+            self.start_lesson(
+                "constant_acceleration_5min", language=language,
+                voiceover=self.command_bar.get_voiceover_enabled(),
+            )
+            return
+        self.start_lesson(
+            f"Explain {topic} for a high-school student preparing for Kazakhstan's UNT. "
+            "Use simple language, define every new term, show one worked example, "
+            "then give a short practice question.",
+            language=language,
+            voiceover=self.command_bar.get_voiceover_enabled(),
+        )
 
     def _on_lesson_worker_finished(self) -> None:
         # Bound method (not a lambda) so a QThread finishing after the window
         # is destroyed cannot touch the deleted command bar.
         self.command_bar.set_busy(False)
+        pending = getattr(self, "_pending_prebuilt_language", "")
+        self._pending_prebuilt_language = ""
+        cancel = getattr(self.lesson_worker, "_cancel", None)
+        if pending and not (cancel is not None and cancel.is_set()):
+            self._refresh_prebuilt_lesson_language(self.command_bar.get_language())
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
-        self.statusBar().showMessage(f"Lesson · {message}")
+        language = getattr(getattr(self, "lesson_worker", None), "language", self.command_bar.get_language())
+        self.statusBar().showMessage(f"{lesson_message(language, 'lesson')} · {message}")
 
     def on_lesson_ready(self, bundle) -> None:
         self.command_bar.set_busy(False)
         self.stepper.set_cancellable(False)
+        previous = getattr(self, "_last_lesson", None)
+        previous_hash = getattr(getattr(previous, "plan", None), "prebuilt_content_hash", "")
+        # A translation is the same attempt. Only a validated shared content
+        # snapshot permits choice-index mapping; new lessons and explicit
+        # same-language restarts keep their normal fresh-question behaviour.
+        translated_answers = (
+            self.lesson_view.question_answer_state()
+            if previous_hash
+            and previous_hash == getattr(bundle.plan, "prebuilt_content_hash", "")
+            and previous.plan.language != bundle.plan.language
+            else {}
+        )
 
         # A cancelled lesson may have partial/no video — never dump the student
         # on a blank page with no explanation.
         if bundle.status == "cancelled":
-            self._last_lesson = bundle
             if bundle.video_path:
+                self._last_lesson = bundle
                 self.lesson_view.set_lesson(bundle)
+                self.lesson_view.set_audio_enabled(getattr(self, "_last_lesson_voiceover", True))
+                self._restore_pending_lesson_answers()
                 self._refresh_course_summary(bundle)
                 self.lesson_view.set_video(bundle.video_path)
                 self._workspace.setCurrentIndex(PAGE_LESSON)
                 self.toast.show_message(
                     "warning",
-                    "Lesson cancelled — showing the chapters that finished. "
-                    "Press Learn again to build the rest.",
+                    lesson_message(bundle.plan.language, "cancel_partial"),
                 )
             else:
-                self._workspace.setCurrentIndex(PAGE_LESSON if self._last_lesson else PAGE_EMPTY)
+                self._workspace.setCurrentIndex(PAGE_LESSON if getattr(self, "_last_lesson", None) else PAGE_EMPTY)
                 self.toast.show_message(
-                    "warning", "Lesson cancelled before any chapter finished.",
+                    "warning", lesson_message(bundle.plan.language, "cancel_empty"),
                 )
-            self.statusBar().showMessage("Lesson cancelled.")
+            self.statusBar().showMessage(lesson_message(bundle.plan.language, "stage_cancelled"))
             return
 
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
+        self.lesson_view.set_audio_enabled(getattr(self, "_last_lesson_voiceover", True))
+        for index, answer in translated_answers.items():
+            self.lesson_view.restore_question_answer(index, **answer)
+        self._restore_pending_lesson_answers()
+        if bundle.status == "package_error":
+            self.lesson_view.set_video("")
+            self._workspace.setCurrentIndex(PAGE_LESSON)
+            note = str(bundle.package_error_message)
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
         self._refresh_course_summary(bundle)
-        if bundle.video_path:
-            self.lesson_view.set_video(bundle.video_path)
+        # Always refresh the player: a lesson without video must clear a stale
+        # clip from the previous lesson, not keep playing it.
+        self.lesson_view.set_video(bundle.video_path or "")
         self._workspace.setCurrentIndex(PAGE_LESSON)
-        note = bundle.status
-        self.statusBar().showMessage(
-            f"Lesson ready · {len(bundle.plan.chapters)} chapters · {note}"
-        )
-        self.toast.show_message(
-            "success",
-            f"Lesson '{bundle.plan.title}' built ({note}). "
-            "Watch it, read the transcript, or try the questions.",
-        )
+        if bundle.status == "offline_practice_available":
+            note = bundle.plan.chapters[0].goal if bundle.plan.chapters else "Offline practice is available."
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
+        if bundle.status == "planning_error":
+            note = bundle.plan.chapters[0].goal if bundle.plan.chapters else "The lesson could not be prepared."
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
+        if bundle.status == "error":
+            missing = getattr(bundle, "missing_media", None)
+            invalid = getattr(bundle, "invalid_media", None)
+            media_copy = {
+                "kk": ("Сабақ файлдары жоқ: {files}.", "Сабақ файлдарын растау мүмкін болмады: {files}.", "Сабақ медиасын жүктеу мүмкін болмады.", "Мәтін, тапсырмалар және дереккөздер қолжетімді."),
+                "ru": ("Отсутствуют файлы урока: {files}.", "Не удалось подтвердить файлы урока: {files}.", "Не удалось загрузить медиа урока.", "Текст, задания и источники доступны."),
+                "en": ("Lesson files are missing: {files}.", "Could not verify lesson files: {files}.", "Could not load lesson media.", "Transcript, questions and references remain available."),
+            }[normalize_language(self.command_bar.get_language(), "kk")]
+            parts = []
+            if missing:
+                parts.append(media_copy[0].format(files=", ".join(missing)))
+            if invalid:
+                parts.append(media_copy[1].format(files=", ".join(invalid)))
+            note = " ".join((parts or [media_copy[2]]) + [media_copy[3]])
+            self.statusBar().showMessage(note)
+            self.toast.show_message("warning", note)
+            return
+        language = normalize_language(getattr(bundle.plan, "language", "en"))
+        ready, watch, text_ready, video_pending = {
+            "kk": ("Сабақ дайын · {count} бөлім", "Бейнені көріңіз, мәтінді оқыңыз немесе тапсырмаларды орындаңыз.", "Сабақ мәтіні дайын · {count} бөлім", "Бейне әлі дайын емес. Мәтін мен тапсырмалар қолжетімді."),
+            "ru": ("Урок готов · {count} разделов", "Посмотрите видео, прочитайте текст или решите задания.", "Текст урока готов · {count} разделов", "Видео ещё не готово. Текст и задания доступны."),
+            "en": ("Lesson ready · {count} chapters", "Watch the video, read the transcript, or try the questions.", "Lesson text ready · {count} chapters", "The video is not ready yet. Transcript and questions are available."),
+        }[language]
+        video_ready = bundle.status == "assembled" and bool(bundle.video_path)
+        note = (ready if video_ready else text_ready).format(count=len(bundle.plan.chapters))
+        self.statusBar().showMessage(note)
+        self.toast.show_message("success" if video_ready else "info", f"{note}. {watch if video_ready else video_pending}")
 
     def _refresh_course_summary(self, bundle) -> None:
         try:
-            summary = self.course_progress.summary(bundle.plan)
-            self.lesson_view.set_course_summary(
-                f"{summary.message} Next: {summary.next_topic}"
-            )
+            summary = self.course_progress.summary(bundle.plan, language=self.command_bar.get_language())
+            self.lesson_view.set_course_summary(summary.message)
             self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
         except Exception:  # noqa: BLE001
             self.lesson_view.set_course_summary(
-                "Course progress is unavailable for this lesson."
+                lesson_message(self.command_bar.get_language(), "course_unavailable")
             )
 
     def _record_lesson_quiz_answer(
         self, question_index: int, correct: bool, choice: str
     ) -> None:
         bundle = getattr(self, "_last_lesson", None)
-        if not bundle:
+        if not bundle or not 0 <= int(question_index) < len(bundle.plan.questions):
             return
+        from uuid import uuid4
+
+        key = self._lesson_answer_draft_key(bundle.plan, question_index)
+        draft = self._pending_lesson_answers.get(key)
+        if draft is None:
+            from datetime import datetime, timezone
+
+            question = bundle.plan.questions[int(question_index)]
+            draft = {
+                "plan": bundle.plan, "correct": bool(correct), "choice": str(choice),
+                "choice_index": question.choices.index(str(choice)) if str(choice) in question.choices else -1,
+                "confidence": self.lesson_view.confidence_for_question(question_index),
+                "operation_id": uuid4().hex,
+                "answered_at": datetime.now(timezone.utc),
+            }
+            self._pending_lesson_answers[key] = draft
         try:
             summary = self.course_progress.record_quiz_answer(
-                bundle.plan, int(question_index), bool(correct), str(choice),
-                confidence_level=self.lesson_view.confidence_for_question(question_index),
+                draft["plan"], int(question_index), draft["correct"], draft["choice"],
+                confidence_level=draft["confidence"], operation_id=draft["operation_id"],
+                now=draft["answered_at"],
             )
-        except Exception as exc:  # noqa: BLE001
-            self.statusBar().showMessage(f"Could not save course progress: {exc}")
+        except Exception:  # noqa: BLE001 - preserve the draft for an explicit retry
+            self.lesson_view.set_question_save_pending(int(question_index), True)
+            self.statusBar().showMessage(self.lesson_view._question_cards[int(question_index)]._save_status.text())
             return
-        self.lesson_view.set_course_summary(
-            f"{summary.message} Next: {summary.next_topic}"
-        )
-        self.lesson_view.set_due_review_count(self.course_progress.due_review_count())
+        self._pending_lesson_answers.pop(key, None)
+        self.lesson_view.set_question_save_pending(int(question_index), False)
+        self._refresh_course_summary(bundle)
         self.statusBar().showMessage(
-            f"Course progress saved · {summary.correct}/{summary.attempts}"
+            lesson_message(self.command_bar.get_language(), "course_saved", correct=summary.correct, attempts=summary.attempts)
         )
 
+    def _lesson_answer_draft_key(self, plan, question_index: int) -> tuple:
+        import hashlib
+        import json
+
+        identity = getattr(plan, "prebuilt_content_hash", "") or hashlib.sha256(
+            json.dumps(plan.to_json(), ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return self.active_student_profile.id, identity, int(question_index)
+
+    def _retry_lesson_quiz_answer(self, question_index: int) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if bundle is None:
+            return
+        draft = self._pending_lesson_answers.get(self._lesson_answer_draft_key(bundle.plan, question_index))
+        if draft:
+            self._record_lesson_quiz_answer(question_index, draft["correct"], draft["choice"])
+
+    def _restore_pending_lesson_answers(self) -> None:
+        bundle = getattr(self, "_last_lesson", None)
+        if bundle is None:
+            return
+        for index, _question in enumerate(bundle.plan.questions):
+            draft = self._pending_lesson_answers.get(self._lesson_answer_draft_key(bundle.plan, index))
+            if draft:
+                self.lesson_view.restore_pending_question(index, draft["choice_index"], draft["confidence"])
+
     def _review_due_questions(self) -> None:
-        """Run a short self-rated retrieval session from local due prompts."""
+        try:
+            self._run_due_question_reviews()
+        except (OSError, ValueError):
+            message = {
+                "kk": "Қайталау тарихын оқу немесе сақтау мүмкін болмады. Тарихқа қолжетімділікті тексеріп, қайта көріңіз.",
+                "ru": "Не удалось прочитать или сохранить историю повторения. Проверьте доступ к истории и попробуйте снова.",
+                "en": "Review history could not be read or saved. Check access to the history and retry.",
+            }[self.command_bar.get_language()]
+            self.statusBar().showMessage(message)
+            self.lesson_view.set_course_summary(message)
+            self.toast.show_message("warning", message)
+
+    def _run_due_question_reviews(self) -> None:
+        """Run due retrieval prompts, objectively scoring multiple-choice items."""
+        from aetherlab.ui.widgets import _LessonCheckDialog
+
         reviews = self.course_progress.due_reviews(limit=20)
         if not reviews:
             self.lesson_view.set_due_review_count(0)
-            self.statusBar().showMessage("No review questions are due right now.")
+            self.statusBar().showMessage(lesson_message(self.command_bar.get_language(), "review_none"))
             return
+        saved_count = 0
+        stale_review = False
+        language = self.command_bar.get_language()
         for item in reviews:
+            choices = item.get("choices")
+            answer = str(item.get("answer", "")).strip()
+            if isinstance(choices, list) and choices and answer:
+                question = {
+                    "q": str(item.get("prompt") or lesson_message(language, "review_prompt")),
+                    "choices": choices,
+                    "answer": answer,
+                    "why": str(item.get("why", "")),
+                }
+                dialog = _LessonCheckDialog(question, "spaced_review", self,
+                                            language=self.command_bar.get_language())
+                if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                    break
+                if not dialog.answer_submitted or dialog.answer_correct is None:
+                    break
+                correct = dialog.answer_correct
+                interval = self.course_progress.record_review_result(
+                    item, correct, correct=correct
+                )
+                if interval <= 0:
+                    stale_review = True
+                    break
+                saved_count += 1
+                continue
+
+            # Open responses cannot be reliably auto-graded. Keep them separate
+            # as self-reported recall rather than counting them as objective accuracy.
             ask = QtWidgets.QMessageBox(self)
-            ask.setWindowTitle("Spaced review")
-            ask.setText(str(item.get("prompt") or "Review this concept"))
+            ask.setWindowTitle(lesson_message(language, "review_title"))
+            ask.setText(str(item.get("prompt") or lesson_message(language, "review_prompt")))
             ask.setInformativeText(
-                f"{item.get('lesson_title', 'Lesson')} · {item.get('concept', '')}\n\n"
-                "Try to recall the answer before revealing it."
+                f"{item.get('lesson_title') or lesson_message(language, 'lesson')} · {item.get('concept', '')}\n\n"
+                + lesson_message(language, "review_hint")
             )
-            reveal = ask.addButton("Reveal answer", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-            ask.addButton("Finish later", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            reveal = ask.addButton(lesson_message(language, "review_reveal"), QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            later = ask.addButton(lesson_message(language, "review_later"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            ask.setDefaultButton(later)
+            ask.setEscapeButton(later)
             ask.exec()
             if ask.clickedButton() is not reveal:
                 break
 
             answer_box = QtWidgets.QMessageBox(self)
-            answer_box.setWindowTitle("Check your recall")
+            answer_box.setWindowTitle(lesson_message(language, "review_self_title"))
             answer_box.setText(
-                str(item.get("answer") or "Open response: compare with your lesson notes.")
+                str(item.get("answer") or lesson_message(language, "review_open"))
             )
             explanation = str(item.get("why", "")).strip()
             answer_box.setInformativeText(explanation or str(item.get("concept", "")))
             recalled = answer_box.addButton(
-                "I recalled it", QtWidgets.QMessageBox.ButtonRole.YesRole
+                lesson_message(language, "review_recalled"), QtWidgets.QMessageBox.ButtonRole.YesRole
             )
             missed = answer_box.addButton(
-                "Needs another review", QtWidgets.QMessageBox.ButtonRole.NoRole
+                lesson_message(language, "review_missed"), QtWidgets.QMessageBox.ButtonRole.NoRole
             )
-            skip = answer_box.addButton("Stop", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            skip = answer_box.addButton(lesson_message(language, "review_stop"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+            answer_box.setDefaultButton(skip)
+            answer_box.setEscapeButton(skip)
             answer_box.exec()
             selected = answer_box.clickedButton()
             if selected is skip or selected not in {recalled, missed}:
                 break
-            self.course_progress.record_review_result(item, selected is recalled)
+            interval = self.course_progress.record_review_result(item, selected is recalled)
+            if interval <= 0:
+                stale_review = True
+                break
+            saved_count += 1
 
         count = self.course_progress.due_review_count()
         self.lesson_view.set_due_review_count(count)
         if getattr(self, "_last_lesson", None):
             self._refresh_course_summary(self._last_lesson)
-        self.statusBar().showMessage(
-            f"Review saved · {count} question{'s' if count != 1 else ''} due"
-        )
+        message = lesson_message(language, "review_changed") if stale_review else {
+            "kk": f"Сақталған қайталау жауаптары: {saved_count}. Қайталау керек сұрақтар: {count}." if saved_count else "Қайталау жаңа жауаптарсыз аяқталды.",
+            "ru": f"Сохранено ответов повторения: {saved_count}. Осталось вопросов: {count}." if saved_count else "Повторение завершено без новых ответов.",
+            "en": f"Review responses saved: {saved_count}. Questions still due: {count}." if saved_count else "Review ended without new responses.",
+        }[self.command_bar.get_language()]
+        self.statusBar().showMessage(message)
 
     def _export_study_guide(self) -> None:
         bundle = getattr(self, "_last_lesson", None)
@@ -1644,6 +2262,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         export_lesson_study_guide(bundle.plan, Path(path))
         self.statusBar().showMessage(f"Study guide exported: {path}")
+
+    def _open_study_pdf(self) -> None:
+        from aetherlab.ui.lesson_view import _COPY
+
+        language = normalize_language(self.command_bar.get_language(), "kk")
+        copy = _COPY[language]
+        bundle = getattr(self, "_last_lesson", None)
+        pdf = Path(str(getattr(bundle, "pdf_path", "") or "")) if bundle else Path()
+        if not pdf.is_file():
+            self.statusBar().showMessage(copy["pdf_missing"])
+            return
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf))):
+            self.statusBar().showMessage(copy["pdf_open_failed"])
+            return
+        self.statusBar().showMessage(copy["pdf_dispatched"].format(name=pdf.name))
 
     def _export_lesson_bundle(self) -> None:
         bundle = getattr(self, "_last_lesson", None)
@@ -1677,6 +2313,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def start_pipeline(self, prompt: str) -> None:
         if self.worker and self.worker.isRunning():
             self.statusBar().showMessage("Pipeline is already running.")
+            return
+        if not self._try_consume_ai_help():
             return
 
         # Disconnect and clean up old worker to prevent signal accumulation
@@ -1730,6 +2368,58 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace.setCurrentIndex(PAGE_RUNNING)
         self.statusBar().showMessage("Launching pipeline…")
         self.worker.start()
+
+    def _try_consume_ai_help(self) -> bool:
+        """Meter explicit learner AI requests without touching background jobs."""
+        from aetherlab.services.ai_help_quota import consume_ai_help
+
+        try:
+            allowed, remaining = consume_ai_help(
+                self.active_student_profile.ai_help_quota_path,
+                limit=self._daily_ai_help_limit,
+            )
+        except OSError:
+            self._ai_help_quota_unavailable()
+            return False
+        self.command_bar.set_ai_quota(remaining, self._daily_ai_help_limit)
+        if allowed:
+            return True
+        messages = {
+            "kk": "Бүгінгі AI көмегінің 10 мүмкіндігі аяқталды. Ертең қайта көр.",
+            "ru": "На сегодня использованы все 10 запросов AI-помощи. Попробуй завтра.",
+            "en": "All 10 AI help requests for today have been used. Try again tomorrow.",
+        }
+        message = messages.get(self.command_bar.get_language(), messages["kk"])
+        self.statusBar().showMessage(message)
+        self.toast.show_message("warning", message)
+        return False
+
+    def _ai_help_quota_unavailable(self) -> None:
+        self.command_bar.set_ai_quota(None, self._daily_ai_help_limit)
+        self._ai_quota_error_message = self.command_bar._ai_quota.toolTip()
+        self.statusBar().showMessage(self._ai_quota_error_message)
+
+    def _update_ai_help_quota(self) -> bool:
+        from aetherlab.services.ai_help_quota import remaining_ai_help
+
+        try:
+            remaining = remaining_ai_help(self.active_student_profile.ai_help_quota_path)
+        except OSError:
+            self._ai_help_quota_unavailable()
+            return False
+        self.command_bar.set_ai_quota(remaining, self._daily_ai_help_limit)
+        previous_error = getattr(self, "_ai_quota_error_message", "")
+        if previous_error and self.statusBar().currentMessage() == previous_error:
+            self.statusBar().clearMessage()
+        self._ai_quota_error_message = ""
+        return True
+
+    def _refresh_ai_help_quota(self) -> None:
+        self._update_ai_help_quota()
+        today = date.today()
+        if today != self._dashboard_refresh_date:
+            self.student_dashboard.refresh()
+            self._dashboard_refresh_date = today
 
     def _on_worker_finished(self) -> None:
         cancelled = bool(self.worker and self.worker._cancelled)
@@ -1793,7 +2483,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.simulation_panel.set_scene_bundle(scene)
         self.stepper.set_stage(2, "complete")
         # Reveal the result: switch the workspace to the Scene view
-        self.sidebar.select(2)
+        self.sidebar.select(7)
 
     def on_render_ready(self, scene: SceneBundle) -> None:
         if self._active_solver and isinstance(scene.scene_spec, dict):

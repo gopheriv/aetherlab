@@ -15,7 +15,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TRACKER = ROOT / "AetherLab_Feature_Tracker.csv"
 SOURCE_ROOT = ROOT / "aetherlab"
@@ -43,6 +42,14 @@ IGNORE_SETTING_FIELDS = {
     "provider_warning",
 }
 
+LOCALE_CODES = {"kk", "ru", "en"}
+LANGUAGE_NAMES = {"kk": "kazakh", "ru": "russian", "en": "english"}
+LANGUAGE_LABEL_ALIASES = {
+    "қазақша": "kazakh",
+    "русский": "russian",
+    "english": "english",
+}
+
 
 @dataclass(frozen=True)
 class Surface:
@@ -55,7 +62,7 @@ class Surface:
 def _words(value: str) -> set[str]:
     return {
         w
-        for w in re.findall(r"[a-z0-9]+", value.replace("_", " ").lower())
+        for w in re.findall(r"[^\W_]+", value.replace("_", " ").casefold(), flags=re.UNICODE)
         if w not in {"a", "an", "as", "i", "my", "the", "to", "with"}
     }
 
@@ -121,6 +128,46 @@ def _append_settings_surfaces(path: Path, tree: ast.AST, out: list[Surface]) -> 
                     out.append(Surface("setting", field, rel, stmt.lineno))
 
 
+def _append_localized_surfaces(path: Path, tree: ast.AST, out: list[Surface]) -> None:
+    """Track user-facing copy stored in locale dictionaries, not just literals.
+
+    UI text passed through ``self._t[...]`` is invisible to the literal-widget
+    scanner. A single record per localized dictionary keeps the audit useful
+    without treating every sentence as a separate feature.
+    """
+    rel = str(path.relative_to(ROOT)).replace("\\", "/")
+    for stmt in tree.body:
+        value: ast.AST | None = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            value = stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            value = stmt.value
+        if not isinstance(value, ast.Dict):
+            continue
+
+        locale_values: dict[str, ast.Dict] = {}
+        for key, locale_value in zip(value.keys, value.values):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and key.value in LOCALE_CODES
+                and isinstance(locale_value, ast.Dict)
+            ):
+                locale_values[key.value] = locale_value
+        if len(locale_values) < 2:
+            continue
+
+        locale_names = " ".join(LANGUAGE_NAMES[code] for code in sorted(locale_values))
+        constant_name = ""
+        target = getattr(stmt, "target", None)
+        if isinstance(stmt, ast.Assign) and stmt.targets and isinstance(stmt.targets[0], ast.Name):
+            constant_name = stmt.targets[0].id
+        elif isinstance(target, ast.Name):
+            constant_name = target.id
+        labels = f"{path.stem} {constant_name} {locale_names} localization"
+        out.append(Surface("localized-copy", labels, rel, stmt.lineno))
+
+
 def collect_surfaces() -> list[Surface]:
     surfaces: list[Surface] = []
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
@@ -128,6 +175,7 @@ def collect_surfaces() -> list[Surface]:
         _append_string_surfaces(path, tree, surfaces)
         _append_cli_surfaces(path, tree, surfaces)
         _append_settings_surfaces(path, tree, surfaces)
+        _append_localized_surfaces(path, tree, surfaces)
     deduped: dict[tuple[str, str], Surface] = {}
     for surface in surfaces:
         deduped.setdefault((surface.kind, surface.name), surface)
@@ -140,7 +188,24 @@ def load_tracker_rows() -> list[dict[str, str]]:
 
 
 def tracker_matches(surface: Surface, rows: list[dict[str, str]]) -> list[str]:
+    if surface.kind == "localized-copy":
+        source_words = _words(Path(surface.file).stem)
+        language_words = {
+            language for language in LANGUAGE_NAMES.values() if language in _words(surface.name)
+        }
+        hits: list[str] = []
+        for row in rows:
+            declared_source = _words(row.get("Source File(s)", ""))
+            declared_languages = _words(" ".join(row.values()))
+            if (
+                source_words <= declared_source
+                and language_words <= declared_languages
+            ):
+                hits.append(row["ID"])
+        return hits
     want = _words(surface.name)
+    if surface.kind == "ui-label":
+        want = {LANGUAGE_LABEL_ALIASES.get(word, word) for word in want}
     if surface.kind == "cli-flag":
         want = _words(surface.name.lstrip("-"))
     if not want:
@@ -175,6 +240,7 @@ def audit() -> dict[str, object]:
         "tracker": str(TRACKER.relative_to(ROOT)),
         "feature_count": len(rows),
         "surface_count": len(surfaces),
+        "localized_copy_count": sum(1 for surface in surfaces if surface.kind == "localized-copy"),
         "covered_count": len(covered),
         "uncovered_count": len(uncovered),
         "covered": covered,
