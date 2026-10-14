@@ -33,6 +33,43 @@ log = logging.getLogger(__name__)
 DEFAULT_VOICE = "en-US-AndrewMultilingualNeural"
 DEFAULT_RATE = "+8%"
 
+# Dubbing cache identity v2 (Agent 3): language + voice + rate + synthesis
+# settings + spoken-normalized text + pipeline version. Bump when the TTS
+# preprocessing, trimming, or muxing changes so stale dubs are never reused.
+VOICEOVER_PIPELINE_VERSION = "dub-v2"
+# Tail silence appended after narration so endings are never cut mid-word.
+NARRATION_TAIL_PAD_S = 0.35
+# Minimum gap between consecutive beat lines; prevents overlap when measured
+# starts bunch together (beats MiniMax animates jointly measure the same start).
+BEAT_LINE_GAP_S = 0.12
+
+# Per-clip asyncio locks for synthesize_cached. A threading lock acquired via
+# to_thread cannot serialize coroutines: pool-thread reuse turns re-entrant
+# acquires into no-ops and the release lands on the wrong thread. Same-loop
+# coroutines (measure_speech gather) are the real concurrency here, so an
+# asyncio lock per cache path is the correct primitive; unique staging names
+# plus atomic os.replace keep even cross-thread races corruption-free.
+_ASYNC_PATH_LOCKS: dict[str, asyncio.Lock] = {}
+# Cap the lock registry so long sessions (hundreds of clips) can't grow it
+# without bound. Evicting a lock for a finished clip is safe: a duplicate
+# asyncio.Lock would only cost one redundant synthesis, never corruption
+# (unique staging names + atomic os.replace guard the file itself).
+_ASYNC_PATH_LOCKS_MAX = 256
+
+
+def _async_path_lock(key: str) -> asyncio.Lock:
+    # Dict setdefault is atomic under the GIL; a duplicate asyncio.Lock would
+    # only cost one redundant synthesis, never corruption.
+    lock = _ASYNC_PATH_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        if len(_ASYNC_PATH_LOCKS) >= _ASYNC_PATH_LOCKS_MAX:
+            # FIFO eviction: dicts preserve insertion order; drop oldest 25%.
+            for old in list(_ASYNC_PATH_LOCKS)[: _ASYNC_PATH_LOCKS_MAX // 4]:
+                _ASYNC_PATH_LOCKS.pop(old, None)
+        _ASYNC_PATH_LOCKS[key] = lock
+    return lock
+
 
 def _ffmpeg_exe() -> str | None:
     try:
@@ -76,7 +113,32 @@ def _format_rate(pct: int) -> str:
     return f"+{pct}%" if pct >= 0 else f"{pct}%"
 
 
-async def synthesize(text: str, out_path: Path, voice: str, rate: str) -> Path | None:
+def _spoken_form(text: str, voice: str, language: str | None) -> tuple[str, str]:
+    """Return (spoken_text, language) with spoken normalization applied."""
+    from aetherlab.core.language import (
+        infer_language_from_voice,
+        normalize_language,
+        normalize_spoken_text,
+    )
+
+    lang = normalize_language(language) if language else infer_language_from_voice(voice)
+    collapsed = " ".join(str(text or "").split())
+    if not collapsed:
+        return "", lang
+    try:
+        spoken = normalize_spoken_text(collapsed, lang)
+    except Exception:  # noqa: BLE001 — normalization must never block synthesis
+        spoken = collapsed
+    return spoken or collapsed, lang
+
+
+async def synthesize(
+    text: str,
+    out_path: Path,
+    voice: str,
+    rate: str,
+    language: str | None = None,
+) -> Path | None:
     """Text → speech (edge-tts) → mp3. None if edge-tts is unavailable/fails."""
     try:
         import edge_tts
@@ -84,21 +146,54 @@ async def synthesize(text: str, out_path: Path, voice: str, rate: str) -> Path |
         log.info("edge-tts not installed; narration disabled.")
         return None
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    spoken, lang = _spoken_form(text, voice, language)
+    if not spoken:
+        return None
     try:
-        await edge_tts.Communicate(text, voice, rate=rate).save(str(out_path))
+        await edge_tts.Communicate(spoken, voice, rate=rate).save(str(out_path))
         return out_path if out_path.exists() and out_path.stat().st_size > 0 else None
     except Exception:  # noqa: BLE001 — network/voice errors must not break render
-        log.warning("TTS synthesis failed; keeping silent video.", exc_info=True)
+        from aetherlab.core.language import narration_message
+
+        log.warning(
+            "TTS synthesis failed (%s); keeping silent video.",
+            narration_message("synthesis_failed", lang, detail="edge-tts"),
+            exc_info=True,
+        )
         return None
 
 
-def speech_cache_path(cache_dir: Path, text: str, voice: str, rate: str) -> Path:
-    """Content-addressed location of one synthesized line (text + voice + rate)."""
-    import hashlib
+def speech_cache_path(
+    cache_dir: Path,
+    text: str,
+    voice: str,
+    rate: str,
+    language: str | None = None,
+    synthesis_settings: dict[str, Any] | None = None,
+) -> Path:
+    """Content-addressed location of one synthesized line (identity v2).
 
-    # "trim1": cached clips have their edge silence removed (see _trim_edges).
+    The key covers the spoken-normalized text plus language, voice, rate,
+    synthesis settings, and the pipeline version, so a voice/rate/language
+    change — or a normalizer update — never reuses a stale dub. ``language``
+    defaults to the voice prefix (kk-/ru-/en-) so legacy callers without an
+    explicit language (Solve path via scene_generator/manim_runtime) still get
+    language-correct cache separation through their resolved voice.
+    """
+    import hashlib
+    import json
+
+    spoken, lang = _spoken_form(text, voice, language)
+    settings_key = ""
+    if synthesis_settings:
+        try:
+            settings_key = json.dumps(synthesis_settings, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            settings_key = str(synthesis_settings)
     key = hashlib.sha256(
-        f"trim1\n{voice}\n{rate}\n{' '.join(text.split())}".encode("utf-8")
+        f"{VOICEOVER_PIPELINE_VERSION}\n{lang}\n{voice}\n{rate}\n{settings_key}\n{spoken}".encode(
+            "utf-8"
+        )
     ).hexdigest()[:24]
     return Path(cache_dir) / f"{key}.mp3"
 
@@ -124,46 +219,110 @@ async def _trim_edges(source: Path, target: Path) -> bool:
 
 
 async def synthesize_cached(
-    text: str, cache_dir: Path, voice: str, rate: str
+    text: str,
+    cache_dir: Path,
+    voice: str,
+    rate: str,
+    language: str | None = None,
+    synthesis_settings: dict[str, Any] | None = None,
 ) -> Path | None:
-    """Synthesize once per (text, voice, rate); later calls reuse the same clip.
+    """Synthesize once per identity-v2 key; later calls reuse the same clip.
 
     Voice-first timing measures these clips to set the beat windows, and the
     final mux places the very same files, so the measured length is exactly the
-    length that plays.
+    length that plays. Concurrency-safe: a per-path lock plus unique staging
+    files make simultaneous synthesis of the same line resolve to one clip.
     """
-    path = speech_cache_path(cache_dir, text, voice, rate)
-    if path.is_file() and path.stat().st_size > 0:
-        return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".part.mp3")
-    audio = await synthesize(" ".join(text.split()), partial, voice, rate)
-    if audio is None:
-        return None
-    trimmed = path.with_suffix(".trim.mp3")
+    import uuid
+
+    path = speech_cache_path(cache_dir, text, voice, rate, language, synthesis_settings)
     try:
-        if await _trim_edges(partial, trimmed) and _duration_sync(trimmed) > 0.05:
-            trimmed.replace(path)
-            partial.unlink(missing_ok=True)
-        else:
-            trimmed.unlink(missing_ok=True)
-            partial.replace(path)
+        if path.is_file() and path.stat().st_size > 0:
+            return path
     except OSError:
         return None
-    return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex[:8]
+    partial = path.with_name(f"{path.stem}.{token}.part.mp3")
+    trimmed = path.with_name(f"{path.stem}.{token}.trim.mp3")
+    # Serialize same-clip writers; re-check inside the lock so a racing
+    # coroutine reuses the winner instead of synthesizing twice.
+    async with _async_path_lock(os.path.normcase(os.path.abspath(os.fspath(path)))):
+        return await _synthesize_cached_locked(
+            text, voice, rate, language, path, partial, trimmed
+        )
+
+
+async def _synthesize_cached_locked(
+    text: str,
+    voice: str,
+    rate: str,
+    language: str | None,
+    path: Path,
+    partial: Path,
+    trimmed: Path,
+) -> Path | None:
+    """Synthesize one clip; caller must hold the clip's asyncio lock."""
+    try:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            return None
+        spoken, _lang = _spoken_form(text, voice, language)
+        if not spoken:
+            return None
+        # 4-arg call: `spoken` is already normalized, and synthesize() keeps
+        # its (text, out_path, voice, rate) shape so existing callers and
+        # test doubles keep working; its internal re-normalization is a no-op
+        # on spoken-form text and it infers language from the voice tag.
+        audio = await synthesize(spoken, partial, voice, rate)
+        if audio is None:
+            return None
+        try:
+            if await _trim_edges(partial, trimmed) and _duration_sync(trimmed) > 0.05:
+                os.replace(trimmed, path)
+            else:
+                trimmed.unlink(missing_ok=True)
+                os.replace(partial, path)
+        except OSError:
+            return None
+        try:
+            return path if path.is_file() and path.stat().st_size > 0 else None
+        except OSError:
+            return None
+    finally:
+        for leftover in (partial, trimmed):
+            try:
+                leftover.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 async def measure_speech(
-    lines: list[str], cache_dir: Path, voice: str, rate: str, *, concurrency: int = 4
+    lines: list[str],
+    cache_dir: Path,
+    voice: str,
+    rate: str,
+    language: str | None = None,
+    synthesis_settings: dict[str, Any] | None = None,
+    *,
+    concurrency: int = 4,
 ) -> list[float] | None:
-    """Spoken seconds for each line (0.0 for blank lines); None if any line fails."""
+    """Spoken seconds for each line (0.0 for blank lines); None if any line fails.
+
+    ``language`` selects the spoken normalization; when omitted it is inferred
+    from the voice tag so Solve-path callers stay correct through their
+    resolved voice. Bounded concurrency keeps edge-tts fast without races —
+    clip files are lock-guarded in synthesize_cached.
+    """
     gate = asyncio.Semaphore(max(1, concurrency))
 
     async def one(text: str) -> float | None:
         if not text.strip():
             return 0.0
         async with gate:
-            path = await synthesize_cached(text, cache_dir, voice, rate)
+            path = await synthesize_cached(text, cache_dir, voice, rate, language, synthesis_settings)
         if path is None:
             return None
         seconds = await get_duration(path)
@@ -173,6 +332,42 @@ async def measure_speech(
     if any(value is None for value in durations):
         return None
     return [float(value) for value in durations]
+
+
+async def resolve_and_validate_voice(
+    configured_voice: str | None, language: str
+) -> tuple[str, list[str]]:
+    """Resolve the effective voice for *language* and validate via provider.
+
+    Never silently substitutes English for ru/kk: a mismatched voice yields the
+    language default with a visible localized note. Provider validation is
+    best-effort (None = offline/unverified); an unknown voice falls back to the
+    language default with an actionable message instead of failing silently.
+    Returns (effective_voice, notes).
+    """
+    from aetherlab.core.language import (
+        DEFAULT_TTS_VOICES,
+        is_voice_available,
+        normalize_language,
+        resolve_tts_voice,
+        voice_validation_message,
+    )
+
+    lang = normalize_language(language)
+    effective, _substituted, note = resolve_tts_voice(configured_voice, lang)
+    notes = [note] if note else []
+    try:
+        available = await is_voice_available(effective)
+    except Exception:  # noqa: BLE001 — validation must never block narration
+        available = None
+    if available is False:
+        fallback = DEFAULT_TTS_VOICES[lang]
+        notes.append(voice_validation_message(effective, lang, False))
+        effective = fallback
+    elif available is None and configured_voice:
+        # Offline: keep the resolved voice but say validation was skipped.
+        notes.append(voice_validation_message(effective, lang, None))
+    return effective, notes
 
 
 async def _run_ffmpeg(
@@ -238,12 +433,15 @@ async def merge(
     out_path: Path,
     *,
     cancel_check: Callable[[], bool] | None = None,
+    language: str | None = None,
+    tail_pad_s: float = NARRATION_TAIL_PAD_S,
 ) -> Path | None:
     """Mux audio over video into a narrated mp4.
 
     Audio longer than video → pad the video's last frame (tpad) so the tail
     isn't cut. Audio shorter → keep the FULL video (no -shortest) with trailing
-    silence, so the animation's closing beats survive.
+    silence, so the animation's closing beats survive. A small tail pad keeps
+    the final word from being clipped by container rounding.
     """
     ffmpeg = _ffmpeg_exe()
     if not ffmpeg:
@@ -254,10 +452,13 @@ async def merge(
     log.info("Narration merge: video %.1fs, audio %.1fs", video_dur, audio_dur)
 
     if audio_dur > video_dur and video_dur > 0:
+        # Pad video slightly PAST the audio end, then -shortest keeps the full
+        # audio: float rounding can otherwise clip the final ~0.1 s.
+        pad = max(0.0, audio_dur - video_dur) + max(0.0, float(tail_pad_s or 0.0))
         cmd = [
             ffmpeg, "-y", "-i", str(video), "-i", str(audio),
             "-filter_complex",
-            f"[0:v]tpad=stop_mode=clone:stop_duration={audio_dur - video_dur:.2f}[v]",
+            f"[0:v]tpad=stop_mode=clone:stop_duration={pad:.3f}[v]",
             "-map", "[v]", "-map", "1:a",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "160k",
@@ -292,14 +493,25 @@ async def add_voiceover(
     rate: str = DEFAULT_RATE,
     fit_to_video: bool = True,
     cancel_check: Callable[[], bool] | None = None,
+    language: str | None = None,
 ) -> Path | None:
     """Full pipeline: narration text → TTS → fit-to-video → merge → narrated mp4.
 
     Returns the narrated video path, or None (caller keeps the silent render).
+    ``language`` selects spoken normalization; when omitted it is inferred
+    from the voice tag. Complete sentences are preserved: fitting only adjusts
+    the speaking rate, never cuts text, and the merge pads (never truncates).
     """
+    from aetherlab.core.language import ensure_complete_sentences, infer_language_from_voice
+
     video = Path(video)
     if not narration or not narration.strip() or not video.exists():
         return None
+    lang = language or infer_language_from_voice(voice)
+    narration = ensure_complete_sentences(narration, lang) or narration
+    # Normalize once with the explicit language; synthesize() keeps its
+    # (text, out_path, voice, rate) shape for backward compatibility.
+    narration, _ = _spoken_form(narration, voice, lang)
     out_dir = Path(out_dir)
     audio_path = out_dir / f"{video.stem}_narration.mp3"
     narrated_path = out_dir / f"{video.stem}_narrated.mp4"
@@ -338,7 +550,7 @@ async def add_voiceover(
             from aetherlab.core.proc import ProcessCancelledError
 
             raise ProcessCancelledError("Narration cancelled")
-        return await merge(video, audio, narrated_path, cancel_check=cancel_check)
+        return await merge(video, audio, narrated_path, cancel_check=cancel_check, language=lang)
     finally:
         try:
             audio_path.unlink(missing_ok=True)
@@ -396,6 +608,8 @@ async def add_timed_beat_voiceover(
     max_rate_adjustment_pct: int = 20,
     speech_cache_dir: Path | None = None,
     measured_starts: dict[str, float] | None = None,
+    language: str | None = None,
+    synthesis_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Synthesize per-beat speech and place it on the storyboard's time windows.
 
@@ -406,7 +620,8 @@ async def add_timed_beat_voiceover(
     adjustment. If any sentence still overruns its beat, timed mode declines
     the whole track so the caller can use the existing whole-clip fitting path.
     The returned report measures each synthesized segment against its beat and
-    records the actual caption/audio schedule.
+    records the actual caption/audio schedule. ``language`` selects spoken
+    normalization (inferred from the voice tag when omitted).
     """
     video = Path(video)
     if not video.is_file():
@@ -420,6 +635,9 @@ async def add_timed_beat_voiceover(
     video_duration = await get_duration(video)
     if video_duration <= 0.5:
         return None
+    from aetherlab.core.language import infer_language_from_voice as _infer_lang
+
+    _lang = language or _infer_lang(voice)
     if measured_starts and speech_cache_dir is not None:
         # Each line starts when its beat's first animation really starts in
         # the final code (measured by a dry run), whatever repairs and
@@ -435,8 +653,10 @@ async def add_timed_beat_voiceover(
                 start = item["start_s"]
             start = max(float(start), previous_end)
             item["start_s"] = round(start, 3)
-            spoken = _duration_sync(speech_cache_path(speech_cache_dir, item["text"], voice, rate))
-            previous_end = start + (spoken if spoken > 0 else 0.0) + 0.1
+            spoken = _duration_sync(
+                speech_cache_path(speech_cache_dir, item["text"], voice, rate, _lang, synthesis_settings)
+            )
+            previous_end = start + (spoken if spoken > 0 else 0.0) + BEAT_LINE_GAP_S
         for item, following in zip(cues, cues[1:] + [None]):
             item["end_s"] = round(following["start_s"] if following else video_duration, 3)
         if any(item["end_s"] - item["start_s"] <= 0.05 for item in cues):
@@ -476,15 +696,20 @@ async def add_timed_beat_voiceover(
             audio_path = work_dir / f"beat_{index:02d}.mp3"
             beat_window = cue["end_s"] - cue["start_s"]
             audio = None
+            # Spoken form with the explicit beat language; synthesize() keeps
+            # its 4-arg shape for backward compatibility.
+            spoken, _ = _spoken_form(cue["text"], voice, _lang)
             if speech_cache_dir is not None:
-                cached = await synthesize_cached(cue["text"], speech_cache_dir, voice, rate)
+                cached = await synthesize_cached(
+                    cue["text"], speech_cache_dir, voice, rate, _lang, synthesis_settings
+                )
                 if cached is not None:
                     import shutil
 
                     shutil.copyfile(cached, audio_path)
                     audio = audio_path
             if audio is None:
-                audio = await synthesize(cue["text"], audio_path, voice, rate)
+                audio = await synthesize(spoken, audio_path, voice, rate)
             if audio is None:
                 return None
             duration = await get_duration(audio)
@@ -495,7 +720,7 @@ async def add_timed_beat_voiceover(
                 if adjustment <= 0:
                     return None
                 faster_rate = _format_rate(base_rate + adjustment)
-                audio = await synthesize(cue["text"], audio_path, voice, faster_rate)
+                audio = await synthesize(spoken, audio_path, voice, faster_rate)
                 if audio is None:
                     return None
                 duration = await get_duration(audio)
@@ -629,6 +854,7 @@ async def narrate_segment(
     voice: str = DEFAULT_VOICE,
     rate: str = DEFAULT_RATE,
     cancel_check: Callable[[], bool] | None = None,
+    language: str | None = None,
 ) -> tuple[Path | None, float]:
     """Narrate one chapter clip. Returns (narrated_path_or_None, spoken_seconds).
 
@@ -639,7 +865,7 @@ async def narrate_segment(
     video = Path(video)
     narrated = await add_voiceover(
         video, narration, out_dir, voice=voice, rate=rate,
-        cancel_check=cancel_check,
+        cancel_check=cancel_check, language=language,
     )
     if cancel_check is not None and cancel_check():
         from aetherlab.core.proc import ProcessCancelledError
@@ -670,21 +896,77 @@ def build_srt(
     video. Pass it for a PRODUCED lesson, whose intro/chapter title cards and
     crossfades push chapters later than a plain concat — without it the cues use
     a naive running sum of clip durations and drift out of sync with the video.
+    Cue ends are clipped to the next cue start so produced crossfades never
+    yield overlapping subtitles.
     """
     cues: list[str] = []
     t = 0.0
     index = 1
+    # Resolve start times first so ends can clip to the following start.
+    resolved: list[float] = []
+    for i, (_text, duration) in enumerate(segments):
+        duration = max(float(duration), 0.0)
+        if starts and i < len(starts):
+            try:
+                resolved.append(max(0.0, float(starts[i])))
+            except (TypeError, ValueError):
+                resolved.append(t)
+        else:
+            resolved.append(t)
+        t += duration
     for i, (text, duration) in enumerate(segments):
         duration = max(float(duration), 0.0)
-        start = float(starts[i]) if starts and i < len(starts) else t
+        start = resolved[i]
         text = " ".join(str(text).split())
-        if text:
-            cues.append(
-                f"{index}\n{_fmt_srt_time(start)} --> {_fmt_srt_time(start + duration)}\n{text}\n"
-            )
-            index += 1
-        t += duration
+        if not text or duration <= 0:
+            continue
+        end = start + duration
+        if i + 1 < len(resolved):
+            # Crossfades overlap clips: never let a cue bleed into the next.
+            end = min(end, max(start + 0.2, resolved[i + 1]))
+        if end <= start:
+            end = start + min(duration, 0.2)
+        cues.append(f"{index}\n{_fmt_srt_time(start)} --> {_fmt_srt_time(end)}\n{text}\n")
+        index += 1
     return "\n".join(cues)
+
+
+def render_profile_key(settings: Any = None, quality: str = "l") -> str:
+    """Best-effort render-profile identity for audio/chapter cache keys.
+
+    Agent 1 owns core/render_profile.py: resolve the profile pinned to the
+    explicit quality flag (profile_for_quality) and use its identity_key, so
+    quality/backend switches invalidate cached audio and chapter clips.
+    Falls back to the quality string when the module or helpers are missing.
+    """
+    flag = str(quality or "l").strip().lower() or "l"
+    try:
+        from aetherlab.core import render_profile as rp  # type: ignore
+
+        profile = None
+        pinned = getattr(rp, "profile_for_quality", None)
+        if callable(pinned):
+            try:
+                profile = pinned(flag, settings)
+            except TypeError:
+                profile = pinned(flag)
+        if profile is None:
+            effective = getattr(rp, "get_effective_profile", None)
+            if callable(effective):
+                try:
+                    profile = effective(settings, quality=flag)
+                except TypeError:
+                    profile = effective(settings)
+        if profile is not None:
+            identity = getattr(profile, "identity_key", None)
+            if callable(identity):
+                return str(identity())
+            return str(profile)
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 — cache keys must fail soft
+        pass
+    return f"quality:{flag}"
 
 
 def storyboard_narration_script(storyboard: dict | None) -> str:

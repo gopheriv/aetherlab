@@ -136,3 +136,48 @@ def test_preflight_can_be_switched_off(monkeypatch):
     monkeypatch.setenv("AETHERLAB_PREFLIGHT", "0")
     report = preflight_scene(_CLEAN, "S")
     assert not report.ran and report.note == "preflight disabled"
+
+
+# ── overlap detection (real dry runs; no LaTeX, a few seconds each) ─────────
+
+_PILED = '''from manim import *
+class S(Scene):
+    def construct(self):
+        a = Text("Alpha")
+        b = Text("Beta")
+        self.play(FadeIn(a), FadeIn(b), run_time=1.0)
+        self.wait(1.5)
+'''
+
+
+def test_preflight_flags_an_unintended_text_pile():
+    report = preflight_scene(_PILED, "S")
+    assert report.ran and report.ok, report.error or report.note
+    assert report.overlaps, "two Texts at ORIGIN must be flagged"
+    assert all(item["severity"] in {"high", "medium"} for item in report.overlaps)
+    assert all(not item["transient"] for item in report.overlaps)
+    lines = report.overlap_lines()
+    assert lines and lines[0].startswith("[PREFLIGHT:OVERLAP]")
+    assert report.overlap_score > 0
+
+
+_COMPOSED = '''from manim import *
+class S(Scene):
+    def construct(self):
+        axes = Axes(x_range=[-3, 3], y_range=[-2, 2]).scale(0.5).move_to(LEFT * 2.5)
+        curve = axes.plot(lambda x: x ** 2 / 8.0)
+        tag = Text("peak", font_size=20).next_to(axes, DOWN, buff=0.3)
+        tracker = ValueTracker(0.0)
+        readout = DecimalNumber(0.0).next_to(tag, RIGHT, buff=0.3)
+        readout.add_updater(lambda m: m.set_value(tracker.get_value()))
+        self.play(Create(axes), Create(curve), FadeIn(tag), FadeIn(readout), run_time=1.0)
+        self.play(tracker.animate.set_value(2.0), run_time=1.0)
+        self.wait(0.5)
+'''
+
+
+def test_preflight_allows_axes_curve_and_updater_readout():
+    report = preflight_scene(_COMPOSED, "S")
+    assert report.ran and report.ok, report.error or report.note
+    serious = [item for item in report.overlaps if item.get("severity") in {"high", "medium"}]
+    assert serious == [], report.overlap_lines()

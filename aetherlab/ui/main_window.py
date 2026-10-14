@@ -2109,6 +2109,7 @@ class MainWindow(QtWidgets.QMainWindow):
         request = ProblemRequest(
             prompt=prompt,
             duration_target_s=self.command_bar.get_duration_target(),
+            language=self.command_bar.get_language(),
         )
         render_quality = self.command_bar.get_render_quality()
         self.worker = PipelineWorker(

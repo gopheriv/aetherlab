@@ -51,16 +51,26 @@ frames sampled uniformly from a rendered Manim physics scene. Judge the RENDER,
 not the idea. Score each axis from 0 (broken) to 2 (excellent):
 
 1. LEGIBILITY — all text readable, nothing cut off by the frame edge,
-   no overlapping elements collapsing into clutter.
+   no overlapping elements collapsing into clutter. Readable type sizes,
+   attached labels near their referents, one focal label per beat.
 2. COMPOSITION — clear focal point, balanced negative space, scaffolding
-   (axes/grids) dimmer than the physics.
+   (axes/grids) dimmer than the physics. Titles, diagrams, equations, and
+   readouts each own a distinct region; completed content is transformed or
+   removed, never left to crowd the next beat.
 3. PALETTE — few deliberate colors used consistently; accent reserved for
    the climax.
 4. STRUCTURE — evidence of a beginning (setup), middle (evolution), and end
    (reveal); the final frames must not be identical to the middle (no frozen
-   ending) and not empty.
+   ending) and not empty. MOTION: the physics visibly evolves (live dynamics,
+   purposeful camera, coordinated highlights) rather than fading static cards
+   in and out. NARRATION ALIGNMENT: the visuals follow the brief's beats in
+   order — demo, prediction, motion/comparison, equation transform, visual
+   conclusion — with one focal idea per beat.
 5. SUBSTANCE — the physics is actually visualized (motion, curves, fields),
    not just a title card; frames change meaningfully across the video.
+   EXPLANATORY VALUE: equations morph and annotate (TransformMatchingTex,
+   Indicate, Circumscribe) instead of sitting static; highlights land on the
+   insight, not decoration.
 
 For layout reports, overlay a 6×6 grid on each frame: columns C1-C6 run left to
 right and rows R1-R6 run top to bottom. Name the cells when locating clipped,
@@ -564,6 +574,40 @@ def static_quality_estimate(
             axes["structure"] -= 0.5
         if est.play_calls == 0:
             axes["substance"] -= 1.5
+        # Composition/motion/explanatory proxies (Agent2): reveal-only scenes
+        # that fade static cards in/out score below scenes whose physics
+        # visibly evolves; static equations score below morphed/annotated ones;
+        # text piles with no progressive reveal score below sequenced beats.
+        # Mapped onto the existing five axes — no new axes, no verdict change.
+        source = code or ""
+        dynamic_tokens = (
+            ".animate", "Transform", "MoveAlongPath", "ValueTracker",
+            "add_updater", "always_redraw", "TracedPath", "LaggedStart",
+            "Rotate", "ApplyMethod", "UpdateFrom", "camera.frame",
+        )
+        if est.play_calls > 0 and not any(tok in source for tok in dynamic_tokens):
+            axes["structure"] -= 0.5
+            axes["substance"] -= 0.5
+        has_equation = (
+            "MathTex" in source or "Tex(" in source
+            or ("Text(" in source and "=" in source)
+        )
+        explanatory_tokens = (
+            "TransformMatchingTex", "TransformMatchingShapes", "Indicate",
+            "Circumscribe", "Flash", "SurroundingRectangle", "Brace", "next_to",
+        )
+        if has_equation and not any(tok in source for tok in explanatory_tokens):
+            axes["substance"] -= 0.5
+            axes["composition"] -= 0.25
+        n_texts = source.count("Text(") + source.count("MathTex(")
+        n_cleanup = (
+            source.count("FadeOut") + source.count(".remove(")
+            + source.count("Uncreate") + source.count("ReplacementTransform")
+            + source.count("TransformMatchingTex")
+        )
+        if n_texts >= 3 and n_cleanup == 0:
+            axes["composition"] -= 0.5
+            axes["structure"] -= 0.25
         if metrics:
             blank = float(metrics.get("blank_ratio", 0.0) or 0.0)
             static = float(metrics.get("static_ratio", 0.0) or 0.0)

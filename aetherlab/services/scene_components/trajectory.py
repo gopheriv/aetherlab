@@ -65,6 +65,7 @@ class {class_name}(Scene):
         ys = {ys}
 
         title = Text({title}).scale(0.5).to_edge(UP)
+        title.set_z_index(5)
 
         x_min, x_max = min(xs), max(xs)
         y_min, y_max = min(ys), max(ys)
@@ -77,17 +78,23 @@ class {class_name}(Scene):
             y_range=[y_min - y_pad, y_max + y_pad, (y_max - y_min) / 4.0],
             x_length=10,
             y_length=5,
-            axis_config={{"include_tip": False}},
+            # layout: scaffolding recedes (dim) so the physics stays brightest.
+            axis_config={{"include_tip": False, "stroke_opacity": 0.35}},
         ).to_edge(DOWN)
+        axes.set_z_index(-5)
         x_label = axes.get_x_axis_label(Text("t").scale(0.4))
         y_label = axes.get_y_axis_label(Text({ylabel}).scale(0.4))
+        x_label.set_z_index(5)
+        y_label.set_z_index(5)
 
         points = [axes.coords_to_point(x, y) for x, y in zip(xs, ys)]
         curve = VMobject(color=BLUE)
         # Keep every solver sample as a path vertex so the rendered curve
         # cannot bow away from the numerical trajectory between samples.
         curve.set_points_as_corners(points)
+        curve.set_z_index(0)
         tracer = Dot(points[0], color=YELLOW, radius=0.07)
+        tracer.set_z_index(1)
 
         def point_at_time(alpha):
             # solve_numeric samples at uniform time intervals; interpolate by
@@ -100,7 +107,8 @@ class {class_name}(Scene):
 
         self.play(Create(axes), FadeIn(title), FadeIn(x_label), FadeIn(y_label), run_time=1.0)
         self.play(Create(curve), run_time=3.0)
-        self.add(tracer)
+        # Fade (don't pop) the tracer in so the eye tracks the handoff.
+        self.play(FadeIn(tracer), run_time=0.4)
         self.play(
             UpdateFromAlphaFunc(
                 tracer,

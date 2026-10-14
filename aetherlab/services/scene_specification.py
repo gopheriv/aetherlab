@@ -9,6 +9,114 @@ from typing import Any
 
 SCENE_SPEC_SCHEMA = "aetherlab.scene_spec.v1"
 
+# Pedagogical beat arc (Agent2): every storyboard moves through some of these
+# roles so a scene is a demo -> prediction -> motion -> equation -> conclusion
+# sequence instead of a flat slideshow. Beats carry an optional "kind"; missing
+# kinds are inferred from the act name so legacy boards still validate.
+BEAT_KINDS: tuple[str, ...] = ("demo", "prediction", "motion", "comparison", "equation", "conclusion")
+
+_ACT_KIND_HINTS: tuple[tuple[str, str], ...] = (
+    ("hook", "demo"),
+    ("establish", "prediction"),
+    ("setup", "demo"),
+    ("evolve", "motion"),
+    ("evolution", "motion"),
+    ("develop", "motion"),
+    ("compare", "comparison"),
+    ("reveal", "equation"),
+    ("math", "equation"),
+    ("recap", "conclusion"),
+    ("conclusion", "conclusion"),
+    ("outro", "conclusion"),
+)
+
+_DETAIL_KIND_HINTS: tuple[tuple[str, str], ...] = (
+    ("predict", "prediction"),
+    ("guess", "prediction"),
+    ("question", "prediction"),
+    ("compar", "comparison"),
+    ("versus", "comparison"),
+    (" vs ", "comparison"),
+    ("side by side", "comparison"),
+    ("equation", "equation"),
+    ("formula", "equation"),
+    ("derive", "equation"),
+    ("algebra", "equation"),
+    ("takeaway", "conclusion"),
+    ("recap", "conclusion"),
+    ("summary", "conclusion"),
+    ("conclusion", "conclusion"),
+    ("animate", "motion"),
+    ("swing", "motion"),
+    ("orbit", "motion"),
+    ("oscillat", "motion"),
+    ("propagat", "motion"),
+    ("evolv", "motion"),
+    ("trac", "motion"),
+)
+
+
+def infer_beat_kind(act_name: str = "", detail: str = "") -> str:
+    """Best-effort beat kind from act name, then beat detail (default: demo)."""
+    act = str(act_name or "").casefold()
+    for hint, kind in _ACT_KIND_HINTS:
+        if hint in act:
+            return kind
+    text = str(detail or "").casefold()
+    for hint, kind in _DETAIL_KIND_HINTS:
+        if hint in text:
+            return kind
+    return "demo"
+
+
+def ensure_beat_arc(board: dict) -> dict:
+    """Tag every timeline beat with a pedagogical kind (in place + returned).
+
+    Explicit model-supplied kinds are kept when valid; anything missing or
+    unknown is inferred from the act name and beat detail. Unknown values are
+    replaced (never failed) so legacy and hand-written boards keep validating.
+    """
+    if not isinstance(board, dict):
+        return board
+    timeline = board.get("timeline")
+    if not isinstance(timeline, list):
+        return board
+    for beat in timeline:
+        if not isinstance(beat, dict):
+            continue
+        kind = str(beat.get("kind", "") or "").strip().lower()
+        if kind not in BEAT_KINDS:
+            kind = infer_beat_kind(str(beat.get("act", "")), str(beat.get("detail", "")))
+        beat["kind"] = kind
+    return board
+
+
+def beat_arc_warnings(board: dict) -> list[str]:
+    """Advisory arc-coverage notes (variety gaps, not validation failures)."""
+    if not isinstance(board, dict):
+        return []
+    timeline = board.get("timeline")
+    if not isinstance(timeline, list) or not timeline:
+        return []
+    kinds = {str(b.get("kind", "")) for b in timeline if isinstance(b, dict)}
+    warnings: list[str] = []
+    if "motion" not in kinds:
+        warnings.append(
+            "[ARC:MOTION] no motion beat in this storyboard; the physics never "
+            "visibly evolves. Give at least one beat kind=motion with live dynamics."
+        )
+    if "equation" not in kinds and "conclusion" not in kinds:
+        warnings.append(
+            "[ARC:PAYOFF] no equation or conclusion beat; stage the governing law "
+            "and a visual takeaway so the scene lands instead of stopping."
+        )
+    if len(kinds) < 3 and len(timeline) >= 4:
+        warnings.append(
+            f"[ARC:VARIETY] only {len(kinds)} beat kinds across {len(timeline)} beats; "
+            "vary demo/prediction/motion/comparison/equation/conclusion roles."
+        )
+    return warnings
+
 
 def build_scene_spec(
     request: Any,

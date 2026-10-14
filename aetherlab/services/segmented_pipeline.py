@@ -216,12 +216,30 @@ def _profile(settings: Any, quality: str) -> dict[str, Any]:
         manim_version = version("manim")
     except Exception:  # noqa: BLE001 - profile discovery must fail soft
         manim_version = "unavailable"
+    try:
+        from aetherlab.core.render_profile import get_effective_profile
+
+        _rp = get_effective_profile(settings, quality=quality or "")
+        _rp_key = _rp.identity_key()
+        _rp_quality = str(getattr(_rp, "quality", quality) or quality)
+        _rp_renderer = str(getattr(_rp, "renderer", "cairo") or "cairo")
+        _rp_fps = str(getattr(_rp, "fps", ""))
+        _rp_preset = str(getattr(_rp, "preset", ""))
+        _rp_canvas = f"{getattr(_rp, 'width', '')}x{getattr(_rp, 'height', '')}"
+    except Exception:  # noqa: BLE001 - profile discovery must fail soft
+        _rp_key, _rp_quality = "", quality
+        _rp_renderer = os.getenv("AETHERLAB_MANIM_RENDERER", "cairo").strip().lower()
+        _rp_fps = os.getenv("AETHERLAB_MANIM_FPS", "")
+        _rp_preset, _rp_canvas = "", ""
     return {
         "model": str(getattr(settings, "llm_model", "")),
-        "quality": quality,
+        "quality": _rp_quality,
         "render_mode": str(getattr(settings, "render_mode", "local")),
-        "renderer": os.getenv("AETHERLAB_MANIM_RENDERER", "cairo").strip().lower(),
-        "fps": os.getenv("AETHERLAB_MANIM_FPS", ""),
+        "renderer": _rp_renderer,
+        "fps": _rp_fps,
+        "render_preset": _rp_preset,
+        "render_canvas": _rp_canvas,
+        "render_identity": _rp_key,
         "manim": manim_version,
         "voice": str(getattr(settings, "tts_voice", "")),
         "voice_rate": str(getattr(settings, "tts_rate", "")),
@@ -602,7 +620,16 @@ async def render_segmented_scene(
         ):
             from aetherlab.services.assembly import assemble_lesson
 
-            assembled = await assemble_lesson(segment_videos, final_path, timeout=900)
+            try:
+                from aetherlab.core.render_profile import get_effective_profile
+
+                _seg_profile = get_effective_profile(settings, quality=quality or "")
+            except Exception:  # noqa: BLE001 - assembly resolves its own canvas fallback
+                _seg_profile = None
+            assembled = await assemble_lesson(
+                segment_videos, final_path, timeout=900,
+                profile=_seg_profile, settings=settings, quality=quality or "",
+            )
             if not assembled or not Path(assembled).is_file():
                 return _incomplete("Segment assembly failed; no complete lesson was published.", engine=engine)
             final_path = Path(assembled)

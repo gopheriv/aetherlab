@@ -24,6 +24,28 @@ class AetherLabPipeline:
         self._ingested = False
 
     async def run(self, request: ProblemRequest) -> PipelineResult:
+        from dataclasses import replace as _replace
+
+        from aetherlab.core.language import (
+            LANGUAGE_PROMPT_NAMES,
+            normalize_language,
+            resolve_tts_voice,
+        )
+
+        # Solve-path language: explicit on the request (default en), part of
+        # the cache key via canonical_payload, and routed to scene/narration
+        # through the effective voice + an augmented scene prompt — without
+        # touching Agent-owned scene_generator/manim_runtime modules.
+        language = normalize_language(getattr(request, "language", "en"))
+        effective_voice, substituted, voice_note = resolve_tts_voice(
+            getattr(self.settings, "tts_voice", None), language
+        )
+        scene_settings = self.settings
+        if effective_voice != getattr(self.settings, "tts_voice", ""):
+            try:
+                scene_settings = _replace(self.settings, tts_voice=effective_voice)
+            except Exception:  # noqa: BLE001 — frozen-dataclass replace fallback
+                scene_settings = self.settings
         key = self.cache.ensure_request(request)
         cached = self.cache.get(key)
 
@@ -68,18 +90,38 @@ class AetherLabPipeline:
                 # result. Let the segmented manifest resume each verified unit.
                 scene = None
             if scene is None or scene.engine != current_engine or scene.status not in {"compiled", "rendered"}:
+                # Route the selected language to storyboard/speech/synthesis
+                # through the scene prompt (solver already ran on the raw
+                # prompt; scene + narration must follow the UI language).
+                try:
+                    scene_request = _replace(
+                        request,
+                        prompt=(
+                            f"{request.prompt}\n\n"
+                            f"All visible labels, captions, and spoken narration must be in "
+                            f"{LANGUAGE_PROMPT_NAMES[language]}."
+                        ),
+                    )
+                    scene_brief = scene_request.prompt
+                except Exception:  # noqa: BLE001
+                    scene_request = request
+                    scene_brief = request.prompt
                 if float(request.duration_target_s) > 45.0:
                     from aetherlab.services.segmented_pipeline import render_segmented_scene
 
                     scene = await render_segmented_scene(
-                        request, solver, rag, self.settings, runtime=manim,
+                        scene_request, solver, rag, scene_settings, runtime=manim,
                     )
-                elif getattr(manim, "scene_tournament_enabled", lambda _settings: False)(self.settings):
+                elif getattr(manim, "scene_tournament_enabled", lambda _settings: False)(scene_settings):
                     scene = await manim.generate_render_tournament(
-                        request, solver, rag, self.settings, brief=request.prompt
+                        scene_request, solver, rag, scene_settings, brief=scene_brief
                     )
                 else:
-                    scene = await manim.generate_scene_async(request, solver, rag, self.settings, plan=plan)
+                    scene = await manim.generate_scene_async(
+                        scene_request, solver, rag, scene_settings, plan=plan
+                    )
+                if substituted and voice_note:
+                    scene.diagnostics.append(f"Narration voice: {voice_note}")
                 self.cache.store_scene(key, scene)
 
             if scene.status == "rendered" and not _video_exists(scene.video_path):
@@ -100,10 +142,22 @@ class AetherLabPipeline:
             # Render to MP4 (skip if a valid cached video already exists);
             # render-time API errors get a bounded LLM self-repair pass.
             if scene.status == "compiled":
+                try:
+                    repair_brief = (
+                        f"{request.prompt}\n\n"
+                        f"All visible labels, captions, and spoken narration must be in "
+                        f"{LANGUAGE_PROMPT_NAMES[language]}."
+                    )
+                except Exception:  # noqa: BLE001
+                    repair_brief = request.prompt
                 scene = await manim.render_scene_with_repair(
-                    scene, self.settings, brief=request.prompt,
+                    scene, scene_settings, brief=repair_brief,
                     duration_target_s=request.duration_target_s,
                 )
+                if substituted and voice_note and not any(
+                    "Narration voice:" in d for d in scene.diagnostics
+                ):
+                    scene.diagnostics.append(f"Narration voice: {voice_note}")
                 self.cache.store_scene(key, scene)
 
         try:

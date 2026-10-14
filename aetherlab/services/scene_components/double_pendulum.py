@@ -127,7 +127,9 @@ class {class_name}(Scene):
         idx = ValueTracker(0.0)
 
         def angles():
-            i = idx.get_value()
+            # Clamp the tracker: the animate ramp can transiently overshoot
+            # [0, N-1], which unclamped floor-indexing turns into a snap.
+            i = float(np.clip(idx.get_value(), 0, len(th1) - 1))
             lo = int(np.floor(i)); hi = min(lo + 1, len(th1) - 1); f = i - lo
             a1 = th1[lo] * (1 - f) + th1[hi] * f
             a2 = th2[lo] * (1 - f) + th2[hi] * f

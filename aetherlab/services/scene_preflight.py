@@ -42,6 +42,12 @@ class PreflightReport:
     error: str = ""
     duration_s: float = 0.0
     off_frame: list[dict] = field(default_factory=list)
+    # Unintended pairwise overlaps (Agent2 contract): each item carries the
+    # object names (a/b + label_a/label_b), first time_s, persistence
+    # duration_s, bounds_a/bounds_b + overlap bounds, overlap_ratio, severity
+    # (low/medium/high), transient (crossing during motion vs boundary pile),
+    # and a suggested repair string. Others read this; the runner writes it.
+    overlaps: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     note: str = ""
     # [source line, start s, end s] for every top-level play/wait.
@@ -52,15 +58,72 @@ class PreflightReport:
         return self.ran and not self.ok
 
     def off_frame_lines(self, limit: int = 6) -> list[str]:
+        from aetherlab.services.scene_components.layout import frame_half_extents
+
+        half_w, half_h = frame_half_extents()
+        frame = f"x -{half_w}..{half_w}, y -{half_h}..{half_h}"
         lines = []
         for item in self.off_frame[:limit]:
             left, right, bottom, top = item.get("bounds", [0, 0, 0, 0])
             lines.append(
                 f"[PREFLIGHT:OFF_FRAME] {item.get('mobject')} after the {item.get('after')} at "
                 f"~{item.get('time_s')}s spans x {left}..{right}, y {bottom}..{top} "
-                f"(frame is about x -7.1..7.1, y -4.0..4.0; overflow {item.get('overflow')})."
+                f"(frame is about {frame}; overflow {item.get('overflow')})."
             )
         return lines
+
+    def overlap_lines(self, limit: int = 6) -> list[str]:
+        """Human/LLM-readable overlap findings with suggested repairs."""
+        lines = []
+        for item in self.overlaps[:limit]:
+            lines.append(overlap_line(item))
+        return lines
+
+    @property
+    def overlap_score(self) -> float:
+        """Weighted severity total (high=3, medium=1, low=0.2); lower is better."""
+        return overlap_score(self.overlaps)
+
+
+def _overlap_label(item: dict, side: str) -> str:
+    name = str(item.get(side, "?"))
+    label = str(item.get(f"label_{side}", "") or "").strip()
+    if label and label.lower() not in name.lower():
+        return f"{name} ({label[:40]!r})"
+    return name
+
+
+def overlap_line(item: dict) -> str:
+    """One [PREFLIGHT:OVERLAP] diagnostic line for an overlap finding."""
+    bounds = item.get("overlap", item.get("bounds", [0, 0, 0, 0]))
+    left, right, bottom, top = (list(bounds) + [0, 0, 0, 0])[:4]
+    kind = "crossing during motion" if item.get("transient") else "shared region"
+    return (
+        f"[PREFLIGHT:OVERLAP] {_overlap_label(item, 'a')} vs {_overlap_label(item, 'b')} "
+        f"at ~{item.get('time_s', 0)}s ({kind} x {left}..{right}, y {bottom}..{top}; "
+        f"severity {item.get('severity', 'low')}, overlap {item.get('overlap_ratio', 0):.0%} "
+        f"for {item.get('duration_s', 0)}s). Suggested repair: "
+        f"{item.get('repair') or suggest_overlap_repair(item)}"
+    )
+
+
+def suggest_overlap_repair(item: dict) -> str:
+    """Repair suggestion for an overlap finding (stored, or a generic fallback)."""
+    stored = str(item.get("repair", "") or "").strip()
+    if stored:
+        return stored
+    return (
+        f"move {item.get('b', 'the second object')} out of "
+        f"{item.get('a', 'the first object')}'s region, or sequence them so only "
+        "one focal object owns that region per beat"
+    )
+
+
+def overlap_score(overlaps: list[dict]) -> float:
+    """Weighted severity total for improvement comparison (lower is better)."""
+    weights = {"high": 3.0, "medium": 1.0, "low": 0.2}
+    return round(sum(weights.get(str(item.get("severity", "low")), 0.2)
+                     for item in overlaps or []), 3)
 
 
 def tex_cache_dir(code: str) -> Path:
@@ -139,11 +202,118 @@ def preflight_scene(code: str, class_name: str, timeout: int = PREFLIGHT_TIMEOUT
     report.error = str(data.get("error", ""))
     report.duration_s = float(data.get("duration_s", 0.0) or 0.0)
     report.off_frame = [item for item in data.get("off_frame", []) if isinstance(item, dict)]
+    report.overlaps = [item for item in data.get("overlaps", []) if isinstance(item, dict)]
     report.events = [
         [int(e[0]), float(e[1]), float(e[2])] for e in data.get("events", [])
         if isinstance(e, list) and len(e) == 3
     ]
     return report
+
+
+def repair_overlap_code(code: str, overlaps: list[dict], *, attempt: int = 0) -> tuple[str, bool]:
+    """Deterministically nudge stacked duplicates apart (bounded, fail-soft).
+
+    The dominant machine-generated crowding pattern is several mobjects placed
+    at the identical ``.move_to(...)`` target with no cleanup between them.
+    For each such pile, later occurrences are shifted downward by a staggered
+    amount that grows with ``attempt`` (1.0/1.6/2.2 ... units). Only single-line
+    calls are edited, the result is compile-checked, and any doubt returns the
+    original code unchanged. Returns (code, changed).
+    """
+    import ast
+
+    if not overlaps or not code:
+        return code, False
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False
+    groups: dict[str, list[ast.Call]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "move_to" or not node.args:
+            continue
+        try:
+            segment = ast.get_source_segment(code, node.args[0]) or ""
+        except Exception:  # noqa: BLE001 - conservative: skip unresolvable targets
+            continue
+        norm = re.sub(r"\s+", "", segment)
+        if norm:
+            groups.setdefault(norm, []).append(node)
+    piles = {target: calls for target, calls in groups.items() if len(calls) >= 2}
+    if not piles:
+        return code, False
+    step = 1.0 + 0.6 * max(0, attempt)
+    # (line index, column, text): applied right-to-left per line.
+    insertions: dict[int, list[tuple[int, str]]] = {}
+    for calls in piles.values():
+        ordered = sorted(calls, key=lambda n: (n.lineno, n.col_offset))
+        for pile_index, node in enumerate(ordered[1:], start=1):
+            end_line = getattr(node, "end_lineno", None) or node.lineno
+            end_col = getattr(node, "end_col_offset", None)
+            if end_line != node.lineno or not end_col:
+                continue  # multi-line call: skip rather than risk breaking it
+            distance = round(step * pile_index, 2)
+            insertions.setdefault(node.lineno - 1, []).append(
+                (end_col, f".shift(DOWN * {distance})")
+            )
+    if not insertions:
+        return code, False
+    lines = code.splitlines(keepends=True)
+    for line_index, edits in insertions.items():
+        if not 0 <= line_index < len(lines):
+            return code, False
+        for col, text in sorted(edits, reverse=True):
+            line = lines[line_index]
+            if not 0 <= col <= len(line):
+                return code, False
+            lines[line_index] = line[:col] + text + line[col:]
+    repaired = "".join(lines)
+    try:
+        compile(repaired, "<aetherlab-overlap-repair>", "exec")
+    except SyntaxError:
+        return code, False
+    return repaired, repaired != code
+
+
+def repair_overlaps_with_recheck(
+    code: str, class_name: str, *, max_attempts: int = 3,
+    timeout: int = PREFLIGHT_TIMEOUT_S,
+) -> tuple[str, "PreflightReport", bool]:
+    """Bounded overlap repair: nudge, re-preflight, keep only improvements.
+
+    Runs the preflight, applies :func:`repair_overlap_code` with growing
+    separation, and re-checks after every attempt (at most ``max_attempts``).
+    Returns (best_code, best_report, improved); when nothing reduces the
+    overlap score the ORIGINAL code and its report are returned unchanged.
+    """
+    baseline = preflight_scene(code, class_name, timeout=timeout)
+    if not baseline.ran or not baseline.ok:
+        return code, baseline, False
+    actionable = [item for item in baseline.overlaps
+                  if str(item.get("severity", "low")) in {"high", "medium"}]
+    if not actionable:
+        return code, baseline, False
+    best_code, best_report, best_score = code, baseline, baseline.overlap_score
+    for attempt in range(max_attempts):
+        candidate, changed = repair_overlap_code(best_code, best_report.overlaps,
+                                                 attempt=attempt)
+        if not changed:
+            break
+        checked = preflight_scene(candidate, class_name, timeout=timeout)
+        if not checked.ran or not checked.ok:
+            continue
+        if checked.overlap_score < best_score:
+            best_code, best_report, best_score = candidate, checked, checked.overlap_score
+            remaining = [item for item in checked.overlaps
+                         if str(item.get("severity", "low")) in {"high", "medium"}]
+            if not remaining:
+                break
+    improved = best_score < baseline.overlap_score
+    if not improved:
+        return code, baseline, False
+    return best_code, best_report, True
 
 
 _BEAT_MARKER_LINE = re.compile(

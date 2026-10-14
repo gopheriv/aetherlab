@@ -276,6 +276,8 @@ def _prepare_lesson_plan(plan: LessonPlan) -> bool:
     rendered = [chapter for chapter in plan.chapters if chapter.kind in _RENDERED_CHAPTER_KINDS]
     if not rendered:
         return False
+    from aetherlab.core.language import ensure_complete_sentences
+
     for chapter in plan.chapters:
         for field in ("prediction", "retrieval"):
             check = getattr(chapter, field)
@@ -290,6 +292,18 @@ def _prepare_lesson_plan(plan: LessonPlan) -> bool:
             )
             if not valid:
                 setattr(chapter, field, None)
+        # Dubbing: narration must end on a complete sentence so the chapter
+        # dub never trails off mid-word; truncated planner lines are trimmed
+        # to their last sentence boundary (display + subtitles keep full text
+        # only when it was already complete).
+        try:
+            narration = str(chapter.narration or "")
+            if narration.strip():
+                complete = ensure_complete_sentences(narration, plan.language)
+                if complete and complete != narration.strip():
+                    chapter.narration = complete
+        except Exception:  # noqa: BLE001 — planning must never fail on polish
+            pass
     return True
 
 

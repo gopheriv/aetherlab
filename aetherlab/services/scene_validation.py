@@ -1577,6 +1577,106 @@ def _is_stage_clear(node: ast.Call) -> bool:
     )
 
 
+_STATIC_TEXT_TYPES = frozenset({
+    "Text", "Tex", "MathTex", "SingleStringMathTex", "MarkupText", "Paragraph",
+})
+_STATIC_POSITIONING = frozenset({
+    "move_to", "next_to", "to_edge", "to_corner", "shift", "arrange",
+    "align_to", "match_x", "match_y", "set_x", "set_y",
+})
+_STATIC_REVEALS = frozenset({
+    "FadeIn", "Write", "Create", "GrowFromCenter", "GrowFromEdge", "AddTextWordByWord",
+})
+
+
+def check_static_overlaps(code: str) -> list[str]:
+    """Advisory static overlap/crowding checks (never blockers).
+
+    The [HYGIENE:OVERLAP] duplicate-placement check stays the only blocking
+    overlap gate (see manim_runtime._LAYOUT_BLOCKERS); everything here uses
+    the [HYGIENE:CROWDING] prefix so it can only advise, nudge the codegen
+    model, and feed the critic proxy — never reject a scene on its own.
+    """
+    tree = _parse(code)
+    if tree is None:
+        return []
+    warnings: list[str] = []
+    # 1) TEXT_PILE: 3+ text objects shown with no positioning at all — they
+    # all render at the origin on top of each other.
+    text_vars: dict[str, int] = {}
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not isinstance(value, ast.Call):
+            continue
+        built = {
+            _call_name(child.func).split(".")[-1]
+            for child in ast.walk(value) if isinstance(child, ast.Call)
+        }
+        if not (built & _STATIC_TEXT_TYPES):
+            continue
+        positioned = bool(built & _STATIC_POSITIONING)
+        for target in targets:
+            if isinstance(target, ast.Name) and not positioned:
+                text_vars.setdefault(target.id, node.lineno)
+    if len(text_vars) >= 3:
+        shown = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = _call_name(node.func).split(".")[-1]
+            if name in _STATIC_REVEALS or (
+                    name in {"add", "play"} and isinstance(node.func, ast.Attribute)):
+                shown.update(
+                    item.id for item in ast.walk(node)
+                    if isinstance(item, ast.Name) and item.id in text_vars)
+        piled = sorted(set(text_vars) & shown)
+        if len(piled) >= 3:
+            warnings.append(
+                f"[HYGIENE:CROWDING] {len(piled)} text objects "
+                f"({', '.join(piled[:4])}{'...' if len(piled) > 4 else ''}) are shown "
+                "with no move_to/next_to/arrange positioning; they pile at the "
+                "origin. Stack them in one VGroup(...).arrange(DOWN, buff=0.3) or "
+                "sequence them so one focal label shows per beat."
+            )
+    # 2) EDGE_PILE: 2+ mobjects pinned to the same frame edge with no relative
+    # positioning between them — titles, legends, and readouts collide.
+    edge_pins: dict[str, list[tuple[str, int]]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "to_edge" or not node.args:
+            continue
+        edge = ast.get_source_segment(code, node.args[0]) or ""
+        edge = re.sub(r"\s+", "", edge).split(",")[0]
+        owner = _placement_owner(tree, node)
+        if edge and owner:
+            edge_pins.setdefault(edge, []).append((owner, node.lineno))
+    for edge, owners in sorted(edge_pins.items()):
+        if len(owners) < 2:
+            continue
+        names = sorted({owner for owner, _ in owners})
+        if len(names) < 2:
+            continue
+        first, second = sorted(owners, key=lambda item: item[1])[:2]
+        if _has_cleanup_between(code.splitlines(), first[1], second[1], first[0]):
+            continue
+        warnings.append(
+            f"[HYGIENE:CROWDING] {names[0]} (line {first[1]}) and {names[1]} "
+            f"(line {second[1]}) both pin to_edge({edge}) with no arrange/next_to "
+            "between them; stack them with next_to(..., buff=0.3) or move one to "
+            "a distinct region (title vs readout)."
+        )
+        break
+    return warnings
+
+
 def scene_hygiene_warnings(code: str) -> list[str]:
     """Return advisory warnings for likely visual layout bugs."""
     tree = _parse(code)
@@ -1586,6 +1686,7 @@ def scene_hygiene_warnings(code: str) -> list[str]:
     warnings.extend(_placement_warnings(code, tree))
     warnings.extend(_text_size_warnings(tree))
     warnings.extend(_redraw_position_warnings(tree))
+    warnings.extend(check_static_overlaps(code))
 
     # A whole-stage clear or gather (FadeOut/Group(*self.mobjects)) manages
     # everything introduced before it, so only introductions after it count.

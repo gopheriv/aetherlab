@@ -22,9 +22,15 @@ class ProblemRequest:
     session_id: str = "default"
     created_at: str = field(default_factory=utc_now_iso)
     duration_target_s: float = DEFAULT_SCENE_DURATION_TARGET_S
+    language: str = "en"
 
     def normalized_prompt(self) -> str:
         return " ".join(self.prompt.strip().split())
+
+    def normalized_language(self) -> str:
+        from aetherlab.core.language import normalize_language
+
+        return normalize_language(getattr(self, "language", "en"))
 
     def canonical_payload(self) -> JsonDict:
         return {
@@ -32,6 +38,7 @@ class ProblemRequest:
             "parameters": {key: self.parameters[key] for key in sorted(self.parameters)},
             "session_id": self.session_id,
             "duration_target_s": float(self.duration_target_s),
+            "language": self.normalized_language(),
         }
 
 

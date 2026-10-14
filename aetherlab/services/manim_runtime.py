@@ -131,41 +131,53 @@ def detect_latex() -> bool:
     return shutil.which("latex") is not None or shutil.which("xelatex") is not None
 
 
-def _detect_render_tier() -> dict:
-    """Choose a predictable 30 fps tier unless cinematic rendering is explicit.
+def _detect_render_tier(settings: object | None = None, quality: str = "") -> dict:
+    """Legacy tier shape, resolved lazily via RenderProfile (Agent 1).
 
-    Standard machines render at 30 fps. Constrained machines keep that cadence
-    at below-normal process priority so the UI stays responsive. The 60 fps
-    tiers remain available through AETHERLAB_RENDER_TIER=cinematic or
-    cloud_cinematic. Always passing an explicit --fps prevents Manim from
-    silently producing 15 fps output at low quality.
+    Previously this ran once at import time, so changing AETHERLAB_RENDER_TIER
+    or AETHERLAB_MANIM_FPS required a process restart to take effect. New code
+    must call :func:`get_render_tier` (or ``render_profile.get_effective_profile``)
+    per render instead of reading ``_RENDER_TIER``. The module-level
+    ``_RENDER_TIER`` snapshot is kept only for backward-compat importers.
     """
-    tiers = {
-        "cinematic": {"name": "cinematic", "fps": 60, "below_normal": False},
-        "standard": {"name": "standard", "fps": 30, "below_normal": False},
-        "constrained": {"name": "constrained", "fps": 30, "below_normal": True},
-        "cloud_cinematic": {"name": "cloud_cinematic", "fps": 60, "below_normal": False},
-    }
-    forced = (os.getenv("AETHERLAB_RENDER_TIER") or os.getenv("RENDER_TIER") or "auto").strip().lower()
-    if forced in tiers:
-        tier = dict(tiers[forced])
-    else:
-        try:
-            import psutil
+    try:
+        from aetherlab.core.render_profile import get_effective_profile, tier_compat
+
+        tier = tier_compat(get_effective_profile(settings, quality=quality))
+    except Exception:
+        tier = {"name": "standard", "fps": 30, "below_normal": False}
+    # Preserve legacy auto-constrained: small machines without an explicit
+    # tier/preset keep below-normal priority so the UI stays responsive.
+    try:
+        explicit = (
+            (os.getenv("AETHERLAB_RENDER_PRESET") or os.getenv("AETHERLAB_RENDER_TIER")
+             or os.getenv("RENDER_TIER") or "").strip().lower()
+            or str(getattr(settings, "render_preset", "") or "").strip().lower()
+        )
+        if not explicit or explicit == "auto":
+            import psutil  # type: ignore
 
             total_gb = psutil.virtual_memory().total / 1024**3
-        except Exception:
-            total_gb = 8.0
-
-        if total_gb >= 10:
-            tier = dict(tiers["standard"])
-        else:
-            tier = dict(tiers["constrained"])
-
-    fps_override = _env_int("AETHERLAB_MANIM_FPS", "MANIM_FPS", default=0)
-    if fps_override > 0:
-        tier["fps"] = fps_override
+            if total_gb < 10:
+                tier["below_normal"] = True
+    except Exception:
+        pass
     return tier
+
+
+def get_render_tier(settings: object | None = None, quality: str = "") -> dict:
+    """Fresh tier dict per call — settings/env changes apply without restart."""
+    return _detect_render_tier(settings=settings, quality=quality)
+
+
+def resolve_manim_profile(
+    settings: object | None, quality: str, code: str
+) -> tuple[object, str | None]:
+    """Resolve the validated RenderProfile + reported fallback notice (if any)."""
+    from aetherlab.core.render_profile import adapt_profile_for_cost, get_effective_profile
+
+    profile = get_effective_profile(settings, quality=quality)
+    return adapt_profile_for_cost(profile, _estimate_render_cost(code))
 
 
 def _env_int(*names: str, default: int = 0) -> int:
@@ -180,6 +192,8 @@ def _env_int(*names: str, default: int = 0) -> int:
     return default
 
 
+# Legacy import-time snapshot. Kept for backward-compat importers only —
+# internal render paths resolve lazily per render (see get_render_tier).
 _RENDER_TIER = _detect_render_tier()
 
 
@@ -1410,20 +1424,29 @@ class ManimRuntime:
         _prune_old_runs()
 
         # ── Weight-aware timeout + resource guard (Bug 4) ──
+        # Agent 1: single RenderProfile source of truth, resolved lazily per
+        # render so settings/env changes apply without restart. Adaptive fps
+        # fallback is reported, never silent (cinematic/adaptive-off never
+        # downgrades).
+        profile, _fallback_notice = resolve_manim_profile(s, quality, scene_bundle.code)
+        quality = str(getattr(profile, "quality", quality) or quality)
         base_timeout = {"l": 240, "m": 420, "h": 600, "k": 900}.get(quality, 240)
         cost = _estimate_render_cost(scene_bundle.code)
-        render_timeout = min(int(base_timeout * cost), 1800)  # hard ceiling 30 min
-        tier = _RENDER_TIER
-        fps = tier["fps"]
-        # A runaway scene (bad run_time → tens of seconds at 4K/60) can wedge the
-        # box; halve the frame rate on heavy hi-res renders.
-        if cost >= 3.0 and quality in ("h", "k"):
-            fps = 30
+        try:
+            _timeout_scale = float(getattr(getattr(profile, "resource_limits", None), "render_timeout_scale", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            _timeout_scale = 1.0
+        render_timeout = min(int(base_timeout * cost * _timeout_scale), 1800)  # hard ceiling 30 min
+        tier = get_render_tier(s, quality)
+        fps = int(getattr(profile, "fps", tier["fps"]))
+        if _fallback_notice:
+            scene_bundle.diagnostics.append(_fallback_notice)
+            log.warning("%s", _fallback_notice)
 
         log.info(
-            "Rendering %s -q%s --fps %d --seed %d (tier %s, cost %.1f, timeout %ds)",
+            "Rendering %s -q%s --fps %d --seed %d (profile %s, cost %.1f, timeout %ds)",
             scene_name, quality, fps, _scene_seed(scene_bundle.code),
-            tier["name"], cost, render_timeout,
+            getattr(profile, "describe", lambda: tier["name"])(), cost, render_timeout,
         )
 
         # Deterministic RNG per scene: a stable seed derived from the code means
@@ -1432,12 +1455,20 @@ class ManimRuntime:
         # different seeds. So candidates differ by their prompt, never by the
         # dice, and the vision critic scores direction instead of RNG noise.
         seed = _scene_seed(scene_bundle.code)
-        renderer_setting = os.getenv("AETHERLAB_MANIM_RENDERER", "cairo").strip().lower()
-        renderer = renderer_setting if renderer_setting in {"cairo", "opengl"} else "cairo"
-        if renderer_setting not in {"", "cairo", "opengl"}:
+        # Agent 1: renderer + resolution come from the shared RenderProfile
+        # (env > settings > preset). Unknown values already fall back to cairo
+        # inside the profile with a warning; surface it on the bundle too.
+        renderer = str(getattr(profile, "renderer", "cairo") or "cairo")
+        if renderer not in {"cairo", "opengl"}:
             scene_bundle.diagnostics.append(
-                f"Unknown AETHERLAB_MANIM_RENDERER={renderer_setting!r}; using Cairo."
+                f"Unknown renderer {renderer!r}; using Cairo."
             )
+            renderer = "cairo"
+        try:
+            _prof_w = int(getattr(profile, "width", 1280))
+            _prof_h = int(getattr(profile, "height", 720))
+        except (TypeError, ValueError):
+            _prof_w, _prof_h = 1280, 720
         command = _manim_render_command(
             manim_cmd,
             quality=quality,
@@ -1447,6 +1478,8 @@ class ManimRuntime:
             scene_file=scene_file,
             class_name=scene_bundle.class_name,
             renderer=renderer,
+            width=_prof_w,
+            height=_prof_h,
             cache_enabled=bool(safe_lineage),
             partial_animation_range=(
                 partial_animation_range if safe_lineage else None
@@ -2024,7 +2057,7 @@ class ManimRuntime:
                 job_id = cloud_job_id(
                     scene_bundle,
                     quality=quality,
-                    fps=render_fps_for(scene_bundle.code, quality),
+                    fps=render_fps_for(scene_bundle.code, quality, s),
                 )
                 RenderJobLedger(s.data_dir / "render_ledger.json").metrics(job_id, {
                     "quality_score": scene_bundle.quality_score,
@@ -2071,9 +2104,13 @@ class ManimRuntime:
             + ("ran cleanly" if report.ok else "the scene crashed before rendering")
             + (f", measured duration {report.duration_s:.1f}s" if report.ok else "")
             + (f", {len(report.off_frame)} object(s) outside the frame" if report.off_frame else "")
+            + (f", {len(getattr(report, 'overlaps', []) or [])} overlap finding(s)"
+               if getattr(report, "overlaps", None) else "")
             + "."
         )
         for line in report.off_frame_lines(3):
+            bundle.diagnostics.append(line)
+        for line in report.overlap_lines(3):
             bundle.diagnostics.append(line)
 
         def drift_summary(code: str, checked) -> tuple[float, list[str]]:
@@ -2088,6 +2125,30 @@ class ManimRuntime:
                 bundle.diagnostics.append(
                     f"Preflight beat timing: {len(timings)} beats measured, "
                     f"largest drift {worst:.2f}s."
+                )
+        # Deterministic overlap repair (no LLM needed): nudge duplicate piles,
+        # re-preflight, keep only verified improvements. Runs keyless too, so
+        # it sits before the API-key gate below.
+        if report.ok and getattr(report, "overlaps", None):
+            try:
+                from aetherlab.services.scene_preflight import repair_overlaps_with_recheck
+                fixed_code, checked, improved = await asyncio.to_thread(
+                    repair_overlaps_with_recheck, bundle.code, bundle.class_name,
+                )
+                if improved:
+                    bundle.code = fixed_code
+                    bundle.diagnostics.append(
+                        f"Preflight overlap repair kept: score "
+                        f"{report.overlap_score:.1f} -> {checked.overlap_score:.1f}."
+                    )
+                    report = checked
+                elif checked.ran and checked.ok:
+                    bundle.diagnostics.append(
+                        "Preflight overlap repair did not improve the layout; kept the original."
+                    )
+            except Exception as exc:  # noqa: BLE001 - repair is advisory only
+                bundle.diagnostics.append(
+                    f"Preflight overlap repair skipped: {type(exc).__name__}."
                 )
         if not getattr(s, "openai_api_key", None):
             return bundle
@@ -2140,9 +2201,13 @@ class ManimRuntime:
 
         latest = report
         if report.off_frame:
+            from aetherlab.services.scene_components.layout import frame_half_extents
+
+            _half_w, _half_h = frame_half_extents()
             result, why = await try_repair(
                 "A dry run of this scene found objects outside the camera frame (x about "
-                "-7.1..7.1, y about -4.0..4.0). Keep everything visible: fit each axes' "
+                f"-{_half_w}..{_half_w}, y about -{_half_h}..{_half_h}). "
+                "Keep everything visible: fit each axes' "
                 "x_range/y_range to the values actually plotted (or normalise the data), "
                 "move labels and readouts inside the frame, and keep the visual design, "
                 "physics and timing:\n" + "\n".join(report.off_frame_lines(8)),
@@ -2266,17 +2331,17 @@ class ManimRuntime:
         if backend.name == "local":
             jid = cloud_job_id(
                 scene_bundle, quality=quality,
-                fps=render_fps_for(scene_bundle.code, quality), variant=variant,
+                fps=render_fps_for(scene_bundle.code, quality, s), variant=variant,
             )
             ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
             ledger.start(
                 job_id=jid, scene_class=scene_bundle.class_name, quality=quality,
-                fps=render_fps_for(scene_bundle.code, quality), backend="local",
+                fps=render_fps_for(scene_bundle.code, quality, s), backend="local",
             )
         else:
             jid = cloud_job_id(
                 scene_bundle, quality=quality,
-                fps=render_fps_for(scene_bundle.code, quality), variant=variant,
+                fps=render_fps_for(scene_bundle.code, quality, s), variant=variant,
             )
             ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
 
@@ -2631,17 +2696,36 @@ def _manim_render_command(
     scene_file: Path,
     class_name: str,
     renderer: str = "cairo",
+    width: int = 0,
+    height: int = 0,
     cache_enabled: bool = False,
     partial_animation_range: tuple[int, int] | None = None,
 ) -> list[str]:
-    """Build a Manim CLI call; partial rendering requires lineage-local cache."""
+    """Build a Manim CLI call; partial rendering requires lineage-local cache.
+
+    Agent 1: always passes explicit --fps AND -r W,H so Manim can never
+    silently fall back (15 fps at low quality, or a stale cached resolution).
+    """
     selected_renderer = renderer if renderer in {"cairo", "opengl"} else "cairo"
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        w, h = 0, 0
+    if not (320 <= w <= 3840 and 240 <= h <= 2160):
+        try:
+            from aetherlab.core.render_profile import QUALITY_DIMS
+
+            w, h = QUALITY_DIMS.get(str(quality).strip().lower(), (1280, 720))
+        except Exception:
+            w, h = 1280, 720
     command = [
         *manim_cmd,
         "render",
         f"-q{quality}",
         "--fps",
         str(fps),
+        "-r",
+        f"{w},{h}",
         "--seed",
         str(seed),
         "--renderer",

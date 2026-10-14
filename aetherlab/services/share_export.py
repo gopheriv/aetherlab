@@ -19,6 +19,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from aetherlab import __version__
+from aetherlab.core.language import LANGUAGE_NAMES, normalize_language
 from aetherlab.services.pdf import export_lesson_study_guide
 from aetherlab.services.scene_specification import public_scene_spec
 
@@ -145,6 +146,7 @@ def _metadata(bundle: Any) -> dict[str, Any]:
                 ),
             }
         )
+    language = normalize_language(getattr(plan, "language", "en") or "en")
     return {
         "schema": "aetherlab.lesson_bundle.v1",
         "app": "AetherLab",
@@ -153,6 +155,8 @@ def _metadata(bundle: Any) -> dict[str, Any]:
         "title": str(getattr(plan, "title", "")),
         "topic": str(getattr(plan, "topic", "")),
         "audience": str(getattr(plan, "audience", "")),
+        "language": language,
+        "language_name": LANGUAGE_NAMES.get(language, language),
         "status": str(getattr(bundle, "status", "")),
         "objectives": [str(x) for x in getattr(plan, "objectives", [])],
         "prerequisites": [str(x) for x in getattr(plan, "prerequisites", [])],
@@ -216,8 +220,11 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
             f"<button{disabled}{data_time}>"
             f"{chapter['index']}. {html.escape(chapter['title'])}</button>"
         )
+    lang = normalize_language(str(metadata.get("language", "en") or "en"))
+    label = LANGUAGE_NAMES.get(lang, "English")
     track = (
-        '<track default kind="subtitles" src="media/lesson.vtt" srclang="en" label="English">'
+        f'<track default kind="subtitles" src="media/lesson.vtt"'
+        f' srclang="{lang}" label="{html.escape(label)}">'
         if has_track
         else ""
     )
@@ -226,7 +233,7 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
         for item in metadata.get("objectives", [])
     )
     return f"""<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -273,10 +280,17 @@ def _html_player(bundle: Any, metadata: dict[str, Any], *, has_track: bool) -> s
 
 def _readme(bundle: Any, has_srt: bool) -> str:
     title = getattr(bundle.plan, "title", "AetherLab lesson")
-    subtitle_note = "Subtitles are included as media/lesson.srt and media/lesson.vtt." if has_srt else "No subtitle file was available for this export."
+    lang = normalize_language(getattr(getattr(bundle, "plan", None), "language", "en") or "en")
+    lang_name = LANGUAGE_NAMES.get(lang, lang)
+    subtitle_note = (
+        f"Subtitles ({lang_name}) are included as media/lesson.srt and media/lesson.vtt."
+        if has_srt
+        else "No subtitle file was available for this export."
+    )
     return (
         f"{title}\n"
         f"{'=' * len(str(title))}\n\n"
+        f"Narration language: {lang_name} ({lang}).\n"
         "Open index.html in a browser to watch the lesson locally.\n"
         "The MP4 is stored at media/lesson.mp4.\n"
         f"{subtitle_note}\n"

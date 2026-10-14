@@ -431,7 +431,15 @@ class CloudRenderBackend:
             _estimate_render_cost,
         )
 
-        fps = render_fps_for(scene.code, quality)
+        # Agent 1: single RenderProfile source of truth (was duplicated
+        # fps-reduction policy). Resolved quality/fps propagate to the cloud
+        # workflow inputs below; any adaptive fallback is reported.
+        profile, _fallback_notice = render_profile_for(scene.code, quality, settings)
+        quality = str(getattr(profile, "quality", quality) or quality)
+        fps = int(getattr(profile, "fps", 30))
+        if _fallback_notice:
+            scene.diagnostics.append(_fallback_notice)
+            log.warning("%s", _fallback_notice)
         job_id = cloud_job_id(scene, quality=quality, fps=fps, variant=variant)
         run_dir = _RUNS_DIR / f"cloud_{job_id}_{quality}"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -891,13 +899,27 @@ def render_timeout_for(code: str, quality: str, settings: "AppSettings") -> int:
     return min(int(base_timeout * _estimate_render_cost(code)), 1800)
 
 
-def render_fps_for(code: str, quality: str) -> int:
-    from aetherlab.services.manim_runtime import _RENDER_TIER, _estimate_render_cost
+def render_profile_for(
+    code: str, quality: str, settings: object | None = None
+) -> tuple[object, str | None]:
+    """Resolve (RenderProfile, fallback_notice) — single source of truth.
 
-    fps = int(_RENDER_TIER["fps"])
-    if _estimate_render_cost(code) >= 3.0 and quality in ("h", "k"):
-        fps = 30
-    return fps
+    Agent 1: replaces the duplicated fps-reduction policy that used to live
+    here AND in manim_runtime. Adaptive fallback is reported, never silent.
+    """
+    from aetherlab.core.render_profile import adapt_profile_for_cost, get_effective_profile
+    from aetherlab.services.manim_runtime import _estimate_render_cost
+
+    profile = get_effective_profile(settings, quality=quality)
+    return adapt_profile_for_cost(profile, _estimate_render_cost(code))
+
+
+def render_fps_for(code: str, quality: str, settings: object | None = None) -> int:
+    """Legacy fps helper — delegates to RenderProfile (kept for importers)."""
+    profile, notice = render_profile_for(code, quality, settings)
+    if notice:
+        log.warning("%s", notice)
+    return int(getattr(profile, "fps", 30))
 
 
 def cloud_job_id(scene: SceneBundle, *, quality: str, fps: int, variant: str = "") -> str:
@@ -956,12 +978,16 @@ def validate_mp4(path: Path) -> bool:
 
 # Pinned-Manim (0.21.0) output dimensions per quality flag. A cloud MP4 that
 # comes back at the wrong profile is rejected instead of silently shipping.
-CLOUD_QUALITY_DIMS = {
-    "l": (854, 480),
-    "m": (1280, 720),
-    "h": (1920, 1080),
-    "k": (3840, 2160),
-}
+# Agent 1: single source of truth lives in render_profile.QUALITY_DIMS.
+try:
+    from aetherlab.core.render_profile import QUALITY_DIMS as CLOUD_QUALITY_DIMS
+except Exception:  # pragma: no cover — import fallback, never silent wrong dims
+    CLOUD_QUALITY_DIMS = {
+        "l": (854, 480),
+        "m": (1280, 720),
+        "h": (1920, 1080),
+        "k": (3840, 2160),
+    }
 
 
 def probe_mp4(path: Path) -> dict[str, float | int] | None:

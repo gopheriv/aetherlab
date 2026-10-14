@@ -132,27 +132,39 @@ class {class_name}(Scene):
         star_pt = np.array(star_xy + [0.0])
 
         title = Text({title}).scale(0.46).to_edge(UP)
+        title.set_z_index(5)
 
         orbit = VMobject(color=BLUE_D, stroke_width=2.5, stroke_opacity=0.7)
         orbit.set_points_smoothly(path + [path[0]])
+        orbit.set_z_index(0)
         star = Dot(star_pt, color=GOLD, radius=0.2)
         star_glow = Dot(star_pt, color=YELLOW, radius=0.34).set_opacity(0.25)
+        star_glow.set_z_index(-1)
 
         idx = ValueTracker(0.0)
 
         def planet_pt():
-            i = int(np.clip(round(idx.get_value()), 0, len(path) - 1))
-            return path[i]
+            # Continuous path: lerp between bracketing samples so the planet
+            # glides instead of jumping once per baked sample (motion.py).
+            v = float(np.clip(idx.get_value(), 0, len(path) - 1))
+            lo = min(int(v), len(path) - 1)
+            hi = min(lo + 1, len(path) - 1)
+            f = v - lo
+            return path[lo] * (1.0 - f) + path[hi] * f
 
         planet = always_redraw(lambda: Dot(planet_pt(), color=TEAL, radius=0.12))
         radius = always_redraw(lambda: Line(star_pt, planet_pt(), color=GREY_A, stroke_width=2))
         trail = TracedPath(planet_pt, stroke_color=TEAL, stroke_width=2.5, dissipating_time=4.0)
+        trail.set_z_index(1)
 
         sector_peri = Polygon(*[np.array([x, y, 0.0]) for x, y in {sector_peri}],
                               color=YELLOW, fill_color=YELLOW, fill_opacity=0.35, stroke_width=1)
         sector_apo = Polygon(*[np.array([x, y, 0.0]) for x, y in {sector_apo}],
                              color=YELLOW, fill_color=YELLOW, fill_opacity=0.35, stroke_width=1)
+        sector_peri.set_z_index(2)
+        sector_apo.set_z_index(2)
         law = Text("equal areas in equal times", color=GOLD).scale(0.32).to_edge(DOWN)
+        law.set_z_index(5)
 
         self.play(FadeIn(title), FadeIn(star_glow), GrowFromCenter(star), run_time=0.8)
         self.play(Create(orbit), run_time=1.6)

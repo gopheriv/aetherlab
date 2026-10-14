@@ -216,6 +216,7 @@ Return STRICT JSON only (no markdown, no commentary) with exactly these keys:
   "acts": [
     {"name": "HOOK", "duration_s": <number>, "beats": [
       {"detail": "one visible change", "duration_s": <number>,
+       "kind": "demo | prediction | motion | comparison | equation | conclusion",
        "narration_cue": "short matching phrase", "anchor_cell": "C3",
        "target_object": "the focal Manim object", "target_equation": "LaTeX or empty"}
     ]},
@@ -241,6 +242,13 @@ its duration_s, one short narration_cue, one anchor_cell from a 6-by-6 grid,
 the focal target_object, and target_equation when that beat shows an equation
 (A1-F6, columns left-to-right, rows top-to-bottom). Beat durations must sum to
 their act duration. Give text-heavy details more time than a simple motion beat.
+Give every beat a pedagogical kind from demo | prediction | motion | comparison
+| equation | conclusion so the scene arcs demo -> prediction -> motion/comparison
+-> equation transform -> visual conclusion: at least one motion beat where the
+physics visibly evolves, at least one equation or conclusion beat where the
+governing law lands, and at least three distinct kinds overall. Structure every
+beat as entrance -> readable hold -> exit/transform (never leave a completed
+detail on screen when the next unrelated beat starts).
 Keep each narration cue short enough to speak naturally inside its beat at about
 2 words per second; if a cue is too long, shorten it instead of rushing the voice.
 Combine only related animations within a beat so the implementation can batch
@@ -344,13 +352,32 @@ HARD CONSTRAINTS (violating any ruins the render):
    mobject twice in one self.play call. Fade in a DecimalNumber/Integer with an
    updater in a separate self.play call BEFORE animating the ValueTracker that
    changes it; changing its digit count during FadeIn can crash Manim family
-   interpolation."""
+   interpolation.
+22. Honor each beat's pedagogical kind: demo stages the apparatus, prediction
+   poses the question on screen, motion evolves the physics live, comparison
+   juxtaposes two states side by side, equation morphs the governing law with
+   TransformMatchingTex (never a static screenshot), conclusion lands one
+   visual takeaway. Vary the choreography per kind with these concrete
+   devices: coordinated highlight `self.play(Flash(focus), Circumscribe(focus))`
+   for the hero moment, equation morph chains
+   `self.play(TransformMatchingTex(eq_before, eq_after))` so algebra becomes
+   itself, and — only on MovingCameraScene — one purposeful push
+   `self.play(self.camera.frame.animate.scale(0.6).move_to(focus))` toward the
+   climax. Dim scaffolding (stroke_opacity ~0.35), layer with set_z_index
+   (axes behind, physics mid, labels on top), and always give a beat an
+   entrance, a readable hold, and an exit/transform — completed content fades
+   or morphs away before the next unrelated beat."""
 
 
 TEMPORAL_LAYOUT_CONTRACT = """TIMED DETAIL + CLEAN FRAME CONTRACT
 Treat storyboard.timeline as the edit schedule. Every event has start_s,
-end_s, duration_s, narration_cue, subtitle_cue, target_object,
-target_equation, and anchor_cell. Add one
+end_s, duration_s, kind (demo/prediction/motion/comparison/equation/conclusion),
+narration_cue, subtitle_cue, target_object,
+target_equation, and anchor_cell. Stage each kind distinctly (demo shows the
+apparatus, motion evolves it live, equation morphs the law, conclusion lands
+the takeaway) and vary the choreography: coordinated Flash+Circumscribe
+highlights, TransformMatchingTex equation chains, one purposeful camera push.
+Add one
 `# BEAT A1.B1 | 0.00-2.50 s` marker per event using the exact window. Begin its
 single focal detail inside its assigned window;
 finish its entrance, readable hold, and exit/transform before the next
@@ -655,6 +682,12 @@ def schedule_storyboard_timeline(storyboard: dict, duration_target_s: float) -> 
     timed["acts"] = revised_acts
     timed["timeline"] = timeline
     timed["timeline_duration_s"] = round(target, 3)
+    try:
+        from aetherlab.services.scene_specification import ensure_beat_arc
+
+        ensure_beat_arc(timed)
+    except Exception:  # noqa: BLE001 - kind tagging is advisory, never fatal
+        pass
     return timed
 
 
@@ -1647,7 +1680,7 @@ class SceneGenerator:
         domain = detect_domain(solver.keywords, solver.variables)
         palette = load_scene_palette(self.settings.data_dir)
         title = solver.summary[:70] if solver.summary else "Physics Simulation"
-        return build_scene(
+        code = build_scene(
             class_name=class_name,
             domain=domain,
             title=title,
@@ -1656,3 +1689,16 @@ class SceneGenerator:
             variables=solver.variables,
             palette=palette,
         )
+        try:
+            from aetherlab.services.scene_components.layout import (
+                apply_fallback_layout_fixes,
+            )
+
+            fixed, fixes = apply_fallback_layout_fixes(code)
+            if fixes:
+                compile(fixed, "<aetherlab-fallback-layout>", "exec")
+                log.info("Fallback layout fixes: %s", "; ".join(fixes))
+                return fixed
+        except Exception:  # noqa: BLE001 - layout polish never breaks fallback
+            pass
+        return code

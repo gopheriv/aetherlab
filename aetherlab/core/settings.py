@@ -3,7 +3,8 @@
 Provider resolution precedence:
 1. Environment variables (AETHERLAB_* / OPENAI_*)
 2. The app's own config file (saved by the in-app Settings dialog)
-3. ~/.qwen/settings.json (legacy autoload)
+3. Compatible legacy manim-bot .env values
+4. ~/.qwen/settings.json (explicit AETHERLAB_QWEN_AUTOLOAD=1 opt-in)
 """
 
 from __future__ import annotations
@@ -72,6 +73,19 @@ class AppSettings:
     # tournament by default (cheap-first escalation keeps it near one render).
     # Independent of scene_candidates, which is the explicit power-user override.
     auto_tournament: bool = True
+    # Render profile (Agent 1): single source of truth lives in
+    # aetherlab/core/render_profile.py. These fields persist the preset and
+    # explicit overrides; env vars (AETHERLAB_*) always win at resolve time.
+    render_preset: str = "standard"  # preview | standard | cinematic
+    render_quality: str = ""  # explicit Manim -q flag (l/m/h/k); "" = preset default
+    render_width: int = 0  # 0 = derive from quality/preset
+    render_height: int = 0  # 0 = derive from quality/preset
+    render_fps: int = 0  # 0 = preset default; explicit --fps otherwise
+    render_renderer: str = ""  # cairo | opengl; "" = cairo default
+    adaptive_quality: bool = True  # allow reported fps fallback on heavy scenes
+    render_max_local: int = 0  # 0 = auto (cpu_count//2 clamped 1..4)
+    render_below_normal: bool = False  # legacy constrained-tier priority
+    render_timeout_scale: float = 1.0
     provider_source: str = "environment"
     api_key_source: str = "none"
     provider_warning: str = ""
@@ -93,15 +107,19 @@ def app_config_path() -> Path:
     return _path_from_env("AETHERLAB_DATA_DIR", _default_data_dir()) / "settings.json"
 
 
-def load_app_config() -> dict[str, str]:
+def load_app_config(*, strict_io: bool = False) -> dict[str, str]:
     """Read the config saved by the in-app Settings dialog (may not exist)."""
     path = app_config_path()
-    if not path.exists():
-        return {}
     with path_lock(path):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            return {}
+        except OSError:
+            if strict_io:
+                raise
+            return {}
+        except (UnicodeError, json.JSONDecodeError):
             return {}
     if not isinstance(payload, dict):
         return {}
@@ -116,7 +134,7 @@ def save_app_config(values: dict[str, str | None]) -> Path:
     """Persist Settings-dialog values. Empty/None values are dropped."""
     path = app_config_path()
     with path_lock(path):
-        existing = load_app_config()
+        existing = load_app_config(strict_io=True)
         for key, value in values.items():
             if value is None or not str(value).strip():
                 existing.pop(key, None)
@@ -395,6 +413,52 @@ def load_settings() -> AppSettings:
             app_cfg.get("auto_tournament"),
             default=True,
         ),
+        render_preset=_render_preset(
+            _first_env("AETHERLAB_RENDER_PRESET", "AETHERLAB_RENDER_TIER", "RENDER_TIER")
+            or app_cfg.get("render_preset")
+        ),
+        render_quality=_render_quality(
+            _first_env("AETHERLAB_MANIM_QUALITY", "MANIM_QUALITY")
+            or app_cfg.get("render_quality")
+        ),
+        render_width=_as_int(
+            os.getenv("AETHERLAB_RENDER_WIDTH"),
+            app_cfg.get("render_width"),
+            default=0,
+        ),
+        render_height=_as_int(
+            os.getenv("AETHERLAB_RENDER_HEIGHT"),
+            app_cfg.get("render_height"),
+            default=0,
+        ),
+        render_fps=_as_int(
+            _first_env("AETHERLAB_MANIM_FPS", "MANIM_FPS"),
+            app_cfg.get("render_fps"),
+            default=0,
+        ),
+        render_renderer=_render_renderer(
+            os.getenv("AETHERLAB_MANIM_RENDERER") or app_cfg.get("render_renderer")
+        ),
+        adaptive_quality=_as_bool(
+            os.getenv("AETHERLAB_ADAPTIVE_QUALITY"),
+            os.getenv("AETHERLAB_RENDER_ADAPTIVE"),
+            app_cfg.get("adaptive_quality"),
+            default=True,
+        ),
+        render_max_local=_as_int(
+            os.getenv("AETHERLAB_LOCAL_RENDER_LIMIT"),
+            app_cfg.get("render_max_local"),
+            default=0,
+        ),
+        render_below_normal=_as_bool(
+            app_cfg.get("render_below_normal"),
+            default=False,
+        ),
+        render_timeout_scale=_as_float(
+            os.getenv("AETHERLAB_RENDER_TIMEOUT_SCALE"),
+            app_cfg.get("render_timeout_scale"),
+            default=1.0,
+        ),
         provider_source=source,
         api_key_source=api_key_source,
         provider_warning=provider_warning,
@@ -478,7 +542,7 @@ def load_legacy_env(path: Path | None = None) -> dict[str, str]:
         return {}
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return {}
     result: dict[str, str] = {}
     for line in lines:
@@ -552,6 +616,28 @@ def _render_mode(value: str | None) -> str:
     return mode if mode in {"local", "cloud", "auto"} else "local"
 
 
+def _render_preset(value: str | None) -> str:
+    """Saved/env preset name, normalized; legacy tier names map to presets."""
+    raw = str(value or "standard").strip().lower()
+    mapping = {
+        "cinematic": "cinematic", "cloud_cinematic": "cinematic", "high": "cinematic",
+        "standard": "standard", "constrained": "standard",
+        "preview": "preview", "draft": "preview", "low": "preview",
+        "auto": "standard", "": "standard",
+    }
+    return mapping.get(raw, "standard")
+
+
+def _render_quality(value: str | None) -> str:
+    raw = str(value or "").strip().lower().lstrip("-q")
+    return raw if raw in {"l", "m", "h", "k"} else ""
+
+
+def _render_renderer(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in {"cairo", "opengl"} else ""
+
+
 def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
     """Load Qwen/OpenAI-compatible provider settings without logging secrets."""
 
@@ -563,37 +649,55 @@ def load_qwen_settings(path: Path | None = None) -> dict[str, str]:
 
     try:
         payload = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
 
-    model_name = str(_nested_get(payload, ["model", "name"]) or "")
+    if not isinstance(payload, dict):
+        return {}
+    raw_model = _nested_get(payload, ["model", "name"])
+    if raw_model is not None and not isinstance(raw_model, str):
+        # A malformed explicit model must not leave credentials attached to a
+        # different default provider/model after partial recovery.
+        return {}
+    model_name = raw_model.strip() if isinstance(raw_model, str) else ""
     providers = _nested_get(payload, ["modelProviders", "openai"]) or []
     provider = _find_provider(providers, model_name)
-    env_key = str(provider.get("envKey", "DASHSCOPE_API_KEY")) if provider else "DASHSCOPE_API_KEY"
-    api_key = _nested_get(payload, ["env", env_key]) or os.getenv(env_key)
+    raw_env_key = provider.get("envKey") if provider else None
+    env_key = raw_env_key.strip() if isinstance(raw_env_key, str) and raw_env_key.strip() else "DASHSCOPE_API_KEY"
+    embedded_key = _nested_get(payload, ["env", env_key])
+    api_key = embedded_key if isinstance(embedded_key, str) and embedded_key.strip() else os.getenv(env_key)
 
     result: dict[str, str] = {"source": str(settings_path)}
     if model_name:
         result["model"] = model_name
-    if provider and provider.get("baseUrl"):
-        result["base_url"] = str(provider["baseUrl"])
+    base_url = provider.get("baseUrl") if provider else None
+    if base_url is not None and not isinstance(base_url, str):
+        return {}
+    if isinstance(base_url, str) and base_url.strip():
+        result["base_url"] = base_url.strip()
     if isinstance(api_key, str) and api_key.strip():
         result["api_key"] = api_key.strip()
-    return result
+    return result if len(result) > 1 else {}
+
+
+def _local_app_data_dir() -> Path | None:
+    value = os.getenv("LOCALAPPDATA", "").strip()
+    path = Path(value) if value else None
+    return path if path is not None and path.is_absolute() else None
 
 
 def _default_data_dir() -> Path:
     """Stable per-user data directory, independent of the launch working dir."""
-    local_app_data = os.getenv("LOCALAPPDATA")
+    local_app_data = _local_app_data_dir()
     if local_app_data:
-        return Path(local_app_data) / "AetherLab"
+        return local_app_data / "AetherLab"
     return Path.home() / ".aetherlab"
 
 
 def _default_chroma_path() -> Path:
-    local_app_data = os.getenv("LOCALAPPDATA")
+    local_app_data = _local_app_data_dir()
     if local_app_data:
-        return Path(local_app_data) / "AetherLab" / "chroma"
+        return local_app_data / "AetherLab" / "chroma"
     return Path.home() / ".aetherlab" / "chroma"
 
 

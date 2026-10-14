@@ -258,11 +258,14 @@ class LessonPipeline:
         unless ``regenerate`` forces a fresh render.
         """
         cache = _ChapterCache(out_dir)
-        key = _chapter_key(ch, plan)
+        key = _chapter_key(ch, plan, self.settings, quality)
         if not regenerate:
             cached = cache.get(key)
             if cached is not None and _scene_cache_usable(cached, self.settings):
-                return cached
+                # Guard against stale dubs: a cached clip narrated in another
+                # language/voice must not be reused for this lesson language.
+                if _chapter_clip_matches(cached, plan.language, self.settings):
+                    return cached
 
         solver = _chapter_solver(ch, plan)
         rag = RagResult(keywords=list(solver.keywords), hits=[], backend="lesson")
@@ -270,29 +273,45 @@ class LessonPipeline:
             prompt=(
                 f"{_chapter_prompt(ch, plan)}\n\n"
                 f"All visible labels and captions must be in {LANGUAGE_PROMPT_NAMES[plan.language]}."
-            )
+            ),
+            language=plan.language,
         )
         aspect = _chapter_aspect(ch, plan)
         brief = json.dumps({"chapter": ch.title, "goal": ch.goal, "beats": ch.beats,
                             "key_symbols": ch.key_symbols, "narration": ch.narration})
+        # Chapter narration REPLACES scene-runtime narration: render silent
+        # here (narration_enabled=False + add_narration=False) and dub once in
+        # _narrate_chapters. Rendering narrated and then narrating again would
+        # stack two voices (overlap / double narration).
+        from dataclasses import replace as _replace
+
         try:
-            if self.manim.scene_tournament_enabled(self.settings):
+            render_settings = _replace(self.settings, narration_enabled=False)
+        except Exception:  # noqa: BLE001 — SimpleNamespace test doubles
+            render_settings = self.settings
+            try:
+                render_settings.narration_enabled = False  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            if self.manim.scene_tournament_enabled(render_settings):
                 scene = await self.manim.generate_render_tournament(
-                    request, solver, rag, self.settings, quality=quality, brief=brief,
+                    request, solver, rag, render_settings, quality=quality, brief=brief,
                     aspect=aspect,
                     cancel_check=cancel_check,
                 )
             else:
                 scene = await self.manim.generate_scene_async(
-                    request, solver, rag, self.settings, aspect=aspect
+                    request, solver, rag, render_settings, aspect=aspect
                 )
                 scene = await self.manim.render_scene_with_repair(
                     scene,
-                    self.settings,
+                    render_settings,
                     quality=quality,
                     brief=brief,
                     cancel_check=cancel_check,
                     duration_target_s=request.duration_target_s,
+                    add_narration=False,
                 )
         except ProcessCancelledError:
             return None
@@ -326,8 +345,16 @@ class LessonPipeline:
         language: str = "en",
         cancel_check: Callable[[], bool] | None = None,
     ) -> tuple[list[Path], list[tuple[str, float]], list[str]]:
-        from aetherlab.services.voiceover import narrate_segment
+        from aetherlab.core.language import ensure_complete_sentences
+        from aetherlab.services.voiceover import narrate_segment, resolve_and_validate_voice
 
+        language = normalize_language(language)
+        voice, voice_notes = await resolve_and_validate_voice(
+            getattr(self.settings, "tts_voice", None), language
+        )
+        for note in voice_notes:
+            if note:
+                log.info("Lesson narration voice: %s", note)
         clips: list[Path] = []
         segments: list[tuple[str, float]] = []
         titles: list[str] = []
@@ -336,15 +363,26 @@ class LessonPipeline:
                 raise ProcessCancelledError("Lesson narration cancelled")
             if not scene or scene.status != "rendered" or not scene.video_path:
                 continue
-            video = Path(scene.video_path)
-            if self.settings.narration_enabled and ch.narration.strip():
+            # A chapter clip rendered silent (see _render_chapter); if a stale
+            # cache ever yields an already-narrated clip, prefer its silent
+            # source so chapter dubbing replaces instead of stacking voices.
+            video = Path(scene.silent_video_path or scene.video_path)
+            if not video.is_file():
+                video = Path(scene.video_path)
+            narration = ensure_complete_sentences(ch.narration, language) or ch.narration
+            if self.settings.narration_enabled and narration.strip():
                 narrated, dur = await narrate_segment(
-                    video, ch.narration, out_dir,
-                    voice=tts_voice_for_language(self.settings.tts_voice, language),
+                    video, narration, out_dir,
+                    voice=voice,
                     rate=self.settings.tts_rate,
                     cancel_check=cancel_check,
+                    language=language,
                 )
                 clip = narrated or video
+                if narrated is not None:
+                    scene.silent_video_path = str(video)
+                    scene.video_path = str(narrated)
+                    scene.narration_text = narration
             else:
                 from aetherlab.services.voiceover import get_duration
                 clip = video
@@ -379,11 +417,28 @@ class LessonPipeline:
         srt_path = None
         # Time the subtitles to the PRODUCED timeline (offsets account for the
         # title cards + crossfades) so cues stay in sync with lesson.mp4.
-        srt = build_srt(segments, offsets or None)
+        # Validate offsets: length must match clips and be non-decreasing, else
+        # fall back to a plain running sum so cues cannot drift to wrong chapters.
+        valid_offsets: list[float] | None = None
+        try:
+            raw = [float(x) for x in (offsets or [])]
+            if len(raw) == len(clips) and all(
+                b >= a for a, b in zip([0.0] + raw, raw)
+            ):
+                valid_offsets = raw
+            else:
+                log.warning(
+                    "Lesson assembly offsets invalid (%d offsets for %d clips); "
+                    "using running-sum subtitle timing.",
+                    len(raw), len(clips),
+                )
+        except (TypeError, ValueError):
+            valid_offsets = None
+        srt = build_srt(segments, valid_offsets)
         if srt.strip():
             srt_path = out_dir / "lesson.srt"
             srt_path.write_text(srt, encoding="utf-8")
-        return video, srt_path, offsets
+        return video, srt_path, valid_offsets if valid_offsets is not None else []
 
 
 # ── chapter → scene inputs ───────────────────────────────────────────────────
@@ -556,13 +611,60 @@ class _PlanCache:
             pass
 
 
-def _chapter_key(ch: LessonChapter, plan: LessonPlan) -> str:
+def _chapter_key(
+    ch: LessonChapter,
+    plan: LessonPlan,
+    settings: object | None = None,
+    quality: str = "l",
+) -> str:
+    """Cache identity: chapter content + language + render profile + voice.
+
+    Voice/rate/narration changes invalidate rendered clips so a ru clip is
+    never reused for a kk lesson (and vice versa); render-profile changes
+    invalidate across quality/backend switches (Agent 1 owns the profile
+    module — we consume it best-effort via voiceover.render_profile_key).
+    """
+    from aetherlab.services.voiceover import VOICEOVER_PIPELINE_VERSION, render_profile_key
+
     payload = json.dumps(
-        {"topic": plan.topic, "audience": plan.audience,
-         "language": plan.language, "chapter": ch.to_json()},
+        {
+            "topic": plan.topic, "audience": plan.audience,
+            "language": normalize_language(plan.language),
+            "chapter": ch.to_json(),
+            "voice": tts_voice_for_language(
+                getattr(settings, "tts_voice", None), normalize_language(plan.language)
+            ) if settings is not None else "",
+            "rate": str(getattr(settings, "tts_rate", "") or "") if settings is not None else "",
+            "narration": bool(getattr(settings, "narration_enabled", False)) if settings is not None else False,
+            "profile": render_profile_key(settings, quality),
+            "pipeline": VOICEOVER_PIPELINE_VERSION,
+        },
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _chapter_clip_matches(scene: SceneBundle, language: str, settings: object) -> bool:
+    """True when a cached chapter clip is safe to reuse for this dub.
+
+    Rejects clips whose narration language/voice could not match: a narrated
+    clip without silent source in a narration-enabled lesson would force either
+    silent reuse or double dubbing, so it is treated as a miss and re-rendered
+    silent + dubbed once. Silent clips and narration-disabled lessons reuse.
+    """
+    language = normalize_language(language)
+    if not bool(getattr(settings, "narration_enabled", False)):
+        return True
+    # Silent render (no narration track yet) — always reusable; dubbing happens
+    # in _narrate_chapters.
+    if not scene.narration_text and not scene.subtitle_path:
+        return True
+    # Narrated clip: reusable only when we kept the silent source to replace
+    # (not stack) the dub, and the clip's voice matches this lesson language.
+    if scene.silent_video_path and Path(scene.silent_video_path).is_file():
+        return True
+    # No silent source: narration language cannot be verified → re-render.
+    return False
 
 
 class _ChapterCache:

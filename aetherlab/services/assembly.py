@@ -26,8 +26,90 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Uniform canvas every segment is normalized to before crossfading.
+# Legacy default canvas (kept for backward-compat importers). Agent 1: the
+# effective canvas now comes from RenderProfile via _resolve_canvas() — never
+# silently downgrade higher-quality chapters.
 _W, _H, _FPS = 1280, 720, 30
+
+
+def _probe_video_dims(clip: Path) -> tuple[int, int, int]:
+    """Return (width, height, fps) via PyAV; (0, 0, 0) if unprobeable."""
+    try:
+        import av
+
+        with av.open(str(clip)) as container:
+            video = container.streams.video
+            if not video:
+                return 0, 0, 0
+            stream = video[0]
+            w, h = int(stream.width or 0), int(stream.height or 0)
+            fps = 0
+            try:
+                rate = stream.average_rate
+                if rate:
+                    fps = int(round(float(rate)))
+            except Exception:
+                fps = 0
+            return w, h, fps
+    except Exception:  # noqa: BLE001 — unprobeable clips keep the profile canvas
+        return 0, 0, 0
+
+
+def _resolve_canvas(chapters, profile=None, settings=None, quality=""):
+    """Resolve the assembly canvas: profile base, upgraded to preserve chapters.
+
+    Explicit quality must survive assembly: if any chapter clip exceeds the
+    profile canvas (e.g. cinematic 1080p60 chapters with a default profile),
+    the canvas is upgraded to the max chapter dims/fps and the reason is
+    logged. Never silently downgrade.
+    """
+    from dataclasses import replace as _replace
+
+    from aetherlab.core.render_profile import describe_fallback, get_effective_profile
+
+    try:
+        base = profile if profile is not None else get_effective_profile(settings, quality=quality or "")
+    except Exception as exc:  # noqa: BLE001 — invalid profile falls back loudly
+        log.warning("%s", describe_fallback(f"invalid assembly profile ({exc}); using 720p30 default"))
+        from aetherlab.core.render_profile import PRESETS
+
+        base = PRESETS["standard"]
+    try:
+        max_w, max_h, max_fps = int(base.width), int(base.height), int(base.fps)
+    except (TypeError, ValueError):
+        max_w, max_h, max_fps = 1280, 720, 30
+    for clip in chapters or []:
+        try:
+            w, h, fps = _probe_video_dims(clip)
+        except Exception:
+            continue
+        if w > 0 and h > 0:
+            # Upgrade width/height independently would distort aspect; upgrade
+            # only when the chapter's pixel count exceeds the canvas.
+            if w * h > max_w * max_h:
+                max_w, max_h = w, h
+        if fps > 0 and fps > max_fps:
+            max_fps = fps
+    # Clamp to sane encode bounds.
+    max_w = max(320, min(3840, max_w))
+    max_h = max(240, min(2160, max_h))
+    max_fps = max(15, min(120, max_fps))
+    if (max_w, max_h, max_fps) != (int(base.width), int(base.height), int(base.fps)):
+        log.info(
+            "Assembly canvas %dx%d@%d upgraded to %dx%d@%d to preserve chapter quality.",
+            int(base.width), int(base.height), int(base.fps), max_w, max_h, max_fps,
+        )
+        try:
+            base = _replace(
+                base, width=max_w, height=max_h, fps=max_fps,
+                source=str(getattr(base, "source", "")) + ";assembly:preserve-chapters",
+            )
+        except Exception:
+            pass
+    try:
+        return base.validated()
+    except Exception:
+        return base
 _CARD_INTRO_SEC = 3.0
 _CARD_CHAPTER_SEC = 2.2
 _CARD_END_SEC = 3.0
@@ -65,6 +147,9 @@ async def assemble_lesson(
     timeout: int = 300,
     return_offsets: bool = False,
     cancel_check: Callable[[], bool] | None = None,
+    profile=None,
+    settings=None,
+    quality: str = "",
 ):
     """Assemble ordered chapter clips into one lesson MP4.
 
@@ -92,6 +177,14 @@ async def assemble_lesson(
         log.info("No bundled ffmpeg; lesson stays as separate chapter clips.")
         return _result(None, [])
 
+    # Agent 1: profile canvas (never silently downgrade chapters).
+    canvas = _resolve_canvas(clips, profile=profile, settings=settings, quality=quality)
+    try:
+        _cw, _ch, _cfps = int(canvas.width), int(canvas.height), int(canvas.fps)
+    except (TypeError, ValueError):
+        _cw, _ch, _cfps = _W, _H, _FPS
+    log.info("Assembly canvas: %dx%d@%d (%s).", _cw, _ch, _cfps, getattr(canvas, "source", ""))
+
     # Produced lesson (cards + crossfades) when we have card metadata.
     if lesson_title or chapter_titles:
         produced = None
@@ -103,7 +196,7 @@ async def assemble_lesson(
                 ffmpeg, clips, Path(out_path),
                 lesson_title=lesson_title, lesson_subtitle=lesson_subtitle,
                 chapter_titles=chapter_titles or [], palette=palette, timeout=timeout,
-                cancel_check=cancel_check,
+                cancel_check=cancel_check, canvas=canvas,
             )
             if produced:
                 break
@@ -129,11 +222,12 @@ async def assemble_lesson(
         return _result(
             await _assemble_silent(
                 ffmpeg, clips, len(clips), out_path, timeout, cancel_check=cancel_check,
+                canvas=canvas,
             ),
             plain_offsets,
         )
 
-    # Normalize each clip: fixed 1280x720 canvas (pad, don't stretch), 30 fps,
+    # Normalize each clip: profile canvas (pad, don't stretch), profile fps,
     # and a guaranteed stereo audio track (real audio, or generated silence),
     # so the concat filter's inputs are uniform.
     cmd: list[str] = [ffmpeg, "-y"]
@@ -147,9 +241,9 @@ async def assemble_lesson(
     concat_inputs = ""
     for i, _clip in enumerate(clips):
         filters.append(
-            f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"setsar=1,fps=30,format=yuv420p[v{i}]"
+            f"[{i}:v]scale={_cw}:{_ch}:force_original_aspect_ratio=decrease,"
+            f"pad={_cw}:{_ch}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"setsar=1,fps={_cfps},format=yuv420p[v{i}]"
         )
         # Use the clip's own audio if present, else the silence source.
         filters.append(
@@ -175,6 +269,7 @@ async def assemble_lesson(
     return _result(
         await _assemble_silent(
             ffmpeg, clips, silence_idx, out_path, timeout, cancel_check=cancel_check,
+            canvas=canvas,
         ),
         plain_offsets,
     )
@@ -182,10 +277,14 @@ async def assemble_lesson(
 
 async def _assemble_silent(
     ffmpeg: str, clips: list[Path], silence_idx: int, out_path: Path, timeout: int,
-    *, cancel_check: Callable[[], bool] | None = None,
+    *, cancel_check: Callable[[], bool] | None = None, canvas=None,
 ) -> Path | None:
     """Fallback: video-only concat (drop audio) — never fail to produce a lesson
     just because one chapter had no audio stream."""
+    try:
+        _sw, _sh, _sfps = int(canvas.width), int(canvas.height), int(canvas.fps)
+    except (TypeError, ValueError, AttributeError):
+        _sw, _sh, _sfps = _W, _H, _FPS
     cmd: list[str] = [ffmpeg, "-y"]
     for clip in clips:
         cmd += ["-i", str(clip)]
@@ -193,8 +292,8 @@ async def _assemble_silent(
     vins = ""
     for i in range(len(clips)):
         filters.append(
-            f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30,"
+            f"[{i}:v]scale={_sw}:{_sh}:force_original_aspect_ratio=decrease,"
+            f"pad={_sw}:{_sh}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={_sfps},"
             f"format=yuv420p[v{i}]"
         )
         vins += f"[v{i}]"
@@ -245,15 +344,26 @@ _VNORM = (
 )
 
 
+def _vnorm_for(canvas=None) -> str:
+    """Normalization filter for a canvas; legacy _VNORM when unresolvable."""
+    try:
+        filt = canvas.canvas_filter()
+        if filt:
+            return str(filt)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return _VNORM
+
+
 async def _normalize_card(
     ffmpeg: str, png: Path, dur: float, out: Path, timeout: int,
-    *, cancel_check: Callable[[], bool] | None = None,
+    *, cancel_check: Callable[[], bool] | None = None, canvas=None,
 ) -> bool:
     """PNG → a `dur`-second clip with a silent stereo audio track."""
     cmd = [
         ffmpeg, "-y", "-loop", "1", "-t", f"{dur:.2f}", "-i", str(png),
         "-f", "lavfi", "-t", f"{dur:.2f}", "-i", "anullsrc=r=44100:cl=stereo",
-        "-vf", _VNORM, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-vf", _vnorm_for(canvas), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest",
         "-movflags", "+faststart", str(out),
     ]
@@ -262,12 +372,13 @@ async def _normalize_card(
 
 async def _normalize_clip(
     ffmpeg: str, clip: Path, has_audio: bool, out: Path, timeout: int,
-    *, cancel_check: Callable[[], bool] | None = None,
+    *, cancel_check: Callable[[], bool] | None = None, canvas=None,
 ) -> bool:
     """Chapter clip → uniform canvas/fps with a guaranteed stereo audio track."""
+    vnorm = _vnorm_for(canvas)
     if has_audio:
         cmd = [
-            ffmpeg, "-y", "-i", str(clip), "-vf", _VNORM,
+            ffmpeg, "-y", "-i", str(clip), "-vf", vnorm,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
             "-movflags", "+faststart", str(out),
@@ -276,7 +387,7 @@ async def _normalize_clip(
         cmd = [
             ffmpeg, "-y", "-i", str(clip),
             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-vf", _VNORM, "-map", "0:v", "-map", "1:a", "-shortest",
+            "-vf", vnorm, "-map", "0:v", "-map", "1:a", "-shortest",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
             "-movflags", "+faststart", str(out),
@@ -295,6 +406,7 @@ async def _assemble_produced(
     palette: dict[str, str] | None,
     timeout: int,
     cancel_check: Callable[[], bool] | None = None,
+    canvas=None,
 ) -> tuple[Path, list[float]] | None:
     """Build a title-carded, crossfaded lesson.
 
@@ -356,10 +468,12 @@ async def _assemble_produced(
         if seg[0] == "card":
             ok = await _normalize_card(
                 ffmpeg, seg[1], seg[2], dst, timeout, cancel_check=cancel_check,
+                canvas=canvas,
             )
         else:
             ok = await _normalize_clip(
                 ffmpeg, seg[1], seg[3], dst, timeout, cancel_check=cancel_check,
+                canvas=canvas,
             )
         if not ok or not dst.exists():
             return None

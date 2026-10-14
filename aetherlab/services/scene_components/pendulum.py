@@ -133,6 +133,7 @@ class {class_name}(Scene):
         pivot = np.array([-3.3, 1.4, 0.0])
 
         title = Text({title}).scale(0.5).to_edge(UP)
+        title.set_z_index(5)
 
         t_tracker = ValueTracker(float(ts[0]))
 
@@ -147,6 +148,7 @@ class {class_name}(Scene):
         rod = always_redraw(lambda: Line(pivot, bob_point(), color=GREY_A, stroke_width=3))
         bob = always_redraw(lambda: Dot(bob_point(), color=YELLOW, radius=0.16))
         trail = TracedPath(bob_point, stroke_color=TEAL, stroke_width=2.5, dissipating_time=1.6)
+        trail.set_z_index(1)
 
         # theta(t) read-out on the right, drawn in sync with the swing.
         axes = Axes(
@@ -157,10 +159,13 @@ class {class_name}(Scene):
             x_length=5.0, y_length=3.0,
             axis_config={{"include_tip": False, "stroke_opacity": 0.5}},
         ).to_corner(DR, buff=0.6)
+        axes.set_z_index(-5)
         y_label = axes.get_y_axis_label(Text("theta").scale(0.35))
+        y_label.set_z_index(5)
         trace_pts = [axes.coords_to_point(t, th) for t, th in zip(ts, ths)]
         trace = VMobject(color=TEAL, stroke_width=3)
         trace.set_points_smoothly(trace_pts)
+        trace.set_z_index(0)
         readout = always_redraw(lambda: Dot(
             axes.coords_to_point(t_tracker.get_value(), theta_now()),
             color=YELLOW, radius=0.06))
