@@ -18,6 +18,7 @@ the caller renders exactly as before. Disable with ``AETHERLAB_PREFLIGHT=0``.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -210,25 +211,176 @@ def preflight_scene(code: str, class_name: str, timeout: int = PREFLIGHT_TIMEOUT
     return report
 
 
-def repair_overlap_code(code: str, overlaps: list[dict], *, attempt: int = 0) -> tuple[str, bool]:
-    """Deterministically nudge stacked duplicates apart (bounded, fail-soft).
+# Constructor types the overlap repair may shift. Text-family ctors carry
+# labels, so reported findings map onto their string literals; closed shapes
+# and numbers form piles but have no labels to target.
+_REPAIR_TEXT_CTORS = frozenset({
+    "Text", "Tex", "MathTex", "SingleStringMathTex", "MarkupText", "Paragraph",
+    "Code", "DecimalNumber", "Integer", "Variable",
+})
+_REPAIR_SHAPE_CTORS = frozenset({
+    "Square", "Circle", "Rectangle", "RoundedRectangle", "Triangle", "Dot",
+    "Ellipse", "Polygon", "RegularPolygon", "Line", "Arrow", "DoubleArrow",
+})
+_REPAIR_FOCAL_CTORS = _REPAIR_TEXT_CTORS | _REPAIR_SHAPE_CTORS
+# Ctors that take no geometry: a bare call sits at ORIGIN.
+_REPAIR_ORIGIN_CTORS = (_REPAIR_TEXT_CTORS
+                        | {"Square", "Circle", "Rectangle", "RoundedRectangle",
+                           "Triangle", "Dot", "Ellipse", "RegularPolygon"})
+_REPAIR_PLACEMENT_KWARGS = frozenset({"point", "start", "end", "center"})
+# Chain / statement methods that count as deliberate positioning.
+_REPAIR_POSITION_METHODS = frozenset({
+    "move_to", "shift", "next_to", "to_edge", "to_corner", "align_to",
+    "arrange", "move_to_edge",
+})
 
-    The dominant machine-generated crowding pattern is several mobjects placed
-    at the identical ``.move_to(...)`` target with no cleanup between them.
-    For each such pile, later occurrences are shifted downward by a staggered
-    amount that grows with ``attempt`` (1.0/1.6/2.2 ... units). Only single-line
-    calls are edited, the result is compile-checked, and any doubt returns the
-    original code unchanged. Returns (code, changed).
+
+def _repair_chain_outermost(ctor: ast.Call, parent: dict[ast.AST, ast.AST]) -> ast.Call:
+    """Outermost call of the attribute chain rooted at ``ctor``.
+
+    ``Text("x").move_to(UP)`` repairs to ``....move_to(UP).shift(...)``: the
+    shift must come AFTER move_to or move_to overrides it. Ascent stops at
+    anything but an attribute hop, so ``VGroup(Text("x"))`` shifts just the
+    member, not the group.
     """
-    import ast
+    node = ctor
+    while True:
+        up = parent.get(node)
+        if not isinstance(up, ast.Attribute) or up.value is not node:
+            return node
+        call = parent.get(up)
+        if not (isinstance(call, ast.Call) and call.func is up):
+            return node
+        node = call
 
-    if not overlaps or not code:
-        return code, False
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code, False
-    groups: dict[str, list[ast.Call]] = {}
+
+def _repair_root_ctor(call: ast.Call) -> tuple[str | None, ast.Call | None]:
+    """Innermost constructor of a chained call (``Text`` for ``Text(..).move_to``)."""
+    node: ast.AST = call
+    while isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        node = node.func.value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id, node
+    return None, None
+
+
+def _repair_chain_positions(call: ast.Call) -> bool:
+    """True when any hop of the chain is deliberate positioning."""
+    node: ast.AST = call
+    while isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr in _REPAIR_POSITION_METHODS:
+            return True
+        node = node.func.value
+    return False
+
+
+def _repair_targeted_insertions(
+    tree: ast.AST, overlaps: list[dict], mult: float,
+) -> list[tuple[int, int, str]]:
+    """One min-axis shift per reported pair, mapped via the label text.
+
+    The runner records each Text's content (``label_b``); the matching string
+    literal identifies the exact source node to move. Only unambiguous
+    matches (one literal, focal ctor, usable geometry) produce edits.
+    """
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent.setdefault(child, node)
+    literals: dict[str, list[ast.Call]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id not in _REPAIR_FOCAL_CTORS:
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                norm = " ".join(arg.value.split())
+                if norm:
+                    literals.setdefault(norm, []).append(node)
+    insertions: list[tuple[int, int, str]] = []
+    for item in overlaps:
+        if item.get("transient"):
+            continue
+        if str(item.get("severity", "low")) not in {"high", "medium"}:
+            continue
+        label = str(item.get("label_b", "") or "").strip()
+        if not label:
+            continue
+        if label.endswith("…"):
+            matches = [ctor for norm, ctors in literals.items()
+                       if norm.startswith(label[:-1]) for ctor in ctors]
+        else:
+            matches = list(literals.get(label, []))
+        if len(matches) != 1:
+            continue  # ambiguous or unmappable: piles may still catch it
+        try:
+            box_a = [float(v) for v in item["bounds_a"]]
+            box_b = [float(v) for v in item["bounds_b"]]
+            hit = [float(v) for v in item.get("overlap", item.get("bounds", []))]
+            if not (len(box_a) == len(box_b) == len(hit) == 4):
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        push_x = max(0.0, hit[1] - hit[0]) + 0.15
+        push_y = max(0.0, hit[3] - hit[2]) + 0.15
+        cx_a, cx_b = (box_a[0] + box_a[1]) / 2.0, (box_b[0] + box_b[1]) / 2.0
+        cy_a, cy_b = (box_a[2] + box_a[3]) / 2.0, (box_b[2] + box_b[3]) / 2.0
+        if push_x <= push_y:
+            direction = "RIGHT" if cx_b >= cx_a else "LEFT"
+            distance = max(0.3, push_x * mult)
+        else:
+            direction = "UP" if cy_b >= cy_a else "DOWN"
+            distance = max(0.3, push_y * mult)
+        outer = _repair_chain_outermost(matches[0], parent)
+        end_line = getattr(outer, "end_lineno", None) or outer.lineno
+        end_col = getattr(outer, "end_col_offset", None)
+        if not end_col:
+            continue
+        insertions.append(
+            (end_line - 1, end_col, f".shift({direction} * {round(distance, 2)})")
+        )
+    return insertions
+
+
+def _repair_pile_insertions(
+    code: str, tree: ast.AST, overlaps: list[dict], step: float,
+) -> list[tuple[int, int, str]]:
+    """Staggered DOWN shifts for duplicate-placement piles (fallback).
+
+    Covers identical ``.move_to(...)`` targets (single- or multi-line) and
+    ORIGIN piles (bare focal constructors with no positioning anywhere).
+    Fires only when no targeted edit applied, and only for piles whose class
+    appears in a reported pair — a Text pile is not touched for a
+    Circle-vs-Square finding. Members of unresolvable class pass the gate
+    (fail-open) so variable-style piles keep repairing.
+    """
+    reported: set[str] = set()
+    for item in overlaps or []:
+        for side in ("a", "b"):
+            name = str(item.get(side, "") or "")
+            if "#" in name:
+                reported.add(name.split("#", 1)[0])
+    assigned_class: dict[str, str] = {}
+    positioned_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if (node.func.attr in _REPAIR_POSITION_METHODS
+                    and isinstance(node.func.value, ast.Name)):
+                positioned_names.add(node.func.value.id)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            cls, _ = _repair_root_ctor(node.value)
+            if cls in _REPAIR_FOCAL_CTORS:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        assigned_class[target.id] = cls
+
+    def _gated(members: list[tuple[str | None, ast.Call]]) -> bool:
+        known = {cls for cls, _ in members if cls}
+        return bool(known & reported) or not known
+
+    insertions: list[tuple[int, int, str]] = []
+    groups: dict[str, list[tuple[str | None, ast.Call]]] = {}
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
@@ -239,29 +391,90 @@ def repair_overlap_code(code: str, overlaps: list[dict], *, attempt: int = 0) ->
         except Exception:  # noqa: BLE001 - conservative: skip unresolvable targets
             continue
         norm = re.sub(r"\s+", "", segment)
-        if norm:
-            groups.setdefault(norm, []).append(node)
-    piles = {target: calls for target, calls in groups.items() if len(calls) >= 2}
-    if not piles:
-        return code, False
-    step = 1.0 + 0.6 * max(0, attempt)
-    # (line index, column, text): applied right-to-left per line.
-    insertions: dict[int, list[tuple[int, str]]] = {}
-    for calls in piles.values():
-        ordered = sorted(calls, key=lambda n: (n.lineno, n.col_offset))
+        if not norm:
+            continue
+        cls, _ = _repair_root_ctor(node)
+        if cls is None and isinstance(node.func.value, ast.Name):
+            cls = assigned_class.get(node.func.value.id)
+        groups.setdefault(norm, []).append((cls, node))
+    for calls in groups.values():
+        members = [(cls, call) for cls, call in calls]
+        if len(members) < 2 or not _gated(members):
+            continue
+        ordered = sorted((call for _, call in members),
+                         key=lambda n: (n.lineno, n.col_offset))
         for pile_index, node in enumerate(ordered[1:], start=1):
             end_line = getattr(node, "end_lineno", None) or node.lineno
             end_col = getattr(node, "end_col_offset", None)
-            if end_line != node.lineno or not end_col:
-                continue  # multi-line call: skip rather than risk breaking it
+            if not end_col:
+                continue
             distance = round(step * pile_index, 2)
-            insertions.setdefault(node.lineno - 1, []).append(
-                (end_col, f".shift(DOWN * {distance})")
-            )
+            insertions.append(
+                (end_line - 1, end_col, f".shift(DOWN * {distance})"))
+    # ORIGIN piles: bare no-geometry ctors, unpositioned in-chain and by name.
+    # A non-constant positional arg is explicit geometry (Dot(star_pt),
+    # Line(LEFT, RIGHT)) and disqualifies; plain constants (Text("x"),
+    # DecimalNumber(0.0)) still sit at ORIGIN.
+    origin: list[tuple[str, ast.Call]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+            continue
+        cls, ctor = _repair_root_ctor(node.value)
+        if cls not in _REPAIR_ORIGIN_CTORS or ctor is None:
+            continue
+        if _repair_chain_positions(node.value):
+            continue
+        if any(kw.arg in _REPAIR_PLACEMENT_KWARGS for kw in ctor.keywords):
+            continue
+        if any(not isinstance(arg, ast.Constant) for arg in ctor.args):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if not names or any(name in positioned_names for name in names):
+            continue
+        origin.append((cls, node.value))
+    if len(origin) >= 2 and _gated([(cls, call) for cls, call in origin]):
+        ordered = sorted((call for _, call in origin),
+                         key=lambda n: (n.lineno, n.col_offset))
+        for pile_index, node in enumerate(ordered[1:], start=1):
+            end_line = getattr(node, "end_lineno", None) or node.lineno
+            end_col = getattr(node, "end_col_offset", None)
+            if not end_col:
+                continue
+            distance = round(step * pile_index, 2)
+            insertions.append(
+                (end_line - 1, end_col, f".shift(DOWN * {distance})"))
+    return insertions
+
+
+def repair_overlap_code(code: str, overlaps: list[dict], *, attempt: int = 0) -> tuple[str, bool]:
+    """Deterministically nudge stacked duplicates apart (bounded, fail-soft).
+
+    Targeted first: each reported pair's label maps onto the exact source
+    node, which shifts along the minimum-penetration axis by the measured
+    overlap plus margin. Piles are the fallback: identical ``.move_to(...)``
+    targets (single- or multi-line) and ORIGIN piles (bare focal constructors
+    with no positioning) shift downward staggered, but only when a pile
+    member's class appears in a reported pair. Separation grows with
+    ``attempt`` (1.0/1.6/2.2 ...), the result is compile-checked, and any
+    doubt returns the original code unchanged. Returns (code, changed).
+    """
+    if not overlaps or not code:
+        return code, False
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, False
+    mult = 1.0 + 0.6 * max(0, attempt)
+    insertions = _repair_targeted_insertions(tree, overlaps, mult)
+    if not insertions:
+        insertions = _repair_pile_insertions(code, tree, overlaps, mult)
     if not insertions:
         return code, False
+    by_line: dict[int, list[tuple[int, str]]] = {}
+    for line_index, col, text in insertions:
+        by_line.setdefault(line_index, []).append((col, text))
     lines = code.splitlines(keepends=True)
-    for line_index, edits in insertions.items():
+    for line_index, edits in by_line.items():
         if not 0 <= line_index < len(lines):
             return code, False
         for col, text in sorted(edits, reverse=True):

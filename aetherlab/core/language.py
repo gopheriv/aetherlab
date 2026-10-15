@@ -180,7 +180,7 @@ _UNITS_KK: dict[str, str] = {
     "Гц": "герц", "кГц": "килогерц", "МГц": "мегагерц",
     " Н": " ньютон", " Дж": " джоуль", " Вт": " ватт",
     " Па": " паскаль", " Кл": " кулон", " В": " вольт",
-    " кг": " килограмм", " г": " грамм",
+    " кг": " килограмм", " г": " грамм", " ж": " жыл",
     " км": " километр", " см": " сантиметр", " мм": " миллиметр",
 }
 _UNITS_EN: dict[str, str] = {
@@ -258,11 +258,14 @@ def _expand_latex(text: str, lang: str) -> str:
         return spoken
 
     text = _LATEX_CMD_RE.sub(_cmd, text)
+    # Unknown commands (\unknowncmd): speak the name rather than choking TTS
+    # on a backslash; lone leftovers (line breaks, escaped punctuation) go.
+    text = _re.sub(r"\\([A-Za-z]+)", r" \1 ", text)
     # Strip leftover math delimiters and braces; keep the inner words.
     text = text.replace("$", " ").replace("\\(", " ").replace("\\)", " ")
     text = text.replace("\\[", " ").replace("\\]", " ")
     text = text.replace("{", " ").replace("}", " ")
-    text = text.replace("_", " ")
+    text = text.replace("_", " ").replace("\\", " ")
     # Powers before the generic caret, in the narration language.
     text = text.replace("^2", tokens.get("^2", " squared ")).replace(
         "^3", tokens.get("^3", " cubed ")
@@ -282,11 +285,15 @@ _PUNCT_TAIL_RE = _re.compile(r"^(?P<stem>.*?)(?P<punct>[,.!?:;]+)$")
 _NUMBER_RE = _re.compile(r"^\d+([.,]\d+)?$")
 _FORMULA_WORD_RE = _re.compile(r"^[A-Za-z0-9+\-*/^_().=<>!×÷±∞≈≠≤≥θωλφπΔΣ→-]+$")
 _FORMULA_SYMBOL_RE = _re.compile(r"[+\-*/^_()=<>!×÷±∞≈≠≤≥θωλφπΔΣ→]")
-_WORD_HYPHEN_RE = _re.compile(r"^[A-Za-z]{2,}-[A-Za-z]{2,}$")  # e-mail, not a minus
+_WORD_HYPHEN_RE = _re.compile(r"^[A-Za-z]{1,}(?:-[A-Za-z]{1,})+$")  # e-mail, not a minus
 _MATH_HINT_RE = _re.compile(r"[\d=+*^<>!]")
 
-# "в 1999 г." / "1999 ж." is a year, not grams — period + number decides.
+# "в 1999 г." / "1999 ж." is a year, not grams — a 4-digit number decides.
+# ("5 г." is grams with a sentence period; 2-3 digit quantities are near
+# always weights, so only a 4-digit year reads as one.)
+_YEAR_NUM_RE = _re.compile(r"^\d{4}$")
 _YEAR_WORD = {"ru": "году", "kk": "жылы"}
+_YEAR_STEMS = {"ru": frozenset({"г"}), "kk": frozenset({"г", "ж"})}
 
 
 def _strip_unit_keys(units: dict[str, str]) -> dict[str, str]:
@@ -328,6 +335,7 @@ def normalize_spoken_text(text: str, language: str) -> str:
         prev = words[index - 1] if index else ""
         prev_stem = _PUNCT_TAIL_RE.sub(r"\g<stem>", prev) if prev else ""
         prev_is_number = _is_number(prev_stem or prev)
+        prev_is_year = bool(_YEAR_NUM_RE.match(prev_stem or prev))
         nxt = words[index + 1] if index + 1 < len(words) else ""
 
         def _unit_ok(key: str) -> bool:
@@ -346,7 +354,10 @@ def normalize_spoken_text(text: str, language: str) -> str:
             if word.endswith(".") and _sentence_end():
                 expansion += "."  # "т.е." also ends the sentence: keep the stop
         elif word in units and _unit_ok(word):
-            expansion = units[word]
+            if prev_is_year and word in _YEAR_STEMS.get(lang, frozenset()):
+                expansion = _YEAR_WORD[lang]  # "в 1999 г" is a year
+            else:
+                expansion = units[word]
         else:
             tail = _PUNCT_TAIL_RE.match(word)
             stem, punct = (tail.group("stem"), tail.group("punct")) if tail else (word, "")
@@ -355,8 +366,8 @@ def normalize_spoken_text(text: str, language: str) -> str:
             elif stem and stem in units and _unit_ok(stem):
                 if (
                     "." in punct
-                    and prev_is_number
-                    and ((lang == "ru" and stem == "г") or (lang == "kk" and stem in {"г", "ж"}))
+                    and prev_is_year
+                    and stem in _YEAR_STEMS.get(lang, frozenset())
                 ):
                     expansion = _YEAR_WORD[lang]  # "в 1999 г." is a year
                 else:

@@ -25,7 +25,9 @@ def _visible(mob) -> bool:
     except Exception:  # noqa: BLE001
         return True
     for member in family:
-        for getter in ("get_stroke_opacity", "get_fill_opacity", "get_opacity"):
+        # NOTE: no get_opacity() — in Manim 0.21 it is a deprecated shim that
+        # raises AttributeError (no 'opacity' attr); probing it poisons reads.
+        for getter in ("get_stroke_opacity", "get_fill_opacity"):
             fn = getattr(member, getter, None)
             if fn is None:
                 continue
@@ -84,8 +86,44 @@ def _intersect(a, b):
     return (left, right, bottom, top)
 
 
-def _union(a, b):
-    return (min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3]))
+def _swept_hit(prev_a, box_a, prev_b, box_b):
+    """Worst same-time intersection of two linearly-interpolated boxes.
+
+    Both mobjects travel prev->curr during one play call, so each is sampled
+    at the SAME fractions: a crossing counts only when both are there
+    together. A plain union of the endpoints instead flags the empty corners
+    of diagonal travel (a stationary square beside a diagonal path reads as a
+    "crossing"). Manim eases along the segment, so the eased positions still
+    lie on it; the sample count adapts to the travel distance so fast small
+    objects cannot tunnel between samples. Returns the largest intersecting
+    box, or None. Pure (no Manim): unit-tested directly.
+    """
+    def _lerp(box0, box1, t):
+        return (box0[0] + (box1[0] - box0[0]) * t,
+                box0[1] + (box1[1] - box0[1]) * t,
+                box0[2] + (box1[2] - box0[2]) * t,
+                box0[3] + (box1[3] - box0[3]) * t)
+
+    def _travel(box0, box1):
+        return math.hypot((box0[0] + box0[1] - box1[0] - box1[1]) / 2.0,
+                          (box0[2] + box0[3] - box1[2] - box1[3]) / 2.0)
+
+    travel = max(_travel(prev_a, box_a), _travel(prev_b, box_b))
+    half = min(box_a[1] - box_a[0], box_a[3] - box_a[2],
+               box_b[1] - box_b[0], box_b[3] - box_b[2]) / 2.0
+    steps = 4
+    if travel > 1e-9 and half > 1e-9:
+        # No step moves either center more than half the smallest half-extent.
+        steps = min(32, max(4, math.ceil(travel / (half / 2.0)) + 1))
+    best, best_area = None, 0.0
+    for i in range(steps + 1):
+        t = i / steps
+        hit = _intersect(_lerp(prev_a, box_a, t), _lerp(prev_b, box_b, t))
+        if hit is not None:
+            area = _box_area(hit)
+            if area > best_area:
+                best, best_area = hit, area
+    return best
 
 
 def _contains(outer, inner, tol: float = 0.05) -> bool:
@@ -104,17 +142,20 @@ def _max_opacity(mob) -> float:
         family = mob.get_family()
     except Exception:  # noqa: BLE001
         return 1.0
-    best = 0.0
+    best, seen = 0.0, False
     for member in family:
-        for getter in ("get_stroke_opacity", "get_fill_opacity", "get_opacity"):
+        # NOTE: no get_opacity() — in Manim 0.21 it is a deprecated shim that
+        # raises AttributeError; one bad getter must not poison the read.
+        for getter in ("get_stroke_opacity", "get_fill_opacity"):
             fn = getattr(member, getter, None)
             if fn is None:
                 continue
             try:
                 best = max(best, float(fn()))
+                seen = True
             except Exception:  # noqa: BLE001
-                return 1.0
-    return best
+                continue
+    return best if seen else 1.0
 
 
 def _mob_label(mob) -> str:
@@ -343,15 +384,20 @@ def main() -> int:
                         prior["last_t"] = time_s
                         prior["duration_s"] = duration
                     continue
-                # No boundary overlap: check the swept boxes for a crossing
+                # No boundary overlap: check the swept paths for a crossing
                 # DURING the motion between the two boundary snapshots.
+                # Objects this play added are synthesized as stationary at
+                # their end box, so a mover passing through a FadeIn is
+                # still caught. (Removed objects are handled below: they
+                # never reach this loop, which only sees the live scene.)
                 prev_a, prev_b = previous.get(key_a), previous.get(key_b)
-                if prev_a is None or prev_b is None:
+                start_a = prev_a["bounds"] if prev_a is not None else box_a
+                start_b = prev_b["bounds"] if prev_b is not None else box_b
+                if (_intersect(start_a, start_b) is not None
+                        and prev_a is not None and prev_b is not None):
                     continue
-                swept_a = _union(prev_a["bounds"], box_a)
-                swept_b = _union(prev_b["bounds"], box_b)
-                swept_hit = _intersect(swept_a, swept_b)
-                if swept_hit is None or _intersect(prev_a["bounds"], prev_b["bounds"]) is not None:
+                swept_hit = _swept_hit(start_a, box_a, start_b, box_b)
+                if swept_hit is None:
                     continue
                 if _allowlisted(entry_a, entry_b, swept_hit, panels):
                     continue
@@ -363,6 +409,40 @@ def main() -> int:
                         "ratio": 0.0, "box_a": box_a, "box_b": box_b,
                         "hit": swept_hit, "transient": True,
                     }
+        # Ghosts: objects this play removed (FadeOut). They were visible for
+        # part of the play, so test live movers against where they were —
+        # swept-only, never boundary, so a same-play FadeOut+FadeIn swap at
+        # one spot is not misread as a standing pile.
+        for key_g, gone in previous.items():
+            if key_g in snapshot:
+                continue
+            for key_c, entry_c in snapshot.items():
+                if gone["space"] != entry_c["space"]:
+                    continue
+                pair = tuple(sorted((key_g, key_c)))
+                if pair in tracked:
+                    continue
+                start_c = previous.get(key_c, {}).get("bounds", entry_c["bounds"])
+                if previous.get(key_c) is None:
+                    # Added by this same play: no shared visibility window
+                    # can be established, so there is nothing to cross.
+                    continue
+                if _intersect(gone["bounds"], start_c) is not None:
+                    continue
+                swept_hit = _swept_hit(gone["bounds"], gone["bounds"],
+                                       start_c, entry_c["bounds"])
+                if swept_hit is None:
+                    continue
+                if _allowlisted(gone, entry_c, swept_hit, panels):
+                    continue
+                tracked[pair] = {
+                    "name_a": gone["name"], "name_b": entry_c["name"],
+                    "label_a": gone["label"], "label_b": entry_c["label"],
+                    "first_t": time_s, "last_t": time_s, "duration_s": 0.0,
+                    "ratio": 0.0, "box_a": gone["bounds"],
+                    "box_b": entry_c["bounds"],
+                    "hit": swept_hit, "transient": True,
+                }
 
     def _finalize_overlaps() -> None:
         rank = {"high": 0, "medium": 1, "low": 2}

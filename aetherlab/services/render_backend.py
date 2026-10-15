@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MANIM_VERSION_PIN = "0.21.0"
-CLOUD_WORKFLOW_VERSION = "7"  # reject missing/ambiguous scene outputs; no size fallback
+CLOUD_WORKFLOW_VERSION = "8"  # explicit canvas/FPS transport and artifact validation
 CLOUD_UNAVAILABLE = "cloud-unavailable"
 DEFAULT_GITHUB_WORKFLOW = "render.yml"
 DEFAULT_GITHUB_BRANCH = "renders"
@@ -136,11 +137,21 @@ on:
         required: true
         default: l
         type: choice
-        options: [l, m, h, k]
+        options: [l, m, h, p, k]
       fps:
         description: Frames per second
         required: true
         default: "30"
+        type: string
+      width:
+        description: Explicit even canvas width (0 uses quality default)
+        required: false
+        default: "0"
+        type: string
+      height:
+        description: Explicit even canvas height (0 uses quality default)
+        required: false
+        default: "0"
         type: string
       scene_path:
         description: Path to committed scene file
@@ -212,13 +223,28 @@ jobs:
         env:
           SCENE_CLASS: ${{ inputs.class_name }}
           RENDER_JOB_ID: ${{ inputs.job_id }}
+          RENDER_WIDTH: ${{ inputs.width }}
+          RENDER_HEIGHT: ${{ inputs.height }}
         run: |
           set +e
           mkdir -p out
+          size_args=()
+          if [ "${RENDER_WIDTH:-0}" != "0" ] || [ "${RENDER_HEIGHT:-0}" != "0" ]; then
+            if [[ ! "$RENDER_WIDTH" =~ ^[1-9][0-9]{2,3}$ ]] || [[ ! "$RENDER_HEIGHT" =~ ^[1-9][0-9]{2,3}$ ]]; then
+              echo 'Invalid render canvas: supply both even dimensions.' >&2
+              exit 2
+            fi
+            if (( RENDER_WIDTH < 320 || RENDER_WIDTH > 3840 || RENDER_HEIGHT < 240 || RENDER_HEIGHT > 2160 || RENDER_WIDTH % 2 || RENDER_HEIGHT % 2 )); then
+              echo 'Invalid render canvas: expected even width 320..3840 and height 240..2160.' >&2
+              exit 2
+            fi
+            size_args=(-r "${RENDER_WIDTH},${RENDER_HEIGHT}")
+          fi
           /usr/bin/time -f 'AETHERLAB_RENDER_WALL_SECONDS=%e\nAETHERLAB_PEAK_RSS_KB=%M' \
             -o "${{ inputs.job_id }}.telemetry" python -m manim render \
             -q${{ inputs.quality }} \
             --fps "${{ inputs.fps }}" \
+            "${size_args[@]}" \
             --disable_caching \
             --media_dir out \
             "${{ inputs.scene_path }}" \
@@ -437,10 +463,16 @@ class CloudRenderBackend:
         profile, _fallback_notice = render_profile_for(scene.code, quality, settings)
         quality = str(getattr(profile, "quality", quality) or quality)
         fps = int(getattr(profile, "fps", 30))
+        width, height = int(profile.width), int(profile.height)
+        if profile.renderer != "cairo":
+            scene.diagnostics.append(
+                "Cloud runner uses Cairo; requested OpenGL is unavailable in cloud. "
+                "Rendering with Cairo while preserving the requested canvas and FPS."
+            )
         if _fallback_notice:
             scene.diagnostics.append(_fallback_notice)
             log.warning("%s", _fallback_notice)
-        job_id = cloud_job_id(scene, quality=quality, fps=fps, variant=variant)
+        job_id = cloud_job_id(scene, quality=quality, fps=fps, variant=variant, width=width, height=height)
         run_dir = _RUNS_DIR / f"cloud_{job_id}_{quality}"
         run_dir.mkdir(parents=True, exist_ok=True)
         manifest = CloudRenderManifest(Path(settings.data_dir) / "cloud_renders.json")
@@ -471,7 +503,8 @@ class CloudRenderBackend:
         run_id = None
         try:
             say("Checking cloud render cache")
-            video = await asyncio.to_thread(self._download_cached, client, manifest, job_id, run_dir, cached, quality)
+            video = await asyncio.to_thread(self._download_cached, client, manifest, job_id, run_dir, cached, quality,
+                                            width=width, height=height, fps=fps)
             ensure_active()
             if video:
                 scene.video_path = str(video)
@@ -520,6 +553,8 @@ class CloudRenderBackend:
                 job_id=job_id,
                 quality=quality,
                 fps=fps,
+                width=width,
+                height=height,
                 scene_path=scene_path,
                 class_name=scene.class_name,
                 needs_latex=_needs_latex(scene.code),
@@ -694,7 +729,8 @@ class CloudRenderBackend:
             download_started = time.monotonic()
             current_stage = "download_artifact"
             video, reject_reason = await asyncio.to_thread(
-                self._download_artifact, client, artifact, run_dir, job_id, quality
+                self._download_artifact, client, artifact, run_dir, job_id, quality,
+                width=width, height=height, fps=fps,
             )
             ensure_active()
             if not video:
@@ -713,7 +749,8 @@ class CloudRenderBackend:
                     **runner_metrics,
                 )
                 return scene
-            manifest.put(job_id, {"artifact_id": artifact["id"], "run_id": run["id"]})
+            manifest.put(job_id, {"artifact_id": artifact["id"], "run_id": run["id"],
+                                  "width": width, "height": height, "fps": fps})
             scene.video_path = str(video)
             scene.status = "rendered"
             scene.failure_kind = ""
@@ -772,19 +809,22 @@ class CloudRenderBackend:
         run_dir: Path,
         cached: dict | None,
         quality: str,
+        *, width: int = 0, height: int = 0, fps: int = 0,
     ) -> Path | None:
         if cached and cached.get("artifact_id"):
             try:
                 artifact = client.get_artifact(int(cached["artifact_id"]))
                 if artifact and not artifact.get("expired"):
-                    video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality)
+                    video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality,
+                                                      width=width, height=height, fps=fps)
                     return video
             except Exception:  # noqa: BLE001
                 pass
         artifact = client.find_repo_artifact(f"{job_id}.mp4")
         if artifact and not artifact.get("expired"):
             manifest.put(job_id, {"artifact_id": artifact["id"], "run_id": artifact.get("workflow_run", {}).get("id")})
-            video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality)
+            video, _ = self._download_artifact(client, artifact, run_dir, job_id, quality,
+                                              width=width, height=height, fps=fps)
             return video
         return None
 
@@ -795,6 +835,7 @@ class CloudRenderBackend:
         run_dir: Path,
         job_id: str,
         quality: str,
+        *, width: int = 0, height: int = 0, fps: int = 0,
     ) -> tuple[Path | None, str]:
         """Download one MP4 artifact; the reason is "" on success."""
         data = client.download_artifact_zip(int(artifact["id"]))
@@ -804,17 +845,26 @@ class CloudRenderBackend:
                 if target.name != f"{job_id}.mp4" or target.is_absolute() or ".." in target.parts:
                     continue
                 out = run_dir / target.name
-                out.write_bytes(zf.read(name))
-                if not validate_mp4(out):
-                    return None, "not an MP4 container (ftyp missing)"
-                ok, reason = self._profile_matches(out, quality)
-                return (out, "") if ok else (None, reason)
+                staged = run_dir / f".{job_id}.{uuid.uuid4().hex}.mp4"
+                try:
+                    staged.write_bytes(zf.read(name))
+                    if not validate_mp4(staged):
+                        return None, "not an MP4 container (ftyp missing)"
+                    ok, reason = self._profile_matches(staged, quality, width=width, height=height, fps=fps)
+                    if not ok:
+                        return None, reason
+                    staged.replace(out)
+                    return out, ""
+                finally:
+                    staged.unlink(missing_ok=True)
         return None, "job MP4 missing from the artifact zip"
 
     @staticmethod
-    def _profile_matches(path: Path, quality: str) -> tuple[bool, str]:
+    def _profile_matches(path: Path, quality: str, *, width: int = 0,
+                         height: int = 0, fps: int = 0) -> tuple[bool, str]:
         """Deep media gate: a video stream, a positive duration, and the
-        resolution of the requested quality flag and a decodable frame."""
+        requested canvas/FPS (quality defaults for legacy callers), and a
+        decodable frame. It does not certify every frame of the video."""
         facts = probe_mp4(path)
         if facts is None:
             return False, "video validation unavailable: install or repair PyAV (av) and retry"
@@ -824,13 +874,18 @@ class CloudRenderBackend:
             return False, "downloaded MP4 has no measurable duration"
         if not facts["decoded_frame"]:
             return False, "downloaded MP4 has no decodable video frame"
-        expected = CLOUD_QUALITY_DIMS.get(quality)
+        expected = (width, height) if width > 0 and height > 0 else CLOUD_QUALITY_DIMS.get(quality)
         actual = (facts["width"], facts["height"])
         if expected is not None and actual != expected:
             return False, (
                 f"resolution {actual[0]}x{actual[1]}, expected "
                 f"{expected[0]}x{expected[1]} for quality '{quality}'"
             )
+        if fps > 0:
+            import math
+            actual_fps = float(facts.get("fps", 0) or 0)
+            if not math.isfinite(actual_fps) or abs(actual_fps - fps) > 0.1:
+                return False, f"frame rate {actual_fps:g} fps, expected {fps} fps"
         return True, ""
 
 
@@ -891,11 +946,11 @@ def render_timeout_for(code: str, quality: str, settings: "AppSettings") -> int:
 
     if str(getattr(settings, "render_mode", "local") or "local").lower() in {"cloud", "auto"}:
         configured = max(60, min(1800, int(getattr(settings, "cloud_render_timeout", 600) or 600)))
-        base = {"l": 420, "m": 540, "h": 720, "k": 900}.get(quality, 420)
+        base = {"l": 420, "m": 540, "h": 720, "p": 810, "k": 900}.get(quality, 420)
         cost = _estimate_render_cost(code)
         adaptive = base + int(max(0.0, min(4.0, cost - 1.0)) * 60)
         return min(configured, adaptive)
-    base_timeout = {"l": 240, "m": 420, "h": 600, "k": 900}.get(quality, 240)
+    base_timeout = {"l": 240, "m": 420, "h": 600, "p": 750, "k": 900}.get(quality, 240)
     return min(int(base_timeout * _estimate_render_cost(code)), 1800)
 
 
@@ -922,26 +977,37 @@ def render_fps_for(code: str, quality: str, settings: object | None = None) -> i
     return int(getattr(profile, "fps", 30))
 
 
-def cloud_job_id(scene: SceneBundle, *, quality: str, fps: int, variant: str = "") -> str:
+def cloud_job_id(scene: SceneBundle, *, quality: str, fps: int, variant: str = "",
+                 width: int = 0, height: int = 0) -> str:
     """Content-addressed cloud job id (also the cloud cache key).
 
     ``variant`` salts the id so concurrent tournament candidates with
     byte-identical code never collide on the same ``jobs/<id>.py`` scene file
     or steal each other's ``<id>.mp4`` artifact (the BUG-15 race under
-    concurrency). An empty variant leaves the hash byte-identical to the legacy
-    id, so the single-scene path keeps hitting its existing cloud cache.
+    concurrency). Canvas dimensions and workflow version distinguish profiles
+    and prevent reusing an artifact from an older output contract.
     """
+    dimensions = (width, height) if width > 0 and height > 0 else CLOUD_QUALITY_DIMS.get(quality, (1280, 720))
     parts = [
         scene.class_name,
         scene.code,
         quality,
         str(fps),
+        f"canvas={dimensions[0]}x{dimensions[1]}",
         f"manim=={MANIM_VERSION_PIN}",
         f"workflow={CLOUD_WORKFLOW_VERSION}",
     ]
     if variant:
         parts.append(f"variant={variant}")
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
+
+
+def cloud_job_id_for_profile(scene: SceneBundle, quality: str, settings: object,
+                             variant: str = "") -> str:
+    """Use the same resolved canvas/FPS for lookup, dispatch and ledger IDs."""
+    profile, _ = render_profile_for(scene.code, quality, settings)
+    return cloud_job_id(scene, quality=profile.quality, fps=profile.fps,
+                        width=profile.width, height=profile.height, variant=variant)
 
 
 def scan_cloud_payload(code: str) -> str | None:
@@ -986,6 +1052,7 @@ except Exception:  # pragma: no cover — import fallback, never silent wrong di
         "l": (854, 480),
         "m": (1280, 720),
         "h": (1920, 1080),
+        "p": (2560, 1440),
         "k": (3840, 2160),
     }
 
@@ -1007,6 +1074,10 @@ def probe_mp4(path: Path) -> dict[str, float | int] | None:
             if not video:
                 return {"video_streams": 0, "duration_s": 0.0, "width": 0, "height": 0, "decoded_frame": 0}
             stream = video[0]
+            try:
+                frame_rate = float(getattr(stream, "average_rate", None) or 0)
+            except (TypeError, ValueError, OverflowError):
+                frame_rate = 0.0
             duration = 0.0
             if stream.duration and stream.time_base:
                 duration = float(stream.duration * stream.time_base)
@@ -1017,6 +1088,7 @@ def probe_mp4(path: Path) -> dict[str, float | int] | None:
                 "duration_s": duration,
                 "width": int(stream.width or 0),
                 "height": int(stream.height or 0),
+                "fps": frame_rate,
                 "decoded_frame": int(next(container.decode(video=0), None) is not None),
             }
     except Exception:  # noqa: BLE001 — undecodable file reads as no facts
@@ -1302,6 +1374,8 @@ class GitHubActionsClient:
         class_name: str,
         needs_latex: bool,
         branch: str,
+        width: int = 0,
+        height: int = 0,
     ) -> int | None:
         result = self._request(
             "POST",
@@ -1312,6 +1386,8 @@ class GitHubActionsClient:
                     "job_id": job_id,
                     "quality": quality,
                     "fps": str(fps),
+                    "width": str(width),
+                    "height": str(height),
                     "scene_path": scene_path,
                     "class_name": class_name,
                     "needs_latex": "true" if needs_latex else "false",

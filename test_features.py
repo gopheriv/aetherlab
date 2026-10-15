@@ -103,15 +103,21 @@ def _assert_test_config_path(path: Path) -> Path:
 
 
 results: dict[str, dict] = {}
+_behaviour_evidence: dict[str, dict] = {}
 
 
 def check(fid: str, fn) -> None:
     # Flushed pre-run marker: if a test HARD-crashes the process (native abort,
     # no catchable exception), this is the last line in the log — pinpointing it.
     print(f"  [run ] {fid} ...", flush=True)
+    _behaviour_evidence.pop(fid, None)
     try:
         note = fn() or ""
+        if fid in {"F12", "F13", "F14", "F15", "F17", "F19", "F20", "F84"}:
+            note += "; " + _complete_command_bar_acceptance(fid)
         results[fid] = {"status": "PASS", "note": str(note), "checked_at": datetime.now(UTC).isoformat(timespec="seconds")}
+        if fid in _behaviour_evidence:
+            results[fid]["behaviour_acceptance_evidence"] = _behaviour_evidence.pop(fid)
         print(f"  [PASS] {fid}: {note}", flush=True)
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
@@ -210,19 +216,52 @@ def t_f03():
     ns = build_parser().parse_args(["--smoke"])
     ns2 = build_parser().parse_args(["--smoke", "custom"])
     assert ns.smoke and ns2.smoke == "custom"
-    return "nargs='?' const + explicit prompt both parse"
+    return "nargs='?' const + explicit prompt both parse; " + _startup_story_acceptance("F03")
 
 
 def t_f04():
-    src = Path("aetherlab_watchdog.py").read_text(encoding="utf-8")
-    assert "backoff" in src.lower() and "returncode" in src.lower()
-    return "watchdog present with backoff logic"
+    import hashlib
+    import uuid
+    import build_feature_tracker as tracker
+    from tools.feature_acceptance import WATCHDOG_CASE_REQUIREMENTS, WATCHDOG_SOURCES, contract_hash
+
+    root = Path(__file__).resolve().parent
+    before = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in WATCHDOG_SOURCES}
+    checks = []
+    for name, requirements in WATCHDOG_CASE_REQUIREMENTS.items():
+        _story_checks("test_watchdog_behaviour", (name,))
+        checks.append({"id": name, "status": "PASS", "covers": sorted(requirements)})
+    after = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in WATCHDOG_SOURCES}
+    assert before == after, "Watchdog inputs changed during acceptance"
+    tracker.apply_results({})
+    row = dict(zip(tracker.HEADERS, next(row for row in tracker.FEATURES if row[0] == "F04")))
+    evidence = {"schema": "physlab.story_acceptance.v1", "feature_id": "F04", "status": "PASS",
+                "exit_code": 0, "completed_at": datetime.now(UTC).isoformat(),
+                "contract_sha256": contract_hash(row), "source_sha256": after, "checks": checks}
+    output = root / "tmp" / "feature-acceptance" / f"F04-{uuid.uuid4().hex}.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    _behaviour_evidence["F04"] = {"path": output.relative_to(root).as_posix(),
+                                "sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
+    return "10 executed watchdog recovery checks, including real child and batch launch; source-bound complete contract evidence"
 
 
 def t_f05():
     src = inspect.getsource(__import__("aetherlab.ui.qt_compat", fromlist=["require_qt"]).require_qt)
     assert "PyQt6" in src and "RuntimeError" in src
-    return "require_qt raises RuntimeError w/ install hint"
+    return "require_qt raises RuntimeError w/ install hint; " + _startup_story_acceptance("F05")
+
+
+def _startup_story_acceptance(feature: str) -> str:
+    import uuid
+    import build_feature_tracker as tracker
+    from tools.accept_startup_stories import CASE_REQUIREMENTS, run_acceptance
+
+    tracker.apply_results({})
+    row = dict(zip(tracker.HEADERS, next(row for row in tracker.FEATURES if row[0] == feature)))
+    output = Path(__file__).resolve().parent / "tmp" / "feature-acceptance" / f"{feature}-{uuid.uuid4().hex}.json"
+    _behaviour_evidence[feature] = run_acceptance(output, row)
+    return f"{len(CASE_REQUIREMENTS[feature])} fresh-process cases; complete source-bound contract evidence"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -295,8 +334,17 @@ def t_f06():
         assert "timeout=max(" not in src, f"hidden timeout floor remains in {path}"
     return (
         f"model={s.llm_model} data_dir set timeout={s.llm_timeout_seconds}; "
-        "bounded async client retries; manim-bot aliases load (BUG-34)"
+        "bounded async client retries; manim-bot aliases load (BUG-34); "
+        + _settings_story_acceptance("F06")
     )
+
+
+def _settings_story_acceptance(feature: str) -> str:
+    from tools.accept_settings_stories import DETAILS, run_acceptance
+
+    pointers = run_acceptance(Path(__file__).resolve().parent / "tmp" / "feature-acceptance")
+    _behaviour_evidence.update(pointers)
+    return DETAILS[feature]
 
 
 def t_f07():
@@ -339,7 +387,11 @@ def _t_f07_body():
     assert not list(p.parent.glob(f".{p.name}.*.tmp"))
     # cleanup so it doesn't taint provider-precedence test
     p.unlink()
-    return "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45)"
+    return (
+        "atomic concurrent settings round-trip; wrong-shape JSON recovers (BUG-44/45); "
+        + _story_checks("test_settings_corrupt_encoding") + "; "
+        + _settings_story_acceptance("F07")
+    )
 
 
 def t_f08():
@@ -352,7 +404,7 @@ def t_f08():
     _assert_test_config_path(app_config_path()).unlink(missing_ok=True)
     assert s.llm_model == "env-model", f"env should win, got {s.llm_model}"
     assert s2.llm_model == "cfg-model", f"config should win over default, got {s2.llm_model}"
-    return "env > app-config precedence verified"
+    return "env > app-config precedence verified; " + _settings_story_acceptance("F08")
 
 
 def t_f09():
@@ -366,7 +418,9 @@ def t_f09():
                                 "env": {"K": "secret"}}), encoding="utf-8")
     q2 = load_qwen_settings(fake)
     assert q2.get("model") == "qwen-x" and q2.get("base_url") == "http://q" and q2.get("api_key") == "secret", q2
-    return "missing→{}; parsed model/baseUrl/apiKey"
+    return "missing→{}; parsed model/baseUrl/apiKey; " + _story_checks("test_settings_corrupt_encoding", (
+        "test_invalid_utf8_opted_in_qwen_uses_defaults_without_rewriting",
+    )) + "; " + _startup_story_acceptance("F09")
 
 
 def t_f10():
@@ -417,7 +471,10 @@ def t_f10():
         visible = " ".join((
             status.active_label.text(), status.source_label.text(), status.warning_label.text(),
         ))
-        assert "Qwen / DashScope" in visible and "DASHSCOPE_API_KEY" in visible
+        # This owned example URL is not an actual DashScope hostname. A model
+        # name must not make the UI claim a different active endpoint.
+        assert "OpenAI-compatible endpoint" in visible and "DASHSCOPE_API_KEY" in visible
+        assert "qwen3-coder-plus" in visible
         assert "stale-env-secret" not in visible and "saved-secret" not in visible
         status.close()
         shadow_dialog = SettingsDialog(shadowed)
@@ -433,15 +490,37 @@ def t_f10():
                 os.environ[name] = value
         if saved_env is not None:
             os.environ["AETHERLAB_DATA_DIR"] = saved_env
-    return "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42)"
+    return "settings fits; paths persist; active provider/key source + shadow warning are honest (BUG-42); " + _settings_ui_recovery_checks()
 
 
 def t_f11():
-    from aetherlab.core.settings import _default_chroma_path, _default_data_dir
-    d, c = _default_data_dir(), _default_chroma_path()
-    if sys.platform == "win32":
-        assert "AetherLab" in str(d)
-    return f"data={d.name} chroma={c.name}"
+    import uuid
+    import build_feature_tracker as tracker
+    from tools.accept_default_paths import run_acceptance
+
+    tracker.apply_results({})
+    row = dict(zip(tracker.HEADERS, next(row for row in tracker.FEATURES if row[0] == "F11")))
+    output = Path(__file__).parent / "tmp/feature-acceptance" / f"F11-{uuid.uuid4().hex}.json"
+    _behaviour_evidence["F11"] = run_acceptance(output, row)
+    return "12 fresh-process default-path cases cover valid/invalid LOCALAPPDATA, home fallback, cache/library/Chroma and launch-folder independence; complete source-bound acceptance evidence recorded"
+
+
+def _settings_ui_recovery_checks():
+    import pytest
+
+    count = 0
+    for language in ("kk", "ru", "en"):
+        cases = [("test_settings_save_failure_keeps_draft_and_retry_commits", {"language": language, "failure": kind})
+                 for kind in ("read", "write")]
+        cases += [(name, {"language": language}) for name in (
+            "test_failed_settings_draft_can_be_cancelled_without_applying_it",
+            "test_ollama_save_failure_keeps_provider_unchanged_and_retry_works",
+        )]
+        for name, arguments in cases:
+            with pytest.MonkeyPatch.context() as patch:
+                _explicit_practice_checks("test_settings_save_ui_recovery", [(name, {**arguments, "monkeypatch": patch})])
+            count += 1
+    return f"{count} isolated settings read/write refusal, draft retry/cancel and Ollama activation checks in kk/ru/en"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -461,17 +540,37 @@ def t_f12():
     cb._submit()  # empty now → no emit
     assert got == ["hello world"]
     cb.close()
-    return "submit trims+emits+clears; empty guarded"
+    return "submit trims+emits+clears; empty guarded; " + _command_bar_checks([
+        ("test_prompt_input_routes_once_and_preserves_unicode", {"language": language, "route": route})
+        for language in ("kk", "ru", "en") for route in ("return", "run", "ctrl-return")
+    ] + [
+        ("test_quota_storage_failure_keeps_draft_and_retry_starts_once", {"language": language})
+        for language in ("kk", "ru", "en")
+    ] + [(name, {}) for name in (
+        "test_blank_busy_and_exhausted_quota_do_not_submit",
+        "test_cancel_restores_question_for_editing",
+        "test_failure_restores_question_and_stops_active_timeline",
+        "test_recovery_keeps_a_newer_draft_instead_of_replacing_it",
+    )])
 
 
 def t_f13():
+    import pytest
     from aetherlab.ui.widgets import EXAMPLE_PROMPTS, CommandBar
     assert len(EXAMPLE_PROMPTS) == 10
     cb = CommandBar()
     cb._pick_example(EXAMPLE_PROMPTS[2])
     assert cb.input.text() == EXAMPLE_PROMPTS[2]
     cb.close()
-    return f"{len(EXAMPLE_PROMPTS)} examples; pick fills field"
+    for language in ("kk", "ru", "en"):
+        with pytest.MonkeyPatch.context() as patch:
+            _explicit_practice_checks("test_examples_localization", [
+                ("test_examples_follow_selected_language_and_keep_identical_physics_data",
+                 {"language": language, "monkeypatch": patch})
+            ])
+    return f"{len(EXAMPLE_PROMPTS)} examples; kk/ru/en conditions, menu selection and language switch; " + _command_bar_checks([
+        ("test_examples_menu_selects_full_prompt_and_escape_preserves_input", {}),
+    ])
 
 
 def t_f14():
@@ -483,7 +582,10 @@ def t_f14():
     cb.set_quality("m")
     assert cb.get_render_quality() == "m"
     cb.close()
-    return "quality maps Draft/Standard/High→l/m/h; set_quality by flag"
+    return "quality maps Draft/Standard/High→l/m/h; set_quality by flag; " + _command_bar_checks([
+        ("test_quality_flags_and_missing_selection_reach_actual_worker", {"language": language})
+        for language in ("kk", "ru", "en")
+    ])
 
 
 def t_f15():
@@ -495,7 +597,15 @@ def t_f15():
     idle = cb.run_button.isVisibleTo(cb) and not cb.cancel_button.isVisibleTo(cb)
     cb.close()
     assert busy and idle
-    return "Run↔Cancel swap + input disable"
+    return "Run↔Cancel swap + input disable; " + _command_bar_checks([
+        ("test_cancel_remains_busy_until_worker_finished", {}),
+    ] + [("test_real_qthread_cancel_waits_for_cleanup_and_preserves_draft", {"language": language, "route": "button"})
+         for language in ("kk", "ru", "en")]) + "; " + _lesson_ui_checks([
+        "test_real_lesson_qthread_keeps_busy_after_result_until_cleanup_finishes",
+        "test_lesson_cancel_is_requested_once_and_controls_wait_for_cleanup",
+    ] + [("test_lesson_terminal_keeps_controls_busy_until_finished", {"terminal": terminal})
+         for terminal in ("planned", "rendered", "planning_error", "offline_practice_available",
+                          "cancelled_empty", "cancelled_video", "failure")])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -525,7 +635,14 @@ def t_f17():
     assert all(s == "pending" for s in st._statuses)
     assert not st._elapsed and not st._started, "reset must clear timing state"
     st.close()
-    return "stage transitions + reset clears timing (BUG-1)"
+    return "stage transitions + reset clears timing (BUG-1); " + _command_bar_checks([
+        (name, {}) for name in (
+            "test_progress_stages_complete_and_next_run_resets_timing",
+            "test_finished_cancellation_has_no_active_stage",
+            "test_late_progress_does_not_overwrite_cancelling_state",
+            "test_terminal_error_ignores_late_worker_events",
+        )
+    ])
 
 
 def t_f18():
@@ -542,14 +659,16 @@ def t_f18():
     except _PipelineCancelled:
         raised = True
     assert raised
-    from aetherlab.ui.main_window import MainWindow
+    from aetherlab.ui.main_window import MainWindow, _PIPELINE_COPY
 
     cancel_src = inspect.getsource(MainWindow._cancel_pipeline)
     finished_src = inspect.getsource(MainWindow._on_worker_finished)
     assert "set_busy(False)" not in cancel_src
     assert "cancel_button.setEnabled(False)" in cancel_src
     assert "cancel_button.setEnabled(True)" in finished_src
-    assert '"Run cancelled by user."' in finished_src
+    assert '_pipeline_message("cancelled")' in finished_src
+    assert _PIPELINE_COPY["en"]["cancelled"] == "Run cancelled by user."
+    assert all(_PIPELINE_COPY[language]["cancelled"] for language in ("kk", "ru", "en"))
 
     render_src = inspect.getsource(PipelineWorker._run_async)
     assert "cancel_check=lambda: self._cancelled" in render_src
@@ -565,19 +684,59 @@ def t_f18():
     except ProcessCancelledError:
         pass
     assert time.monotonic() - before < 2.0
-    return "cancel stays honest and stops active render process promptly (BUG-49/56)"
+    return "cancel stays honest and stops an owned local process promptly (BUG-49/56); " + _command_bar_checks([
+        ("test_real_qthread_cancel_waits_for_cleanup_and_preserves_draft", {"language": language, "route": route})
+        for language in ("kk", "ru", "en") for route in ("button", "escape", "stepper")
+    ])
 
 
 def t_f19():
     src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.start_pipeline)
-    assert "isRunning()" in src and "already running" in src
-    return "double-run guard present"
+    assert "self._is_running()" in src and '_pipeline_message("already_running")' in src
+    return "double-run guard present; " + _command_bar_checks([
+        ("test_duplicate_start_preserves_worker_and_does_not_charge_again", {"language": language})
+        for language in ("kk", "ru", "en")
+    ])
 
 
 def t_f20():
     src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.start_pipeline)
     assert "disconnect()" in src and "deleteLater()" in src
-    return "old worker disconnected + deleteLater"
+    return "old worker disconnected + deleteLater; " + _command_bar_checks([
+        (name, {}) for name in (
+            "test_cleanup_disconnects_all_signals_after_one_was_already_disconnected",
+            "test_deleted_previous_qthread_does_not_block_a_new_run",
+            "test_queued_previous_worker_signals_cannot_change_a_new_run",
+            "test_all_worker_data_signals_route_once_and_stop_after_cancel",
+        )
+    ])
+
+
+def _command_bar_checks(cases):
+    """Execute the actual Qt input/lifecycle cases with owned fixture state."""
+    import pytest
+
+    for name, arguments in cases:
+        with pytest.MonkeyPatch.context() as patch:
+            _explicit_practice_checks("test_command_bar_behaviour", [
+                (name, {**arguments, "monkeypatch": patch}),
+            ])
+    return f"{len(cases)} actual Qt command-bar cases (controlled pipeline; no provider/render acceptance)"
+
+
+def _complete_command_bar_acceptance(feature):
+    if os.name != "nt":
+        return "Native Windows UI acceptance remains pending on this platform"
+    if os.environ.get("PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE") != "1":
+        return ("Visible Windows UI acceptance not requested; "
+                "set PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE=1 to run it explicitly")
+    import build_feature_tracker as tracker
+    from tools.accept_command_bar_stories import DETAILS, run_acceptance
+
+    rows = {row[0]: dict(zip(tracker.HEADERS, row)) for row in tracker.FEATURES}
+    pointers = run_acceptance(rows)
+    _behaviour_evidence[feature] = pointers[feature]
+    return DETAILS[feature]
 
 
 def t_f21():
@@ -710,7 +869,14 @@ def t_f27():
     fn = compile_expression("exp(-damping*t)*sin(stiffness*t)", {"damping", "stiffness"})
     out = fn(np.linspace(0, 5, 10), {"damping": 0.2, "stiffness": 1.0})
     assert out.shape == (10,) and np.isfinite(out).all()
-    return "whitelisted expr compiles + vectorizes"
+    return "whitelisted expr compiles + vectorizes; " + _plot_story_acceptance("F27")
+
+
+def _plot_story_acceptance(feature):
+    from tools.accept_plot_stories import DETAILS, run_acceptance
+    pointers = run_acceptance(Path(__file__).resolve().parent / "tmp/feature-acceptance")
+    _behaviour_evidence.update(pointers)
+    return DETAILS[feature]
 
 
 def t_f28():
@@ -727,7 +893,7 @@ def t_f28():
     import numpy as np
     fn = compile_expression("t^2", set())
     assert abs(fn(np.array([3.0]), {})[0] - 9.0) < 1e-9
-    return f"all {rejected} unsafe exprs rejected; ^→** works"
+    return f"all {rejected} unsafe exprs rejected; ^→** works; " + _plot_story_acceptance("F28")
 
 
 def t_f29():
@@ -739,7 +905,7 @@ def t_f29():
         raise AssertionError("bad kind not rejected")
     except ExprError:
         pass
-    return "fallback payload compiles; bad kind rejected"
+    return "fallback payload compiles; bad kind rejected; " + _plot_story_acceptance("F29")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -816,7 +982,7 @@ def t_f33():
     assert "engine != current_engine" in src and "compiled" in src
     assert (
         "Cached rendered video missing; re-rendering." in src
-        and 'scene.video_path = ""' in src
+        and 'invalidate_rendered_media(scene' in src
     )
 
     # BUG-45: one malformed JSON artifact in SQLite is a cache miss for that
@@ -838,7 +1004,7 @@ def t_f33():
     recovered = cache.get(key)
     assert recovered is not None and recovered.solver is not None
     assert recovered.parameters_json == {} and recovered.rag is None and recovered.scene is None
-    return "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45)"
+    return "cache reuses valid fields; stale videos and malformed JSON artifacts become misses (BUG-45); " + _render_cache_checks()
 
 
 def t_f34():
@@ -1138,21 +1304,10 @@ def t_f54():
 
 
 def t_f55():
-    from aetherlab.services.manim_runtime import _RENDER_TIER, _detect_render_tier
-    t = _detect_render_tier()
-    assert t["fps"] in {30, 60} and "name" in t
-    saved = {k: os.environ.pop(k, None) for k in ("AETHERLAB_RENDER_TIER", "RENDER_TIER", "AETHERLAB_MANIM_FPS", "MANIM_FPS")}
-    try:
-        os.environ["RENDER_TIER"] = "constrained"
-        os.environ["MANIM_FPS"] = "24"
-        forced = _detect_render_tier()
-        assert forced["name"] == "constrained" and forced["fps"] == 24
-    finally:
-        for k, v in saved.items():
-            os.environ.pop(k, None)
-            if v is not None:
-                os.environ[k] = v
-    return f"tier={_RENDER_TIER['name']} fps={_RENDER_TIER['fps']}; env override honored"
+    return _story_checks("test_render_profile", (
+        "test_runtime_tier_refreshes_and_preserves_legacy_constrained_limits",
+        "test_runtime_hardware_changes_priority_without_raising_quality",
+    ))
 
 
 def t_f56():
@@ -1808,6 +1963,8 @@ def t_f108():
             "    def construct(self):\n        self.play(Create(Dot()))\n",
             "manim-community", "rendered", video_path=str(video),
         )
+        from aetherlab.core.render_cache import record_scene_profile
+        record_scene_profile(start, settings, "l")
         recovered = asyncio.run(runtime.render_scene_with_repair(start, settings, quality="l"))
     finally:
         critic_module.critique_video = original_critique
@@ -2030,7 +2187,10 @@ def t_f75():
     sb.select(2)
     assert got == [2]
     sb.close()
-    return "rail select emits index"
+    return "rail select emits index; " + _story_checks("test_ui_layout_regressions", (
+        "test_compact_sidebar_fits_short_window_without_overlapping_items",
+        "test_nine_sidebar_destinations_reflow_after_growing_and_shrinking",
+    ))
 
 
 def t_f76():
@@ -2136,7 +2296,10 @@ def t_f83():
 def t_f84():
     src = inspect.getsource(__import__("aetherlab.ui.main_window", fromlist=["MainWindow"]).MainWindow.on_failure)
     assert '"error"' in src and "showMessage" in src
-    return "failure sets stepper error + status bar"
+    return "failure sets stepper error + status bar; " + _command_bar_checks([
+        ("test_failure_context_is_localized_and_preserves_original_diagnostics", {"language": language, "stage": stage})
+        for language in ("kk", "ru", "en") for stage in ("pipeline", "solver", "owned-unknown-stage")
+    ])
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -2943,7 +3106,11 @@ def t_f128():
         settings_module.save_app_config({"provider_preset": "ollama", "model": "qwen2.5:7b"})
         s1 = settings_module.load_settings()
         assert s1.openai_base_url == settings_module.OLLAMA_OPENAI_BASE_URL
-        assert s1.openai_api_key == "ollama" and s1.provider_source == "ollama-local"
+        assert s1.openai_api_key == "ollama"
+        assert s1.provider_source == str(settings_module.app_config_path())
+        assert s1.api_key_source == "Ollama local (no secret)"
+        from aetherlab.services.model_policy import active_provider_name
+        assert active_provider_name(s1) == "Ollama"
         os.environ["AETHERLAB_OPENAI_API_KEY"] = "sk-env"
         assert settings_module.load_settings().openai_api_key == "sk-env", "env must beat preset"
     finally:
@@ -3061,7 +3228,10 @@ def t_f131():
     log_file = Path(os.environ["AETHERLAB_DATA_DIR"]) / "logs" / "aetherlab.log"
     assert log_file.exists() and "starting" in log_file.read_text(encoding="utf-8")
     assert Path("assets/aetherlab.ico").exists()
-    src = inspect.getsource(__import__("aetherlab.ui.app", fromlist=["run_app"]).run_app)
+    app_module = __import__("aetherlab.ui.app", fromlist=["_run_owned_app"])
+    # App identity and icon setup intentionally live in the private owned-app
+    # helper so the profile lock is acquired before QApplication is created.
+    src = inspect.getsource(app_module._run_owned_app)
     assert "SetCurrentProcessExplicitAppUserModelID" in src and "setWindowIcon" in src
     assert "PhysLab.Workbench" in src and 'setApplicationName("PhysLab")' in src
     return f"--version={__version__}; rotating log; ico + taskbar wiring (F131)"
@@ -3233,7 +3403,8 @@ def t_f135():
     rt._render_once = _fake_render_once  # type: ignore[assignment]
     drafted = _TMP / "prewinner.mp4"
     drafted.write_bytes(b"\x00" * 64)
-    pre = SceneBundle("S", "code", "manim", "rendered", video_path=str(drafted))
+    from aetherlab.core.render_cache import record_scene_profile
+    pre = record_scene_profile(SceneBundle("S", "code", "manim", "rendered", video_path=str(drafted)), _settings(), "l")
 
     calls.clear()
     out = _asyncio.run(rt.render_scene_with_repair(_replace(pre), _settings(), quality="l"))
@@ -3247,7 +3418,7 @@ def t_f135():
     calls.clear()
     _asyncio.run(rt.render_scene_with_repair(SceneBundle("S", "code", "manim", "compiled"), _settings(), quality="l"))
     assert calls == ["l"], f"a fresh compiled scene must still render its draft: {calls}"
-    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success; winner reuse (F135)"
+    return f"cost light={light:.1f}<heavy={heavy:.1f}; draft→final partial-success; winner reuse (F135); " + _render_cache_checks()
 
 
 def t_f136():
@@ -3659,7 +3830,61 @@ def t_f145():
     mw.on_lesson_ready(LessonBundle(plan=_template_lesson("Kepler orbit", "undergrad")))
     assert mw._workspace.currentIndex() == PAGE_LESSON and mw.lesson_view._outline.count() >= 4
     mw.close()
-    return "LessonView + MCQ + worker + main-window Learn wiring (F145)"
+    return "LessonView + MCQ + worker + main-window Learn wiring (F145); " + _lesson_ui_checks([
+        "test_learn_quota_storage_refusal_keeps_exact_topic_and_retry",
+        "test_learn_handoff_keeps_language_quality_and_voice",
+        "test_lesson_failure_recovers_its_topic_after_a_previous_solve",
+        "test_rejected_second_learn_keeps_draft_and_allowance",
+        "test_learn_after_deleted_solve_worker_still_starts",
+        "test_failed_lesson_rejects_late_progress_and_ready",
+        "test_queued_old_lesson_cannot_replace_a_new_lesson",
+        "test_deleted_lesson_wrapper_allows_another_lesson",
+        "test_solve_during_lesson_cleanup_does_not_charge_or_start",
+        "test_real_lesson_qthread_keeps_busy_after_result_until_cleanup_finishes",
+        "test_lesson_cancel_is_requested_once_and_controls_wait_for_cleanup",
+    ]) + "; " + _lesson_feedback_checks()
+
+
+def _lesson_ui_checks(names, module="test_lesson_submission_behaviour"):
+    import pytest
+
+    count = 0
+    for item in names:
+        name, arguments = item if isinstance(item, tuple) else (item, {})
+        for language in ("kk", "ru", "en"):
+            with pytest.MonkeyPatch.context() as patch:
+                _explicit_practice_checks(module, [
+                    (name, {**arguments, "language": language, "monkeypatch": patch}),
+                ])
+            count += 1
+    return f"{count} actual Learn UI checks; controlled lesson results, no provider/render acceptance"
+
+
+def _lesson_feedback_checks():
+    import pytest
+
+    module = "test_lesson_completion_feedback"
+    result = _lesson_ui_checks([
+        ("test_lesson_completion_feedback_matches_available_result", {"outcome": outcome})
+        for outcome in ("planned", "rendering", "error", "assembled_missing", "assembled_empty",
+                        "assembled_file", "planning_error", "offline_practice_available", "unknown")
+    ] + ["test_empty_cancel_keeps_previous_lesson_media_and_new_plan_clears_it",
+         "test_cancelled_missing_video_keeps_previous_lesson_media",
+         "test_incomplete_result_retry_does_not_replace_a_newer_draft"], module=module)
+    for path_case in ("blank", "missing", "empty", "directory", "unreadable", "file"):
+        with pytest.MonkeyPatch.context() as patch:
+            _explicit_practice_checks(module, [
+                ("test_lesson_player_replaces_or_clears_its_previous_source",
+                 {"path_case": path_case, "monkeypatch": patch}),
+            ])
+    for status in ("planned", "rendering", "error", "owned-unrecognized-status"):
+        with pytest.MonkeyPatch.context() as patch:
+            _explicit_practice_checks(module, [
+                ("test_nonassembled_bundle_does_not_load_a_video_path", {"status": status, "monkeypatch": patch}),
+            ])
+    return result + "; 10 media-path/state cases; " + _story_checks(module, (
+        "test_new_lesson_clears_the_actual_qmediaplayer_source",
+    ))
 
 
 def t_f146():
@@ -3968,7 +4193,14 @@ def t_f150():
                 pass
         assert destination.read_bytes() == b"prior-good-output"
         assert not list(_TMP.glob(f".{destination.stem}.*.tmp{destination.suffix}"))
-    return "Learn cancellation reaches active render, narration, and assembly (BUG-56/106)"
+    return "Learn cancellation reaches active render, narration, and assembly (BUG-56/106); " + _lesson_ui_checks([
+        "test_first_cancelled_lesson_returns_to_empty_page_with_topic",
+        "test_empty_cancelled_lesson_preserves_previous_completed_lesson",
+        "test_cancelled_lesson_with_video_keeps_its_partial_route",
+        "test_cancelled_lesson_ignores_late_progress_until_partial_result",
+        ("test_lesson_recovery_preserves_a_newer_draft", {"terminal": "failure"}),
+        ("test_lesson_recovery_preserves_a_newer_draft", {"terminal": "cancelled"}),
+    ])
 
 
 def t_f151():
@@ -4688,7 +4920,8 @@ def t_f160():
 
         async def generate_scene_async(self, _request, _solver_result, _rag_result, _settings, **_kwargs):
             self.generated += 1
-            return SceneBundle(
+            from aetherlab.core.render_cache import record_scene_profile
+            return record_scene_profile(SceneBundle(
                 class_name="Fresh",
                 code="fresh",
                 engine="manim-community",
@@ -4696,7 +4929,7 @@ def t_f160():
                 video_path=str(video),
                 quality_score=9.0,
                 critique_verdict="ship",
-            )
+            ), _settings)
 
         async def render_scene_with_repair(self, *_args, **_kwargs):
             raise AssertionError("render should be skipped for rendered scene with existing video")
@@ -4713,6 +4946,8 @@ def t_f160():
         quality_score=3.0,
     )
     strict_settings = replace(_settings(), cache_path=_TMP / "strict-cache.sqlite3", min_quality_score=7.0)
+    from aetherlab.core.render_cache import record_scene_profile
+    record_scene_profile(low, strict_settings)
     p = AetherLabPipeline(strict_settings)
     p.cache = SessionCache(strict_settings.cache_path)
     p.llm = _LLM()
@@ -5119,7 +5354,7 @@ def t_f165():
         f"tracker integrity: {report['feature_count']} features/"
         f"{report['story_count']} stories/"
         f"{report['result_count']} results/{report['test_count']} tests aligned (F165)"
-    )
+    ) + "; " + _story_checks("test_tracker_cli") + "; " + _story_checks("test_tracker_reference_scope") + "; " + _story_checks("test_catalog_network_isolation") + "; " + _story_checks("test_encoder_story_contract") + "; " + _story_checks("test_feature_failure_contracts")
 
 
 def t_f166():
@@ -5607,7 +5842,12 @@ def t_f171():
         await _asyncio.sleep(0)  # yield so the gathered candidates interleave
         return replace(scene, status="rendered", video_path=f"/fake/{variant}.mp4")
 
-    runtime._render_once = fake_render_once  # type: ignore[assignment]
+    async def fake_candidate_render(scene, settings, quality="l", render_variant="", **_kwargs):
+        return await fake_render_once(scene, settings, quality, variant=render_variant)
+
+    # The scorer calls the full repair renderer. Stubbing only _render_once
+    # leaves preflight/LLM repair live before it reaches the fake media.
+    runtime.render_scene_with_repair = fake_candidate_render  # type: ignore[assignment]
     candidates = [SceneCandidate(index=i, scene=replace(sb), storyboard=None) for i in range(3)]
     scored = _asyncio.run(runtime._render_and_score_candidates(candidates, s, None))
 
@@ -5627,7 +5867,7 @@ def t_f171():
         s, openai_api_key="key", vision_model="vision", visual_critic_keyframes=6
     )
     provider_runtime = ManimRuntime(provider_settings)
-    provider_runtime._render_once = fake_render_once  # type: ignore[assignment]
+    provider_runtime.render_scene_with_repair = fake_candidate_render  # type: ignore[assignment]
     original_critique = critic_module.critique_video
     critic_calls = []
 
@@ -7366,7 +7606,11 @@ def t_f215():
     return (
         f"gate fails loudly: exit code follows the run; {defect_fid} REGRESSED not FIXED; "
         f"Phase-4 overridden to FAIL; audit rejects failing results (F215)"
-    )
+    ) + "; " + _explicit_practice_checks("test_catalog_fixture_paths", [
+        (function, {"name": name})
+        for function in ("test_fixture_paths_do_not_include_long_test_names", "test_repeated_story_calls_never_reuse_state")
+        for name in ("_story_checks", "_explicit_practice_checks", "_practice_display_checks")
+    ])
 
 
 def t_f216():
@@ -8037,7 +8281,7 @@ def t_f226():
     return "10-question practice and 40-question timed mock start in kk/ru/en; answer feedback and navigation work (F226); " + _explicit_practice_checks("test_exam_confirmation_localization", [
         ("test_timed_finish_is_localized_and_defaults_to_continue", {"language": language})
         for language in ("kk", "ru", "en")
-    ])
+    ]) + "; " + _answer_capture_checks()
 
 
 def t_f227():
@@ -8106,7 +8350,7 @@ def t_f227():
         "test_progress_nonfinite_numbers_do_not_crash_or_turn_into_scores",
         "test_nonfinite_progress_mutation_recovers_points_from_valid_history",
     ))
-    return "goals and attempts persist locally; missed items clear on review and completed history omits selected answers (F227); " + recovery + "; " + reading + "; " + numeric
+    return "goals and attempts persist locally; missed items clear on review and completed history omits selected answers (F227); " + recovery + "; " + reading + "; " + numeric + "; " + _answer_capture_checks()
 
 
 def t_f228():
@@ -8151,7 +8395,7 @@ def t_f228():
     )) + "; " + _story_checks("test_ui_fonts") + "; " + _story_checks("test_practice_pdf_transaction") + "; " + _explicit_practice_checks("test_mock_solution_display", [
         ("test_full_mock_pdf_contains_all_shared_equations", {"language": language})
         for language in ("kk", "ru", "en")
-    ])
+    ]) + "; " + _answer_capture_checks()
 
 
 def t_f229():
@@ -8192,7 +8436,10 @@ def t_f230():
         "test_perfect_small_sample_does_not_claim_mistakes_or_a_weak_topic",
         "test_cleared_mistakes_do_not_remain_a_dashboard_action",
         "test_mock_mistakes_are_recommended_in_their_topic",
-    ))
+    )) + "; " + _story_checks(
+        "test_ui_layout_regressions",
+        ("test_startup_and_spider_status_follow_selected_language",),
+    )
 
 
 def t_f231():
@@ -8243,6 +8490,7 @@ def _story_checks(module_name: str, names: tuple[str, ...] = ()) -> str:
     not converted into a pass, and fixtures are undone between checks.
     """
     import importlib.util
+    import uuid
 
     import pytest
 
@@ -8253,9 +8501,10 @@ def _story_checks(module_name: str, names: tuple[str, ...] = ()) -> str:
     spec.loader.exec_module(module)
     checks = names or tuple(name for name in vars(module) if name.startswith("test_"))
     assert checks, f"No behavioural checks selected for {module_name}"
-    for name in checks:
+    invocation = uuid.uuid4().hex
+    for index, name in enumerate(checks):
         fn = getattr(module, name)
-        folder = _TMP / "stories" / module_name / name
+        folder = _TMP / "s" / invocation / str(index)
         folder.mkdir(parents=True, exist_ok=True)
         with pytest.MonkeyPatch.context() as patch:
             available = {"tmp_path": folder, "monkeypatch": patch}
@@ -8286,7 +8535,7 @@ def t_f232():
             assert len(set(item["choices"][language])) == 4, item["id"]
         assert item["solution_latex"]
         assert item["reviewer"] == "pending_kazakhstan_physics_teacher"
-    return "2500 stable authored exercise IDs; 100/topic; three locales and unique choices; teacher review pending; " + _story_checks(
+    return "2500 stable authored exercise IDs; 100/topic; three locales and unique choices; teacher review pending; " + _practice_bank_acceptance("F232") + "; " + _topic_solution_checks(render=False) + "; " + _story_checks(
         "test_ent_practice_mvp", ("test_hydrostatic_practice_converts_pascals_to_kilopascals",))
 
 
@@ -8308,7 +8557,7 @@ def t_f233():
     )) + "; " + _explicit_practice_checks("test_mock_solution_display", [
         ("test_completed_review_contains_typeset_equations_and_clears_previous_resources", {"language": language, "mode": mode})
         for language in ("kk", "ru", "en") for mode in ("practice", "timed")
-    ])
+    ]) + "; " + _answer_capture_checks() + "; " + _topic_solution_checks(render=True)
 
 
 def _explicit_practice_checks(module_name: str, cases: list[tuple[str, dict]]) -> str:
@@ -8319,7 +8568,7 @@ def _explicit_practice_checks(module_name: str, cases: list[tuple[str, dict]]) -
     namespace = runpy.run_path(str(Path(__file__).parent / "tests" / f"{module_name}.py"))
     invocation = uuid.uuid4().hex
     for index, (name, arguments) in enumerate(cases):
-        folder = _TMP / "stories" / module_name / invocation / str(index)
+        folder = _TMP / "s" / invocation / str(index)
         folder.mkdir(parents=True, exist_ok=True)
         namespace[name](tmp_path=folder, **arguments)
     return f"{len(cases)} explicit locale/mode checks in {module_name}"
@@ -8341,9 +8590,9 @@ def _practice_display_checks(names: tuple[str, ...] = ()) -> str:
         "test_feedback_and_review_do_not_expose_latex",
         "test_perfect_small_sample_does_not_claim_mistakes_or_a_weak_topic",
     )
-    for name in checks:
+    for index, name in enumerate(checks):
         for language in ("kk", "ru", "en"):
-            folder = _TMP / "stories" / module_name / invocation / name / language
+            folder = _TMP / "s" / invocation / str(index) / language
             folder.mkdir(parents=True, exist_ok=True)
             namespace[name](language, folder)
     return f"{len(checks) * 3} practice display checks in kk/ru/en: {', '.join(checks)}"
@@ -8406,7 +8655,7 @@ def t_f238():
         for choice in ("Yes", "No")
     ]) + "; " + _story_checks("test_exam_confirmation_localization", (
         "test_unresumable_question_ids_are_not_silently_discarded",
-    ))
+    )) + "; " + _answer_capture_checks()
 
 
 def t_f239():
@@ -8506,11 +8755,339 @@ def t_f248():
 
 def t_f249():
     return _story_checks("test_cloud_media_check") + "; " + _story_checks(
-        "test_cloud_failure_diagnosis")
+        "test_cloud_failure_diagnosis") + "; " + _profile_transport_checks()
 
 
 def t_f250():
     return _story_checks("test_lesson_practice_h")
+
+
+def t_f251():
+    import pytest
+    # The reused module's autouse fixture is not run by this function adapter.
+    # Clear its exact override inventory before executing the real cases.
+    import runpy
+    namespace = runpy.run_path(str(Path(__file__).parent / "tests/test_render_profile.py"))
+    with pytest.MonkeyPatch.context() as patch:
+        for name in namespace["_PROFILE_ENV_VARS"]:
+            patch.delenv(name, raising=False)
+        return (_story_checks("test_render_profile") + "; " + _profile_transport_checks() + "; "
+                + _render_cache_checks() + "; " + _story_checks("test_render_quality_flags", (
+                    "test_p_flag_resolves_to_1440p60", "test_p_flag_accepted_from_settings_and_env",
+                    "test_p_flag_gets_adaptive_fps_policy")))
+
+
+_answer_capture_check_cache = {}
+
+
+def _answer_capture_checks():
+    """Execute the real parametrized Qt/storage/scoring matrix without windows."""
+    import hashlib
+    import subprocess
+    import uuid
+    import xml.etree.ElementTree as ET
+    from collections import Counter
+    from aetherlab.core.proc import subprocess_kwargs
+
+    root = Path(__file__).resolve().parent
+    sources = ("tests/test_practice_answer_capture.py", "tests/test_practice_session_start.py",
+               "aetherlab/ui/exam_practice.py", "aetherlab/services/ent_practice_pdf.py",
+               "aetherlab/services/mathtext.py", "aetherlab/ui/fonts.py",
+               "aetherlab/services/ent_practice_progress.py", "aetherlab/services/ent_physics_bank.py",
+               "aetherlab/services/ent_topic_bank.py",
+               "aetherlab/services/ent_mock_solutions.py", "aetherlab/core/atomic_json.py")
+    signature = tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    if signature in _answer_capture_check_cache:
+        return _answer_capture_check_cache[signature]
+    folder = _TMP / ("answers-" + uuid.uuid4().hex[:12])
+    folder.mkdir()
+    report = folder / "tests.xml"
+    environment = dict(os.environ, QT_QPA_PLATFORM="offscreen",
+                       PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE="0", PHYSLAB_REQUIRE_NATIVE_QT="0")
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/test_practice_answer_capture.py",
+        "tests/test_practice_session_start.py",
+        "-q", "-p", "no:cacheprovider", f"--basetemp={folder / 'cases'}", f"--junitxml={report}"],
+        cwd=root, env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=180, **subprocess_kwargs())
+    (folder / "pytest.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+    assert result.returncode == 0, (result.stdout + result.stderr)[-4000:]
+    cases = list(ET.parse(report).iter("testcase"))
+    assert all(not any(case.find(tag) is not None for tag in ("failure", "error")) for case in cases)
+    expected = {
+        "test_cleared_controls_replace_saved_answer": 90,
+        "test_check_of_cleared_response_never_keeps_old_points": 12,
+        "test_partial_matching_keeps_one_point_and_placeholder": 27,
+        "test_checked_answer_remains_committed": 12,
+        "test_pending_result_retry_preserves_cleared_response": 18,
+        "test_full_mock_clear_is_unanswered_and_scores_48_of_50": 6,
+        "test_read_only_snapshot_keeps_old_bytes_and_retry_saves_clear": 6,
+        "test_reopen_restores_cleared_answer_in_same_attempt": 12,
+        "test_expiry_and_pdf_use_cleared_answer": 6,
+        "test_review_mistakes_resolves_saved_attempt_before_replacement": 27,
+        "test_restart_refusal_preserves_snapshot_and_retry": 6,
+        "test_unreadable_snapshot_blocks_both_entry_points_and_retry_resumes": 6,
+        "test_unresumable_snapshot_is_not_replaced_by_review": 6,
+        "test_resuming_pending_result_from_setup_records_once": 6,
+        "test_resume_uses_saved_language_for_both_setup_actions": 6,
+        "test_empty_mistakes_never_replace_a_saved_attempt": 3,
+        "test_removal_verification_failure_blocks_start_until_retry": 6,
+    }
+    assert Counter(case.attrib["name"].split("[")[0] for case in cases) == expected
+    skipped = [case for case in cases if case.find("skipped") is not None]
+    assert not skipped if os.name == "nt" else all(
+        case.attrib["name"].startswith(("test_read_only_snapshot_", "test_restart_refusal_")) for case in skipped)
+    assert signature == tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    note = (f"{len(cases) - len(skipped)} executed practice persistence/scoring/export cases (BUG-254/255/256): kk/ru/en, "
+            "multi/matching clear, navigation, autosave, close/resume, early/timed finish, "
+            "partial credit, checked/frozen results, write-failure retry, 48/50 full mocks, "
+            "actual expiry/PDFs and guarded Start/Review mistakes replacement; offscreen")
+    _answer_capture_check_cache[signature] = note
+    return note
+
+
+_topic_solution_check_cache = {}
+
+
+def _topic_solution_checks(*, render: bool):
+    """Keep the pure generator checks independent of the optional Qt renderer."""
+    import hashlib
+    import subprocess
+    import uuid
+    import xml.etree.ElementTree as ET
+    from collections import Counter
+    from aetherlab.core.proc import subprocess_kwargs
+
+    root = Path(__file__).resolve().parent
+    sources = ("tests/test_topic_solution_notation.py", "aetherlab/services/ent_topic_bank.py",
+               "aetherlab/services/mathtext.py", "aetherlab/ui/qt_compat.py")
+    signature = tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    key = (signature, render)
+    if key in _topic_solution_check_cache:
+        return _topic_solution_check_cache[key]
+    folder = _TMP / ("topic-math-" + uuid.uuid4().hex[:12])
+    folder.mkdir()
+    report = folder / "tests.xml"
+    command = [sys.executable, "-m", "pytest", "tests/test_topic_solution_notation.py", "-q",
+               "-p", "no:cacheprovider", f"--basetemp={folder / 'cases'}", f"--junitxml={report}"]
+    if not render:
+        command += ["-k", "not test_first_and_last_worked_steps_typeset_without_fallback"]
+    environment = dict(os.environ, QT_QPA_PLATFORM="offscreen",
+                       PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE="0", PHYSLAB_REQUIRE_NATIVE_QT="0")
+    result = subprocess.run(command, cwd=root, env=environment, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=120, **subprocess_kwargs())
+    (folder / "pytest.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+    assert result.returncode == 0, (result.stdout + result.stderr)[-4000:]
+    cases = list(ET.parse(report).iter("testcase"))
+    expected = {"test_negative_powers_keep_the_whole_exponent_in_every_substitution": 2,
+                "test_nanometre_conversion_uses_the_requested_length_as_unknown": 1,
+                "test_all_generated_steps_keep_negative_exponents_grouped": 1,
+                "test_keys_and_units_agree_with_independent_physics_in_all_languages": 3}
+    if render:
+        expected["test_first_and_last_worked_steps_typeset_without_fallback"] = 6
+    assert Counter(case.attrib["name"].split("[")[0] for case in cases) == expected
+    assert all(not any(case.find(tag) is not None for tag in ("failure", "error", "skipped")) for case in cases)
+    assert signature == tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    note = (f"{len(cases)} executed topic-math checks (BUG-257/258): grouped negative powers in all 2500 "
+            "worked sets, 100 nanometre quantities, 300 independently calculated magnetic/photon/size keys "
+            "and units in kk/ru/en" + ("; 18 actual equation images" if render else "; generator checks require no Qt"))
+    _topic_solution_check_cache[key] = note
+    return note
+
+
+_render_cache_check_cache = {}
+
+
+def _render_cache_checks():
+    """Run actual saved-session, worker, runtime and nested policy cache cases."""
+    import hashlib
+    import subprocess
+    import uuid
+    import xml.etree.ElementTree as ET
+    from aetherlab.core.proc import subprocess_kwargs
+    root = Path(__file__).resolve().parent
+    sources = ("tests/test_render_cache_policy.py", "tests/test_render_cache_reuse.py", "tests/test_cache_compatibility_paths.py",
+               "aetherlab/core/models.py", "aetherlab/core/render_cache.py", "aetherlab/core/render_profile.py",
+               "aetherlab/core/cache.py", "aetherlab/services/pipeline.py", "aetherlab/ui/workers.py",
+               "aetherlab/services/manim_runtime.py", "aetherlab/services/segmented_pipeline.py",
+               "aetherlab/services/lesson_pipeline.py", "aetherlab/services/voiceover.py")
+    signature = tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    if signature in _render_cache_check_cache:
+        return _render_cache_check_cache[signature]
+    folder = _TMP / ("render-cache-" + uuid.uuid4().hex)
+    folder.mkdir()
+    report = folder / "tests.xml"
+    process = subprocess.run([sys.executable, "-m", "pytest", "tests/test_render_cache_policy.py",
+        "tests/test_render_cache_reuse.py", "tests/test_cache_compatibility_paths.py", "-q", "-p", "no:cacheprovider",
+        f"--basetemp={folder / 'cases'}", f"--junitxml={report}"], cwd=root,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **subprocess_kwargs())
+    (folder / "pytest.log").write_text(process.stdout + process.stderr, encoding="utf-8")
+    assert process.returncode == 0, (process.stdout + process.stderr)[-3000:]
+    cases = list(ET.parse(report).iter("testcase"))
+    assert cases and all(not any(case.find(tag) is not None for tag in ("failure", "error", "skipped")) for case in cases)
+    assert signature == tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    note = (f"{len(cases)} executed render-cache cases: SQLite/worker profile changes preserve solver/RAG/code, "
+            "invalidate stale media, retain prior files, and guard runtime draft/final reuse; adaptive chapter/segment keys")
+    _render_cache_check_cache[signature] = note
+    return note
+
+
+_profile_transport_cache = {}
+
+
+def _profile_transport_checks():
+    """Execute fixture/parameterized profile-to-cloud checks, never a live job."""
+    import hashlib
+    import subprocess
+    import uuid
+    import xml.etree.ElementTree as ET
+    from aetherlab.core.proc import subprocess_kwargs
+
+    root = Path(__file__).resolve().parent
+    sources = ("tests/test_render_profile_transport.py", "aetherlab/core/render_profile.py",
+               "aetherlab/core/settings.py", "aetherlab/services/render_backend.py",
+               "aetherlab/services/manim_runtime.py", ".github/workflows/render.yml")
+    signature = tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    if signature in _profile_transport_cache:
+        return _profile_transport_cache[signature]
+    folder = _TMP / ("profile-transport-" + uuid.uuid4().hex)
+    folder.mkdir()
+    report = folder / "tests.xml"
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/test_render_profile_transport.py",
+        "-q", "-p", "no:cacheprovider", f"--basetemp={folder / 'cases'}", f"--junitxml={report}"],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120, **subprocess_kwargs())
+    (folder / "pytest.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3000:]
+    cases = list(ET.parse(report).iter("testcase"))
+    assert cases and all(not any(case.find(tag) is not None for tag in ("failure", "error", "skipped")) for case in cases)
+    assert signature == tuple(hashlib.sha256((root / path).read_bytes()).hexdigest() for path in sources)
+    note = (f"{len(cases)} executed profile transport cases: owned GitHub client, actual API payload, "
+            "Bash worker canvas guard, encoded custom-size/FPS media, cached-profile refusal and staged download; no live cloud job")
+    _profile_transport_cache[signature] = note
+    return note
+
+
+def t_f252():
+    return _story_checks("test_dubbing_ru_kk")
+
+
+def t_f253():
+    return _story_checks("test_encoder_budget_contract") + "; " + _story_checks("test_render_quality_flags", (
+        "test_command_passes_inflight_encoders_default_4", "test_command_inflight_encoders_env_override_and_clamp")) + "; " + _encoder_budget_acceptance()
+
+
+def _encoder_budget_acceptance():
+    import uuid
+    import build_feature_tracker as tracker
+    from tools.accept_encoder_budget import DETAIL, run_acceptance
+    from tools.feature_acceptance import verify_acceptance
+    root = Path(__file__).resolve().parent
+    row = dict(zip(tracker.HEADERS, next(item for item in tracker.FEATURES if item[0] == "F253")))
+    prior = json.loads((root / "feature_test_results.json").read_text(encoding="utf-8")).get("F253", {})
+    valid, _ = verify_acceptance(root, row, prior)
+    if valid:
+        _behaviour_evidence["F253"] = prior["behaviour_acceptance_evidence"]
+        return DETAIL + "; reused current bound execution"
+    output = root / "tmp" / "feature-acceptance" / f"F253-{uuid.uuid4().hex}.json"
+    _behaviour_evidence["F253"] = run_acceptance(output, row)
+    return DETAIL
+
+
+def _practice_bank_acceptance(feature):
+    import uuid
+
+    import build_feature_tracker as tracker
+    from tools.accept_practice_bank import DETAILS, run_acceptance
+    from tools.feature_acceptance import verify_acceptance
+
+    root = Path(__file__).resolve().parent
+    row = dict(zip(tracker.HEADERS, next(item for item in tracker.FEATURES if item[0] == feature)))
+    prior = json.loads((root / "feature_test_results.json").read_text(encoding="utf-8")).get(feature, {})
+    valid, _detail = verify_acceptance(root, row, prior)
+    if valid:
+        _behaviour_evidence[feature] = prior["behaviour_acceptance_evidence"]
+        return DETAILS[feature] + "; reused current bound execution"
+    output = root / "tmp/feature-acceptance" / f"{feature}-{uuid.uuid4().hex}.json"
+    _behaviour_evidence[feature] = run_acceptance(output, row)
+    return DETAILS[feature]
+
+
+def t_f254():
+    return _practice_bank_acceptance("F254")
+
+
+def t_f255():
+    import subprocess
+
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/test_gui_instance_guard.py", "-q",
+        "-k", "not spider_environment_flag_does_not_open_or_crawl_on_startup and not spider_dock_still_opens_only_after_navigation_action",
+        "-p", "no:cacheprovider", f"--basetemp={_TMP / 'gui-instance-cases'}"],
+        cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=90, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3500:]
+    assert "17 passed" in result.stdout, result.stdout
+    return "17 executed single-profile launch checks: real lock/CLI duplicate, Unicode paths, corrupt-lock/storage diagnosis, release race, owner exit/crash recovery and exception release; no visible window; installed Qt required"
+
+
+def t_f256():
+    import subprocess
+
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/test_unt_scene_policy.py", "-q",
+        "-p", "no:cacheprovider", f"--basetemp={_TMP / 'unt-policy-cases'}"],
+        cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=90, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3500:]
+    assert "21 passed" in result.stdout, result.stdout
+    return "21 executed UNT policy checks: five-act/eight-beat scheduling, source-neutral scaffold and controlled real directing request, honest provenance, numeric/choice gates, chapter/portrait policy and duration boundaries; no model/cloud/video acceptance"
+
+
+def _spider_story_checks(expression: str, count: int) -> str:
+    import subprocess
+    from aetherlab.core.proc import subprocess_kwargs
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/test_spider_contract.py", "-q",
+        "-k", expression, "-p", "no:cacheprovider", f"--basetemp={_TMP / ('spider-' + str(count))}"],
+        cwd=Path(__file__).resolve().parent, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=90, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"}, **subprocess_kwargs())
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3500:]
+    assert f"{count} passed" in result.stdout, result.stdout
+    return f"{count} owned Spider contract cases; fake providers/PNG, temporary sources/Git, no real screenshot/network/native UI; full behaviour remains partial"
+
+
+def _spider_startup_opt_in_check() -> str:
+    import subprocess
+    from aetherlab.core.proc import subprocess_kwargs
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest",
+         "tests/test_gui_instance_guard.py", "-k",
+         "spider_environment_flag_does_not_open_or_crawl_on_startup or spider_dock_still_opens_only_after_navigation_action",
+         "-q", "-p", "no:cacheprovider",
+         f"--basetemp={_TMP / 'spider-startup-opt-in'}"],
+        cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=90,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "AETHERLAB_SPIDER_CRAWL": "1"},
+        **subprocess_kwargs(),
+    )
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3500:]
+    assert "2 passed" in result.stdout, result.stdout
+    return "legacy Spider startup flag ignored; sidebar action still opens/closes the dock without starting a crawl; offscreen Qt only"
+
+
+def t_f257():
+    return _spider_story_checks("actual_async or invalid_diagnosis or different_vision", 8)
+
+
+def t_f258():
+    return _spider_story_checks("every_patch_section or valid_patch or unsafe_extra", 6)
+
+
+def t_f259():
+    feedback = _spider_story_checks("cancelled_scan or cancel_after or unrepaired_error", 5)
+    startup = _spider_startup_opt_in_check()
+    return f"{feedback}; {startup}"
+
+
+def t_f260():
+    return _spider_story_checks("test_crawl", 2)
 
 
 TESTS = {name[2:].upper(): fn for name, fn in sorted(globals().items())

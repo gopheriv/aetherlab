@@ -433,13 +433,15 @@ def test_pipeline_resumes_segmented_lesson_instead_of_rerendering_joined_code(tm
     # from its joined code (every segment's AetherLabScene), silently producing
     # only the last segment.
     from dataclasses import replace as dc_replace
+    from aetherlab.core.render_cache import requested_profile_key
 
+    from aetherlab.core.models import OutputPlan
     from aetherlab.core.cache import SessionCache
     from aetherlab.core.settings import load_settings
     from aetherlab.services.pipeline import AetherLabPipeline
 
     settings = dc_replace(load_settings(), data_dir=tmp_path, cache_path=tmp_path / "cache.sqlite3",
-                          openai_api_key="k")
+                          openai_api_key="k", llm_model="t")
     request = ProblemRequest("Explain spring oscillator", duration_target_s=60.0)
     solver = SolverResult(summary="s", derivation_steps=[], keywords=["k"], variables={}, model_name="t")
     rag = RagResult(keywords=["k"], hits=[], backend="test")
@@ -455,6 +457,16 @@ def test_pipeline_resumes_segmented_lesson_instead_of_rerendering_joined_code(tm
     async def no_ingest():
         return None
 
+    async def fixed_animation_plan(_planner, _request):
+        return OutputPlan(needs_animation=True, needs_pdf=False,
+                          rationale="Owned segmented-cache recovery fixture")
+
+    # This case verifies cached segment recovery, not provider planning. Its
+    # synthetic key must never make a network request or wait for API retries.
+    monkeypatch.setattr("aetherlab.services.pipeline.Planner.plan", fixed_animation_plan)
+    async def forbidden_solve(_request):
+        raise AssertionError("Matching cached solver must be reused without provider access")
+    monkeypatch.setattr(pipeline.llm, "solve", forbidden_solve)
     pipeline._ensure_ingested = no_ingest
     resumed = tmp_path / "lesson.mp4"
     calls = {"segmented": 0, "rerender": 0}
@@ -463,7 +475,8 @@ def test_pipeline_resumes_segmented_lesson_instead_of_rerendering_joined_code(tm
         calls["segmented"] += 1
         resumed.write_bytes(b"x")
         return SceneBundle("AetherLabSegmentedScene", "joined", "manim-community", "rendered",
-                           video_path=str(resumed))
+                           video_path=str(resumed),
+                           render_profile_key=requested_profile_key(settings))
 
     async def forbidden_rerender(*_args, **_kwargs):
         calls["rerender"] += 1

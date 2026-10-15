@@ -15,28 +15,41 @@ from pathlib import Path
 # Resolve paths relative to this script's directory
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOG_DIR = SCRIPT_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "aetherlab_watchdog.log"
 
 RESTART_DELAY_BASE = 3
 RESTART_DELAY_CAP = 60
 HEALTHY_UPTIME = 120  # seconds — reset backoff if alive this long
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
-    handlers=[
-        logging.FileHandler(str(LOG_FILE), encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
 logger = logging.getLogger("aetherlab_watchdog")
+
+
+def _setup_logging() -> None:
+    """A read-only log location must not prevent launch or crash recovery."""
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(str(LOG_FILE), encoding="utf-8"))
+    except OSError:
+        # Console logging remains available when installation storage is read-only.
+        pass
+    if logging.getLogger().handlers:
+        # basicConfig would ignore these handlers; do not leak an unused file.
+        for handler in handlers:
+            handler.close()
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
+        handlers=handlers,
+    )
 
 
 def main() -> None:
     from aetherlab.core.console import configure_utf8_stdio
 
     configure_utf8_stdio()
+    _setup_logging()
     delay = RESTART_DELAY_BASE
     restart_count = 0
 
@@ -77,7 +90,11 @@ def main() -> None:
             logger.info("Healthy run detected — backoff reset")
 
         logger.info(f"Restarting in {delay}s (exit code {exit_code})...")
-        time.sleep(delay)
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            logger.info("Watchdog interrupted — exiting")
+            break
         delay = min(delay * 2, RESTART_DELAY_CAP)
 
 

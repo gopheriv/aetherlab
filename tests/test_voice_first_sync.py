@@ -208,7 +208,11 @@ def test_pipeline_repairs_drift_only_when_it_helps(tmp_path, monkeypatch):
         return _MARKED                               # the on-time version
 
     monkeypatch.setattr(SceneGenerator, "repair", fake_repair)
-    monkeypatch.setattr(manim_runtime, "_blocking_scene_issues", lambda code, timeline: (True, []))
+    monkeypatch.setattr(
+        manim_runtime,
+        "_blocking_scene_issues",
+        lambda code, timeline, *_args, **_kwargs: (True, []),
+    )
     settings = SimpleNamespace(openai_api_key="k", narration_enabled=True, llm_model="m",
                                data_dir=tmp_path)
     bundle = SceneBundle("S", late, "manim-community", "compiled")
@@ -525,7 +529,11 @@ def test_a_scene_that_misses_its_scheduled_length_is_repaired(tmp_path, monkeypa
         return _MARKED
 
     monkeypatch.setattr(SceneGenerator, "repair", fake_repair)
-    monkeypatch.setattr(manim_runtime, "_blocking_scene_issues", lambda code, timeline: (True, []))
+    monkeypatch.setattr(
+        manim_runtime,
+        "_blocking_scene_issues",
+        lambda code, timeline, *_args, **_kwargs: (True, []),
+    )
     settings = SimpleNamespace(openai_api_key="k", narration_enabled=False, llm_model="m",
                                data_dir=tmp_path)
     timeline = [{"id": "A1.B1", "start_s": 0.0, "end_s": 2.0},

@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from aetherlab.core.atomic_json import atomic_write_json
 from aetherlab.core.models import ProblemRequest, RagResult, SceneBundle, SolverResult
+from aetherlab.core.render_cache import requested_profile_key
 
 log = logging.getLogger(__name__)
 
@@ -672,6 +673,7 @@ async def render_segmented_scene(
             code="\n\n".join(bundle.code for bundle in segment_bundles),
             engine=engine,
             status="rendered",
+            render_profile_key=requested_profile_key(settings, quality),
             diagnostics=diagnostics,
             video_path=str(final_path),
             silent_video_path="",

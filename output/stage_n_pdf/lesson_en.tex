@@ -1,0 +1,142 @@
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[a4paper,left=20mm,right=20mm,top=20mm,bottom=22mm]{geometry}
+\usepackage{hyperref}
+\hypersetup{hidelinks,pdfauthor={AetherLab},pdftitle={Uniformly accelerated rectilinear motion}}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[L]{\small\texttt{constant\_acceleration $\cdot$ v2 $\cdot$ en}}
+\fancyfoot[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\figurename}{Figure}
+\sloppy
+\begin{document}
+{\Large\bfseries Uniformly accelerated rectilinear motion}\\[2mm]
+Video lesson companion (300 s)\\[1mm]
+{\small Content version: v2 • translation pending teacher review}
+\vspace{4mm}
+\section*{Goal}
+After the video, the learner will be able to compute the velocity and displacement of a uniformly accelerated body from its initial velocity, acceleration and time, and to check the answer by the area under the v(t) graph.
+\section*{Brief explanation}
+\begin{itemize}
+\item A car travels at 2 m/s and accelerates; after 4 s its speed is 14 m/s. How many metres did it cover? We will find the answer two ways.
+\item If speed never changes, motion is uniform (v = s/t). Here speed grows by the same amount each second: +3 m/s every second — so acceleration a = 3 m/s$^2$ and the motion is uniformly accelerated.
+\item Acceleration: a = $\Delta$v/$\Delta$t; unit — m/s$^2$. The Ox axis points along the motion; everything forward takes the plus sign.
+\item Velocity: v = v$_0$ + at = 2 + 3$\cdot$4 = 14 m/s. Unit check: (m/s$^2$)$\cdot$s = m/s.
+\item Displacement: s = v$_0$t + at$^2$/2 = 2$\cdot$4 + 3$\cdot$16/2 = 8 + 24 = 32 m. The first term is the distance without acceleration, the second is the gain from it.
+\item The v(t) graph is the line v = 2 + 3t through (0; 2) and (4; 14); the slope of the line equals the acceleration a.
+\item The area under the v(t) graph numerically equals the displacement: trapezoid (2 + 14)/2$\cdot$4 = 32 m — matches the formula.
+\item Traps: 14$\cdot$4 = 56 is wrong (speed was growing; the average is needed); slope is acceleration, area is displacement.
+\end{itemize}
+\section*{Applicability}
+\begin{itemize}
+\item rectilinear: motion along a straight line;
+\item constant acceleration: acceleration magnitude and direction do not change;
+\item velocity sign: velocity keeps its sign, so displacement numerically equals distance travelled;
+\item SI units: all quantities in SI (m, s, m/s, m/s$^2$).
+\end{itemize}
+Ox directed along the motion; forward projections take the + sign (ТҮҚ case). ТКҚ and direction reversal are out of lesson scope.
+\section*{Quantities and units}
+\begin{tabular}{|l|l|l|l|}
+\hline
+Symbol & Quantity & Value & Status \\ \hline
+$v_0$ & initial velocity & 2 m/s & input \\ \hline
+$a$ & acceleration & 3 m/s$^2$ & input \\ \hline
+$t$ & time & 4 s & input \\ \hline
+$v$ & final velocity & 14 m/s & derived (Stage G) \\ \hline
+$s$ & displacement & 32 m & derived (Stage G) \\ \hline
+$v_0$ & initial velocity (pause task B6) & 0 m/s & input \\ \hline
+$a$ & acceleration (B6) & 2 m/s$^2$ & input \\ \hline
+$t$ & time (B6) & 5 s & input \\ \hline
+$s$ & displacement (B6) & 25 m & derived (Stage G) \\ \hline
+\hline
+\end{tabular}
+\section*{Formulas and conditions}
+\textbf{definition of acceleration}: \[a = \Delta v / \Delta t\] definition; always true.
+
+\textbf{velocity}: \[v = v_0 + at\] only for constant acceleration (conditions above).
+
+\textbf{displacement}: \[s = v_0 t + at^2/2\] only for constant acceleration (conditions above).
+
+\textbf{displacement via average velocity}: \[s = (v_0 + v)t/2\] only for constant acceleration (conditions above).
+\section*{Figures}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{fig_vt_en.png}
+\caption{Velocity graph v = 2 + 3t. The slope of the line equals the acceleration (a = 3 m/s$^2$); the shaded area under the graph numerically equals the displacement (s = 32 m).}
+\end{figure}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{fig_bars_en.png}
+\caption{Displacement terms: v$_0$t = 8 m (no acceleration) and at$^2$/2 = 24 m (gain from acceleration); total s = 32 m.}
+\end{figure}
+\section*{Worked example}
+Given: v$_0$ = 2 m/s, a = 3 m/s$^2$, t = 4 s. Find v and s.
+\begin{enumerate}
+\item Velocity: v = v$_0$ + at = 2 + 3$\cdot$4 = 14 m/s.
+\item Displacement: s = v$_0$t + at$^2$/2 = 2$\cdot$4 + 3$\cdot$16/2 = 8 + 24 = 32 m.
+\item Area check: s = (v$_0$ + v)t/2 = (2 + 14)$\cdot$4/2 = 32 m. It matches.
+\end{enumerate}
+Pause task (B6): v$_0$ = 0, a = 2 m/s$^2$, t = 5 s $\to$ s = 0$\cdot$5 + 2$\cdot$25/2 = 25 m.
+\section*{Self-study tasks}
+Solve on your own; answers are in a separate section.
+
+
+\textbf{H1.} An object starts at 2 m/s and accelerates at 3 m/s$^2$. What is its speed after 4 seconds?
+
+\textbf{A.} 14 m/s \\
+\textbf{B.} 12 m/s \\
+\textbf{C.} 9 m/s \\
+\textbf{D.} 6 m/s
+
+\textbf{H2.} An object moves with initial speed 2 m/s and acceleration 3 m/s$^2$ without changing direction. Find its displacement in 4 s.
+
+\textbf{A.} 32 m \\
+\textbf{B.} 56 m \\
+\textbf{C.} 24 m \\
+\textbf{D.} 20 m
+
+\textbf{H3.} Which motion is called uniformly accelerated?
+
+\textbf{A.} Velocity changes by equal amounts in equal times \\
+\textbf{B.} Velocity stays constant \\
+\textbf{C.} Acceleration changes over time \\
+\textbf{D.} Distance is the same in equal times
+
+\textbf{H4.} What does the slope of the line on a velocity–time graph show?
+
+\textbf{A.} Acceleration \\
+\textbf{B.} Displacement \\
+\textbf{C.} Velocity \\
+\textbf{D.} Time
+
+\textbf{H5.} On a v(t) graph a straight line runs from (0 s; 2 m/s) to (4 s; 14 m/s). Find the displacement.
+
+\textbf{A.} 32 m \\
+\textbf{B.} 48 m \\
+\textbf{C.} 56 m \\
+\textbf{D.} 24 m
+\clearpage
+\section*{Answers}
+Answers with short explanations.
+\textbf{H1 — A} (14 m/s). Acceleration adds 3 m/s of speed each second. So v = v$_0$ + at = 2 + 3$\cdot$4 = 14 m/s.
+\textbf{H2 — A} (32 m). s = v$_0$t + at$^2$/2 = 2$\cdot$4 + 3$\cdot$16/2 = 8 + 24 = 32 m. 56 m comes from plugging the final speed into the uniform-motion formula.
+\textbf{H3 — A} (Velocity changes by equal amounts in equal times). In uniformly accelerated motion velocity gains equal increments in equal times while acceleration stays constant (Zakirova 9, §3). D describes uniform motion.
+\textbf{H4 — A} (Acceleration). The slope of v(t) equals acceleration: a = $\Delta$v/$\Delta$t. Displacement is the area under the graph, not the slope (Zakirova 10, §3).
+\textbf{H5 — A} (32 m). Trapezoid area: (2 + 14)/2 $\cdot$ 4 = 32 m. 24 m is the triangle alone, without the rectangle.
+\section*{Sources}
+\begin{itemize}
+\item Zakirova, Physics, grade 9, §3 — uniformly accelerated motion, v(t) graphs (PDF pp. 19–26).
+\item Zakirova, Physics, grade 10, §3 — kinematics equations, v(t) slope and area (PDF pp. 15–18, 20).
+\item Zakirova, Physics, grade 11 — notation cross-check (PDF pp. 8–12).
+\item “369 formulas” — formula cross-check (PDF pp. 6–7).
+\item FBS — notation and unit cross-check (PDF pp. 6–7).
+\item ENT collections: \url{https://testcenter.kz}
+\end{itemize}
+Sources were used for cross-checking only; no textbook text, figure, or exercise is reproduced.
+\end{document}

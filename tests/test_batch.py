@@ -11,6 +11,8 @@ sys.stderr.reconfigure(line_buffering=True)
 results = []
 
 def run_check(feature_id, name, fn):
+    if __name__ != "__main__":
+        return
     try:
         fn()
         results.append((feature_id, name, "PASS", ""))
@@ -362,16 +364,39 @@ print("\n--- Render ---")
 
 def test_f29():
     import tempfile
-    render_dir = Path(tempfile.gettempdir()) / "aetherlab" / "renders"
-    assert render_dir.exists(), f"Render dir should exist: {render_dir}"
-    # Check for video files
-    videos = list(render_dir.rglob("*.mp4"))
-    print(f"    Render dir: {render_dir}")
-    print(f"    Video files found: {len(videos)}")
-    for v in videos[:3]:
-        print(f"      {v.name} ({v.stat().st_size} bytes)")
-    assert len(videos) > 0, "Should have at least one rendered video"
-run_check("F29", "Manim Video Rendering (verify smoke test output)", test_f29)
+    from dataclasses import replace
+    import imageio_ffmpeg
+    from aetherlab.core.models import SceneBundle
+    from aetherlab.core.settings import load_settings
+    from aetherlab.services import manim_runtime
+
+    with tempfile.TemporaryDirectory(prefix="aetherlab-owned-render-") as temporary:
+        owned = Path(temporary).resolve()
+        assert owned.is_relative_to(Path(tempfile.gettempdir()).resolve())
+        settings = replace(load_settings(), data_dir=owned, cache_path=owned / "cache.sqlite3",
+                           library_path=owned / "library", chroma_path=owned / "chroma",
+                           openai_api_key=None, fallback_api_key=None, render_mode="local")
+        original_render, original_runs = manim_runtime._RENDER_DIR, manim_runtime._RUNS_DIR
+        try:
+            manim_runtime._RENDER_DIR = owned / "renders"
+            manim_runtime._RUNS_DIR = owned / "renders/runs"
+            scene = SceneBundle(class_name="OwnedBatchRender", engine="manim-community", status="compiled",
+                code="from manim import *\nclass OwnedBatchRender(Scene):\n    def construct(self):\n        self.play(FadeIn(Dot(color=BLUE)), run_time=0.25)\n        self.wait(0.25)\n")
+            rendered = manim_runtime.ManimRuntime(settings).render_scene(scene, settings, quality="l")
+            assert rendered.status == "rendered", rendered.diagnostics
+            path = Path(rendered.video_path).resolve()
+            assert path.is_relative_to(owned) and path.is_file() and path.stat().st_size > 0
+            frames = imageio_ffmpeg.read_frames(str(path), pix_fmt="rgb24")
+            try:
+                metadata, frame = next(frames), next(frames)
+                width, height = metadata["size"]
+                assert width > 0 and height > 0 and len(frame) == width * height * 3
+            finally:
+                frames.close()
+            print(f"    Fresh rendered/decoded video: {path.name} ({path.stat().st_size} bytes)")
+        finally:
+            manim_runtime._RENDER_DIR, manim_runtime._RUNS_DIR = original_render, original_runs
+run_check("F29", "Manim Video Rendering (fresh isolated output)", test_f29)
 
 # в”Ђв”Ђ HISTORY (SQLite) в”Ђв”Ђ
 print("\n--- History ---")

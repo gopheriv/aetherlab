@@ -381,6 +381,188 @@ def test_vtt_conversion_preserves_kazakh_chars():
     assert "00:00:00.000 --> 00:00:02.000" in vtt
 
 
+# ── Mission 2: normalizer battery (fuzz + invariants + fixed bugs) ──────────
+
+def test_hyphenated_latin_words_are_never_read_as_minus():
+    spoken = normalize_spoken_text("напиши e-mail про x-ray и T-shirt от mother-in-law", "ru")
+    for word in ("e-mail", "x-ray", "T-shirt", "mother-in-law"):
+        assert word in spoken, spoken
+    assert "минус" not in spoken
+    # A genuine minus with digits still splits.
+    assert "минус" in normalize_spoken_text("счёт x-2", "ru")
+
+
+def test_year_vs_gram_disambiguation_ru_kk():
+    assert "году" in normalize_spoken_text("в 1999 г. было", "ru")
+    assert "году" in normalize_spoken_text("в 1999 г состоялось", "ru")
+    assert "граммов" in normalize_spoken_text("масса 5 г.", "ru")
+    assert "граммов" in normalize_spoken_text("доза 100 г.", "ru")  # 3-digit: grams
+    assert "жылы" in normalize_spoken_text("1999 ж. болды", "kk")
+    assert "жылы" in normalize_spoken_text("2001 ж шықты", "kk")
+    assert "грамм" in normalize_spoken_text("салмағы 5 г.", "kk")
+
+
+def test_unknown_latex_commands_never_leave_a_backslash():
+    for lang in ("ru", "kk", "en"):
+        spoken = normalize_spoken_text(r"$\unknowncmd{x} + \frac{1}{2}$", lang)
+        assert "\\" not in spoken, (lang, spoken)
+        assert "unknowncmd" in spoken  # the name is spoken, TTS-safe
+
+
+def test_slash_words_and_prepositions_survive():
+    assert normalize_spoken_text("вход и/или выход", "ru") == "вход и/или выход"
+    spoken = normalize_spoken_text("шаг с периодом", "ru")
+    assert " с " in f" {spoken} " and "секунд" not in spoken  # "с" is not seconds
+    assert "вольт" not in normalize_spoken_text("В начале было слово", "ru")
+
+
+_NORMALIZER_FUZZ_TOKENS = (
+    "Скорость", "Жылдамдық", "speed", "20", "3.14", "1999", "5", "100",
+    "м/с", "км/ч", "°C", "г.", "г", "ж.", "ж", "Гц", "км", "см",
+    "т.е.", "т.д.", "и т.д.", "напр.", "т.б.", "мыс.", "e.g.", "etc.",
+    "F", "=", "->", "+", "-", "*", "/", "^2", "^3", "sqrt", "×", "±", "∞",
+    "≈", "θ", "ω", "π", "Δ", "a_b", "x-2", "e-mail", "и/или", "что-то",
+    r"$\frac{a}{b}$", r"$\sqrt{x}$", r"$\alpha + \beta$", "ӘҢҒ", "Қазақша",
+)
+
+
+def test_normalizer_fuzz_never_crashes_and_stays_idempotent():
+    import random
+
+    rng = random.Random(20261015)
+    kazakh_probe = "ӘҢҒҚӨҰҮҺІ"
+    for trial in range(400):
+        width = rng.randint(1, 6)
+        text = " ".join(rng.choice(_NORMALIZER_FUZZ_TOKENS) for _ in range(width))
+        lang = rng.choice(["ru", "kk", "en"])
+        if trial % 3 == 0:
+            text += " " + kazakh_probe
+        once = normalize_spoken_text(text, lang)
+        assert isinstance(once, str) and once == once.strip()
+        assert "  " not in once
+        assert normalize_spoken_text(once, lang) == once  # idempotent
+        for char in set(text) & set("ӘәҒғҚқҢңӨөҰұҮүҺһІі"):  # Kazakh letters survive
+            assert char in once, (text, lang, once)
+        assert "\\" not in once
+
+
+def test_normalizer_fuzz_never_cascades_units_into_formulas():
+    import random
+
+    rng = random.Random(77)
+    for _ in range(200):
+        text = " ".join(rng.choice(_NORMALIZER_FUZZ_TOKENS) for _ in range(rng.randint(1, 5)))
+        for lang in ("ru", "kk", "en"):
+            spoken = normalize_spoken_text(text, lang)
+            # "м/с" expands as one unit; its "/" must never split the word.
+            # (Skipped when a frac is present: its "разделить на" joiner
+            # legitimately contains "делить на" as a substring.)
+            if "м/с" in text and "frac" not in text and lang == "ru":
+                assert "метров в секунду" in spoken, (text, spoken)
+                assert "м делить на с" not in spoken, (text, spoken)
+            # Expansions never re-expand: no unit/formula source token survives
+            # inside its own expansion.
+            assert "метров в секунду в секунду" not in spoken
+            assert "секундына метр секундына" not in spoken
+
+
+def test_complete_sentences_ellipsis_long_tail_and_boundaries():
+    assert ensure_complete_sentences("Пауза… А дальше обрывок без", "ru") == "Пауза…"
+    long_tail = "Начало. " + "слово " * 13
+    assert ensure_complete_sentences(long_tail.strip(), "ru") == long_tail.strip()
+    assert ensure_complete_sentences("Готово! Вопрос?", "kk") == "Готово! Вопрос?"
+    assert ensure_complete_sentences("Без точки вообще", "ru") == "Без точки вообще"
+
+
+def test_srt_running_sum_invalid_starts_and_time_format():
+    from aetherlab.services.voiceover import _fmt_srt_time
+
+    assert _fmt_srt_time(3723.456) == "01:02:03,456"
+    assert _fmt_srt_time(-5) == "00:00:00,000"
+    srt = build_srt([("Раз", 2.0), ("Два", 3.0)])  # no starts: running sum
+    assert "00:00:00,000 --> 00:00:02,000" in srt
+    assert "00:00:02,000 --> 00:00:05,000" in srt
+    srt = build_srt([("Раз", 2.0), ("Два", 0.0), ("Три", 1.0)])  # zero clip skipped
+    assert srt.count("-->") == 2 and "Три" in srt
+    srt = build_srt([("Раз", 2.0)], starts=["bogus"])  # invalid start falls back
+    assert "00:00:00,000 --> 00:00:02,000" in srt
+
+
+def test_speech_cache_keys_spoken_form_not_display_form(tmp_path):
+    base = dict(cache_dir=tmp_path, voice="ru-RU-SvetlanaNeural", rate="+0%", language="ru")
+    formula = speech_cache_path(text="F = m*a", **base)
+    spoken = speech_cache_path(text="F равно m умножить на a", **base)
+    assert formula == spoken  # identical audio: one clip, not two
+    assert speech_cache_path(text="F = m*b", **base) != formula
+
+
+def test_speech_cache_survives_unserializable_settings(tmp_path):
+    path = speech_cache_path(tmp_path, "line", "ru-RU-SvetlanaNeural", "+0%", "ru",
+                             synthesis_settings={"opaque": object()})
+    assert path.suffix == ".mp3"
+
+
+def test_spoken_form_falls_back_to_collapsed_text_on_normalizer_crash(monkeypatch):
+    def _boom(_text, _lang):
+        raise RuntimeError("normalizer exploded")
+
+    monkeypatch.setattr("aetherlab.core.language.normalize_spoken_text", _boom)
+    spoken, lang = voiceover._spoken_form("  F  =  m*a  ", "ru-RU-SvetlanaNeural", "ru")
+    assert (spoken, lang) == ("F = m*a", "ru")
+
+
+def test_synthesize_returns_none_when_edge_tts_is_missing_or_fails(tmp_path, monkeypatch):
+    import sys
+
+    out = tmp_path / "line.mp3"
+    monkeypatch.setitem(sys.modules, "edge_tts", None)  # `import edge_tts` raises
+    assert asyncio.run(voiceover.synthesize("Привет", out, "ru-RU-SvetlanaNeural", "+0%")) is None
+
+    class _Denied:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("403 handshake (probe-injected)")
+
+    monkeypatch.setitem(sys.modules, "edge_tts", SimpleNamespace(Communicate=_Denied))
+    assert asyncio.run(voiceover.synthesize("Привет", out, "ru-RU-SvetlanaNeural", "+0%")) is None
+
+    class _Empty:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def save(self, path):
+            Path(path).write_bytes(b"")  # zero-byte clip is unusable
+
+    monkeypatch.setitem(sys.modules, "edge_tts", SimpleNamespace(Communicate=_Empty))
+    assert asyncio.run(voiceover.synthesize("Привет", out, "ru-RU-SvetlanaNeural", "+0%")) is None
+
+
+def test_add_voiceover_keeps_silent_video_when_synthesis_fails(tmp_path, monkeypatch):
+    async def _no_audio(_text, _path, _voice, _rate, _language=None):
+        return None
+
+    monkeypatch.setattr(voiceover, "synthesize", _no_audio)
+    silent = tmp_path / "silent.mp4"
+    silent.write_bytes(b"x" * 128)
+    assert asyncio.run(voiceover.add_voiceover(silent, "Текст.", tmp_path)) is None
+    assert asyncio.run(voiceover.add_voiceover(tmp_path / "missing.mp4", "Текст.", tmp_path)) is None
+    assert asyncio.run(voiceover.add_voiceover(silent, "   ", tmp_path)) is None
+
+
+def test_merge_without_ffmpeg_keeps_silent_video(tmp_path, monkeypatch):
+    monkeypatch.setattr(voiceover, "_ffmpeg_exe", lambda: None)
+    merged = asyncio.run(voiceover.merge(tmp_path / "v.mp4", tmp_path / "a.mp3", tmp_path / "o.mp4"))
+    assert merged is None
+
+
+def test_measure_speech_returns_none_when_any_line_fails(tmp_path, monkeypatch):
+    async def _fail(_text, *_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(voiceover, "synthesize_cached", _fail)
+    assert asyncio.run(voiceover.measure_speech(
+        ["Раз", "Два"], tmp_path, "ru-RU-SvetlanaNeural", "+0%", language="ru")) is None
+
+
 # ── localized status copy ──────────────────────────────────────────────────
 
 def test_narration_messages_cover_ru_kk_en():

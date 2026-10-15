@@ -369,3 +369,283 @@ def test_preflight_updater_readout_stays_placed_without_overlap():
     assert report.off_frame == []
     serious = [item for item in report.overlaps if item.get("severity") in {"high", "medium"}]
     assert serious == [], [overlap_line(item) for item in serious]
+
+
+# ── Mission 2: swept crossings (same-time sampling + removed-object ghosts) ─
+
+def test_swept_hit_finds_same_time_crossings_where_they_happen():
+    from aetherlab.services._preflight_runner import _swept_hit
+
+    hit = _swept_hit((-4.1, -3.9, -0.1, 0.1), (3.9, 4.1, -0.1, 0.1),
+                     (3.9, 4.1, -0.1, 0.1), (-4.1, -3.9, -0.1, 0.1))
+    assert hit is not None
+    cx = (hit[0] + hit[1]) / 2.0
+    assert abs(cx) < 0.3  # the crossing point, not the full-span union box
+
+
+def test_swept_hit_ignores_diagonal_union_corners():
+    from aetherlab.services._preflight_runner import _swept_hit
+
+    # Unions intersect; the true diagonal path never reaches the corner box.
+    assert _swept_hit((-3.3, -2.7, 2.7, 3.3), (2.7, 3.3, -3.3, -2.7),
+                      (2.7, 3.3, 2.7, 3.3), (2.7, 3.3, 2.7, 3.3)) is None
+
+
+def test_swept_hit_catches_fast_small_movers_without_tunneling():
+    from aetherlab.services._preflight_runner import _swept_hit
+
+    hit = _swept_hit((-5.0, -4.9, -0.05, 0.05), (5.0, 5.1, -0.05, 0.05),
+                     (-0.05, 0.05, -1.0, 1.0), (-0.05, 0.05, -1.0, 1.0))
+    assert hit is not None
+
+
+def test_swept_hit_stays_quiet_for_disjoint_stationary_pairs():
+    from aetherlab.services._preflight_runner import _swept_hit
+
+    assert _swept_hit((0, 1, 0, 1), (0, 1, 0, 1), (5, 6, 5, 6), (5, 6, 5, 6)) is None
+
+
+_DIAGONAL_FP = '''from manim import *
+class S(Scene):
+    def construct(self):
+        mover = Square(side_length=0.6, color=BLUE).move_to(LEFT * 3 + UP * 3)
+        corner = Square(side_length=0.6, color=RED).move_to(RIGHT * 3 + UP * 3)
+        self.add(mover, corner)
+        self.wait(0.5)
+        self.play(mover.animate.shift(RIGHT * 6 + DOWN * 6), run_time=2)
+        self.wait(0.5)
+'''
+
+
+def test_preflight_no_longer_flags_diagonal_union_corners():
+    report = preflight_scene(_DIAGONAL_FP, "S")
+    assert report.ran and report.ok, report.error or report.note
+    assert report.overlaps == []
+
+
+_FADEOUT_PASSTHROUGH = '''from manim import *
+class S(Scene):
+    def construct(self):
+        ghost = Text("GHOST").move_to(ORIGIN)
+        mover = Square(side_length=0.6, color=BLUE).move_to(LEFT * 4)
+        self.add(ghost, mover)
+        self.wait(0.5)
+        self.play(mover.animate.shift(RIGHT * 8), FadeOut(ghost), run_time=2)
+        self.wait(0.5)
+'''
+
+
+def test_preflight_catches_mover_passing_through_a_fadeout():
+    report = preflight_scene(_FADEOUT_PASSTHROUGH, "S")
+    assert report.ran and report.ok, report.error or report.note
+    transient = [item for item in report.overlaps if item.get("transient")]
+    assert transient, "mover through a fading ghost must register a crossing"
+    assert all(item["severity"] == "low" for item in transient)
+    assert any("GHOST" in str(item.get("label_a", "")) for item in transient)
+
+
+_SAME_PLAY_SWAP = '''from manim import *
+class S(Scene):
+    def construct(self):
+        old = Text("OLD").move_to(ORIGIN)
+        new = Text("NEW").move_to(ORIGIN)
+        self.add(old)
+        self.wait(0.5)
+        self.play(FadeOut(old), FadeIn(new), run_time=1.5)
+        self.wait(0.5)
+'''
+
+
+def test_preflight_same_play_swap_is_not_a_standing_pile():
+    report = preflight_scene(_SAME_PLAY_SWAP, "S")
+    assert report.ran and report.ok, report.error or report.note
+    assert report.overlaps == []
+
+
+# ── Mission 2: targeted, gated, multi-line repair ───────────────────────────
+
+_TARGETED_CODE = (
+    "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+    '        a = Text("Alpha").move_to(LEFT * 2)\n'
+    '        b = Text("Beta").move_to(ORIGIN)\n'
+    "        self.play(FadeIn(a), FadeIn(b))\n"
+)
+
+
+def test_repair_moves_the_labeled_object_along_the_min_axis():
+    finding = _finding(label_a="Alpha", label_b="Beta",
+                       bounds_a=[-3, -1, -1, 1], bounds_b=[-1, 1, -1, 1],
+                       overlap=[-1, 0, -1, 1])  # wide bite -> push along x
+    fixed, changed = repair_overlap_code(_TARGETED_CODE, [finding])
+    assert changed
+    assert ".shift(RIGHT * 1.15)" in fixed  # 1.0 overlap + 0.15 margin
+    beta_line = next(line for line in fixed.splitlines() if '"Beta"' in line)
+    alpha_line = next(line for line in fixed.splitlines() if '"Alpha"' in line)
+    assert ".shift(" in beta_line and ".shift(" not in alpha_line
+    assert beta_line.index(".move_to(") < beta_line.index(".shift(")  # shift after move_to
+    compile(fixed, "<test-targeted-repair>", "exec")
+
+
+def test_repair_targeted_vertical_push_and_attempt_scaling():
+    finding = _finding(label_a="Alpha", label_b="Beta",
+                       bounds_a=[-1, 1, 1, 3], bounds_b=[-1, 1, -1, 1],
+                       overlap=[-1, 1, 0, 1])  # tall bite, B below A -> DOWN
+    fixed, changed = repair_overlap_code(_TARGETED_CODE, [finding], attempt=2)
+    assert changed and ".shift(DOWN * 2.53)" in fixed  # (1.0 + 0.15) * 2.2
+    compile(fixed, "<test-targeted-repair>", "exec")
+
+
+def test_repair_targets_a_vgroup_member_not_the_group():
+    code = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        '        grp = VGroup(Text("Solo"), Text("Other"))\n'
+        "        self.play(FadeIn(grp))\n"
+    )
+    finding = _finding(label_b="Solo", bounds_a=[-2, 0, -1, 1],
+                       bounds_b=[-1, 1, -1, 1], overlap=[-1, 0, -1, 1])
+    fixed, changed = repair_overlap_code(code, [finding])
+    assert changed
+    assert 'VGroup(Text("Solo").shift(' in fixed  # member moves inside the group
+    compile(fixed, "<test-targeted-repair>", "exec")
+
+
+_MULTILINE_PILE = (
+    "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+    '        a = Text("A").move_to(\n            UP)\n'
+    '        b = Text("B").move_to(\n            UP)\n'
+    "        self.play(FadeIn(a), FadeIn(b))\n"
+)
+
+
+def test_repair_handles_multiline_move_to_piles():
+    fixed, changed = repair_overlap_code(_MULTILINE_PILE, [_finding()])
+    assert changed and fixed.count(".shift(DOWN *") == 1
+    assert ".shift(DOWN * 1.0)" in fixed
+    compile(fixed, "<test-multiline-repair>", "exec")
+
+
+_ORIGIN_STACK = (
+    "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+    '        a = Text("alpha")\n'
+    '        b = Text("beta")\n'
+    "        self.play(FadeIn(a), FadeIn(b))\n"
+)
+
+
+def test_repair_separates_origin_stacks_without_move_to():
+    fixed, changed = repair_overlap_code(_ORIGIN_STACK, [_finding()])
+    assert changed and ".shift(DOWN * 1.0)" in fixed
+    beta_line = next(line for line in fixed.splitlines() if '"beta"' in line)
+    assert ".shift(" in beta_line  # later object moves, first stays anchored
+    compile(fixed, "<test-origin-repair>", "exec")
+
+
+def test_repair_skips_transient_ambiguous_and_unrelated_findings():
+    single = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        '        a = Text("A").move_to(UP)\n'
+        "        self.play(FadeIn(a))\n"
+    )
+    # Crossing during motion: a static shift is not the fix.
+    assert repair_overlap_code(single, [_finding(transient=True, severity="low")]) == (single, False)
+    # Two identical labels: targeted mapping is ambiguous, nothing piled.
+    dup = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        '        a = Text("Same").move_to(UP)\n'
+        '        b = Text("Same").move_to(DOWN)\n'
+        "        self.play(FadeIn(a), FadeIn(b))\n"
+    )
+    assert repair_overlap_code(dup, [_finding()]) == (dup, False)
+    # Class gate: a Text pile is not touched for a Circle-vs-Square finding.
+    unrelated = [_finding(a="Circle#5", b="Square#9", label_a="", label_b="")]
+    assert repair_overlap_code(_PILED_CODE, unrelated) == (_PILED_CODE, False)
+
+
+def test_repair_respects_positioning_by_variable_statement():
+    code = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        '        a = Text("alpha")\n'
+        "        a.move_to(UP)\n"
+        '        b = Text("beta")\n'
+        "        self.play(FadeIn(a), FadeIn(b))\n"
+    )
+    # Only b sits at ORIGIN: a lone object is not a pile.
+    assert repair_overlap_code(code, [_finding()]) == (code, False)
+
+
+def test_repair_falls_back_to_piles_without_usable_geometry():
+    bare = {"a": "Text#0", "b": "Text#1", "severity": "high"}
+    fixed, changed = repair_overlap_code(_PILED_CODE, [bare])
+    assert changed and ".shift(DOWN * 1.0)" in fixed
+    compile(fixed, "<test-pile-fallback>", "exec")
+
+
+def test_repair_treats_positional_geometry_as_positioned():
+    placed = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        star = Dot(star_pt, color=GOLD, radius=0.2)\n"
+        "        glow = Dot(star_pt, color=YELLOW, radius=0.34)\n"
+        "        self.play(FadeIn(star), FadeIn(glow))\n"
+    )
+    finding = _finding(a="Dot#1", b="Dot#2", label_a="", label_b="")
+    assert repair_overlap_code(placed, [finding]) == (placed, False)
+    bare = (
+        "from manim import *\nclass S(Scene):\n    def construct(self):\n"
+        "        a = Dot()\n"
+        "        b = Dot()\n"
+        "        self.play(FadeIn(a), FadeIn(b))\n"
+    )
+    fixed, changed = repair_overlap_code(bare, [finding])
+    assert changed and ".shift(DOWN * 1.0)" in fixed
+    compile(fixed, "<test-origin-dots>", "exec")
+
+
+# ── Mission 2: halo opacity reads + flagship component guard ───────────────
+
+def test_opacity_reads_ignore_the_deprecated_get_opacity_shim():
+    from aetherlab.services import _preflight_runner as runner
+
+    class _Glow:
+        def get_family(self):
+            return [self]
+
+        def get_stroke_opacity(self):
+            return 0.25
+
+        def get_fill_opacity(self):
+            return 0.25
+
+        def get_opacity(self):  # Manim 0.21: raises AttributeError, no 'opacity'
+            raise AttributeError("Dot object has no attribute 'opacity'")
+
+    assert runner._max_opacity(_Glow()) == 0.25
+    assert runner._visible(_Glow()) is True
+
+    class _Opaque:
+        def get_family(self):
+            return [self]
+
+        def get_stroke_opacity(self):
+            raise RuntimeError("unreadable")
+
+        def get_fill_opacity(self):
+            raise RuntimeError("unreadable")
+
+    assert runner._max_opacity(_Opaque()) == 1.0  # unknown reads as opaque
+
+
+def test_curated_kepler_orbit_preflights_clean():
+    from types import SimpleNamespace
+
+    from aetherlab.services.scene_components import orbit as orbit_comp
+
+    solver = SimpleNamespace(
+        variables={"eccentricity": 0.55},
+        summary="A planet sweeps equal areas in equal times",
+    )
+    code = orbit_comp.build("S", solver)
+    assert code and "_aetherlab_allow_overlap" in code  # sectors are deliberate
+    report = preflight_scene(code, "S")
+    assert report.ran and report.ok, report.error or report.note
+    assert report.overlaps == [], report.overlap_lines()
+    assert report.off_frame == []

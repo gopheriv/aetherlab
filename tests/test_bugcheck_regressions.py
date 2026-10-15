@@ -285,7 +285,7 @@ class _FakeGenerator:
         self._last_scene_spec = None
         self._last_fallback_reason = ""
 
-    async def generate(self, request, solver, rag, class_name):
+    async def generate(self, request, solver, rag, class_name, **_kwargs):
         return type(self).code
 
     async def repair(self, code, error, class_name, *, full_scene=False):
@@ -520,6 +520,8 @@ def _revision_loop(monkeypatch, scores, passes, tmp_path):
                 "    def construct(self):\n        self.play(Create(Dot()))\n")
     start = SceneBundle("AetherLabScene", original, "manim-community", "rendered",
                         video_path=str(video))
+    from aetherlab.core.render_cache import record_scene_profile
+    record_scene_profile(start, settings, "l")
     result = asyncio.run(runtime.render_scene_with_repair(start, settings, quality="l"))
     return result, calls, original
 
@@ -637,6 +639,8 @@ def test_cloud_visual_revision_over_budget_is_not_rendered(monkeypatch, tmp_path
         "AetherLabScene", original, "manim-community", "rendered",
         video_path=str(video),
     )
+    from aetherlab.core.render_cache import record_scene_profile
+    record_scene_profile(start, settings, "l")
     render_calls = []
     monkeypatch.setattr(manim_runtime, "_blocking_scene_issues", lambda *_a: (True, []))
 
@@ -712,7 +716,7 @@ def test_repaired_template_is_never_shipped_as_an_ai_scene(monkeypatch):
         code = _ADVISORY_ONLY_SCENE.replace("Square(", "Diamond(")
         repaired_code = _ADVISORY_ONLY_SCENE
 
-        async def generate(self, request, solver, rag, class_name):
+        async def generate(self, request, solver, rag, class_name, **_kwargs):
             self._last_fallback_reason = "AI scene generation failed (timeout)."
             return type(self).code
 

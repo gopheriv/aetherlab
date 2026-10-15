@@ -14,6 +14,7 @@ from aetherlab.core.models import (
     SceneBundle,
 )
 from aetherlab.core.settings import AppSettings
+from aetherlab.core.render_cache import invalidate_rendered_media, scene_profile_matches
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
 from aetherlab.services.manim_runtime import ManimRuntime
@@ -241,6 +242,7 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         quality_label = {"l": "480p", "m": "720p", "h": "1080p"}.get(self.render_quality, "480p")
         segmented_ready = (
             scene.class_name == "AetherLabSegmentedScene" and scene.status == "rendered"
+            and scene_profile_matches(scene, self.settings, self.render_quality)
         )
         if not segmented_ready:
             self.progress.emit(75, f"Rendering Manim scene to MP4 ({quality_label})\u2026")
@@ -248,7 +250,10 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
         from aetherlab.services.pipeline import _video_exists
 
         needs_render = scene.status == "compiled" or (
-            scene.status == "rendered" and not _video_exists(scene.video_path)
+            scene.status == "rendered" and (
+                not _video_exists(scene.video_path)
+                or not scene_profile_matches(scene, self.settings, self.render_quality)
+            )
         )
         if needs_render and scene.class_name == "AetherLabSegmentedScene":
             # Never re-render the joined segment code (only the last segment
@@ -264,10 +269,14 @@ class PipelineWorker(QtCore.QThread):  # type: ignore[union-attr]
             )
             cache.store_scene(key, scene)
             needs_render = False
+            if scene.status == "rendered" and not scene_profile_matches(scene, self.settings, self.render_quality):
+                invalidate_rendered_media(scene)
+                scene.status = "incomplete"
+                scene.diagnostics.append("Segment assembly returned an unverified profile; no joined scene was rendered.")
         if scene.status == "rendered" and needs_render:
-            scene.diagnostics.append("Cached rendered video missing; re-rendering.")
-            scene.status = "compiled"
-            scene.video_path = ""
+            missing = not _video_exists(scene.video_path)
+            invalidate_rendered_media(scene, "Cached rendered video missing; re-rendering." if missing else
+                                      "Cached video render profile changed or unverified; re-rendering.")
         if needs_render:
             rendered_scene = await manim.render_scene_with_repair(
                 scene, self.settings, quality=self.render_quality,

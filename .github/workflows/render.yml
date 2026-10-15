@@ -13,11 +13,21 @@ on:
         required: true
         default: l
         type: choice
-        options: [l, m, h, k]
+        options: [l, m, h, p, k]
       fps:
         description: Frames per second
         required: true
         default: "30"
+        type: string
+      width:
+        description: Explicit even canvas width (0 uses quality default)
+        required: false
+        default: "0"
+        type: string
+      height:
+        description: Explicit even canvas height (0 uses quality default)
+        required: false
+        default: "0"
         type: string
       scene_path:
         description: Path to committed scene file
@@ -89,13 +99,28 @@ jobs:
         env:
           SCENE_CLASS: ${{ inputs.class_name }}
           RENDER_JOB_ID: ${{ inputs.job_id }}
+          RENDER_WIDTH: ${{ inputs.width }}
+          RENDER_HEIGHT: ${{ inputs.height }}
         run: |
           set +e
           mkdir -p out
+          size_args=()
+          if [ "${RENDER_WIDTH:-0}" != "0" ] || [ "${RENDER_HEIGHT:-0}" != "0" ]; then
+            if [[ ! "$RENDER_WIDTH" =~ ^[1-9][0-9]{2,3}$ ]] || [[ ! "$RENDER_HEIGHT" =~ ^[1-9][0-9]{2,3}$ ]]; then
+              echo 'Invalid render canvas: supply both even dimensions.' >&2
+              exit 2
+            fi
+            if (( RENDER_WIDTH < 320 || RENDER_WIDTH > 3840 || RENDER_HEIGHT < 240 || RENDER_HEIGHT > 2160 || RENDER_WIDTH % 2 || RENDER_HEIGHT % 2 )); then
+              echo 'Invalid render canvas: expected even width 320..3840 and height 240..2160.' >&2
+              exit 2
+            fi
+            size_args=(-r "${RENDER_WIDTH},${RENDER_HEIGHT}")
+          fi
           /usr/bin/time -f 'AETHERLAB_RENDER_WALL_SECONDS=%e\nAETHERLAB_PEAK_RSS_KB=%M' \
             -o "${{ inputs.job_id }}.telemetry" python -m manim render \
             -q${{ inputs.quality }} \
             --fps "${{ inputs.fps }}" \
+            "${size_args[@]}" \
             --disable_caching \
             --media_dir out \
             "${{ inputs.scene_path }}" \

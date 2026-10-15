@@ -6,6 +6,8 @@ exports/cache. Presets:
 - ``preview``   — practical fast preview (480p/30, cairo)
 - ``standard``  — default balanced output (720p/30, cairo)
 - ``cinematic`` — full-quality output (1080p/60, cairo)
+- ``unt`` — deterministic UNT study output (1080p/30, cairo)
+- ``unt_vertical`` — UNT portrait cut (1080x1920/30, cairo)
 
 API stability contract (other agents import this):
 - ``RenderProfile(width, height, fps, renderer, preset, adaptive,
@@ -34,9 +36,9 @@ from dataclasses import dataclass, field, replace
 
 log = logging.getLogger(__name__)
 
-VALID_PRESETS = ("preview", "standard", "cinematic")
+VALID_PRESETS = ("preview", "standard", "cinematic", "unt", "unt_vertical")
 VALID_RENDERERS = ("cairo", "opengl")
-VALID_QUALITY_FLAGS = ("l", "m", "h", "k")
+VALID_QUALITY_FLAGS = ("l", "m", "h", "p", "k")
 
 # Pinned-Manim (0.21.0) output dimensions per quality flag. Single source of
 # truth — render_backend.CLOUD_QUALITY_DIMS re-exports this.
@@ -44,22 +46,32 @@ QUALITY_DIMS: dict[str, tuple[int, int]] = {
     "l": (854, 480),
     "m": (1280, 720),
     "h": (1920, 1080),
+    "p": (2560, 1440),
     "k": (3840, 2160),
 }
 
 # Quality flag per preset. Cinematic is 1080p/60 (flag "h"); 4K ("k") stays
 # available only as an explicit quality-flag override, never as a preset, so
 # the shared default never wedges a laptop on a 4K/60 encode.
+# UNT presets use "h" for crisp 1080p text; unt_vertical still needs explicit
+# -r 1080,1920 because -q flags are landscape-only (see resolve_resolution).
 PRESET_QUALITY: dict[str, str] = {
     "preview": "l",
     "standard": "m",
     "cinematic": "h",
+    "unt": "h",
+    "unt_vertical": "h",
 }
 
 # Manim default fps per quality flag when no explicit --fps is passed. Manim
 # silently produces 15 fps at low quality, which is why every render path must
 # pass an explicit --fps (see manim_runtime._manim_render_command).
-MANIM_DEFAULT_FPS: dict[str, int] = {"l": 15, "m": 30, "h": 60, "k": 60}
+MANIM_DEFAULT_FPS: dict[str, int] = {"l": 15, "m": 30, "h": 60, "p": 60, "k": 60}
+
+# Duration-contract tolerances: UNT exam pacing is tighter than cinematic.
+CINEMATIC_DURATION_TOLERANCE = 0.20
+UNT_DURATION_TOLERANCE = 0.10
+UNT_PRESETS = ("unt", "unt_vertical")
 
 
 @dataclass(frozen=True)
@@ -100,6 +112,13 @@ class RenderProfile:
         width = _clamp_int(self.width, 320, 3840, 1280)
         height = _clamp_int(self.height, 240, 2160, 720)
         fps = _clamp_int(self.fps, 15, 120, 30)
+        source = self.source
+        even_width, even_height = width - width % 2, height - height % 2
+        if (even_width, even_height) != (width, height):
+            note = f"normalized even video canvas {width}x{height}→{even_width}x{even_height}"
+            log.warning("%s", note)
+            source = f"{source};{note}"
+            width, height = even_width, even_height
         renderer = str(self.renderer or "cairo").strip().lower()
         if renderer not in VALID_RENDERERS:
             renderer = "cairo"
@@ -117,6 +136,7 @@ class RenderProfile:
             renderer=renderer,
             preset=preset,
             quality=quality,
+            source=source,
         )
 
     def identity_key(self) -> str:
@@ -125,7 +145,8 @@ class RenderProfile:
         Includes every pixel-affecting field so a preset change invalidates
         cached media. Machine-only limits are excluded on purpose.
         """
-        payload = f"{self.width}x{self.height}@{self.fps}|{self.renderer}|{self.quality}|{self.preset}"
+        payload = (f"{self.width}x{self.height}@{self.fps}|{self.renderer}|{self.quality}|"
+                   f"{self.preset}|adaptive:{int(bool(self.adaptive))}")
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
     def manim_args(self) -> list[str]:
@@ -162,6 +183,16 @@ PRESETS: dict[str, RenderProfile] = {
         width=1920, height=1080, fps=60, renderer="cairo",
         preset="cinematic", adaptive=False, quality="h",
         source="preset:cinematic",
+    ),
+    "unt": RenderProfile(
+        width=1920, height=1080, fps=30, renderer="cairo",
+        preset="unt", adaptive=False, quality="h",
+        source="preset:unt",
+    ),
+    "unt_vertical": RenderProfile(
+        width=1080, height=1920, fps=30, renderer="cairo",
+        preset="unt_vertical", adaptive=False, quality="h",
+        source="preset:unt_vertical",
     ),
 }
 
@@ -215,6 +246,9 @@ def resolve_preset_name(settings: object | None = None) -> tuple[str, str]:
         "draft": "preview",
         "low": "preview",
         "high": "cinematic",
+        "unt": "unt",
+        "unt_vertical": "unt_vertical",
+        "ent": "unt",
     }
     if env_norm in tier_map:
         return tier_map[env_norm], f"env:{env_norm}"
@@ -285,6 +319,11 @@ def resolve_resolution(
             _clamp_int(number_h, 240, 2160, 720),
             "settings:render_width/height",
         )
+    if preset == "unt_vertical":
+        # Manim -q flags are landscape-only; portrait must use preset dims
+        # (1080x1920) instead of QUALITY_DIMS, with explicit -r W,H downstream.
+        base = PRESETS[preset]
+        return base.width, base.height, f"preset:{preset}"
     dims = QUALITY_DIMS.get(quality)
     if dims:
         return dims[0], dims[1], f"quality:{quality}"
@@ -307,12 +346,16 @@ def resolve_quality(settings: object | None, preset: str, quality: str = "") -> 
 
 
 def resolve_adaptive(settings: object | None, preset: str) -> tuple[bool, str]:
-    env = _env_str("AETHERLAB_ADAPTIVE_QUALITY", "AETHERLAB_RENDER_ADAPTIVE")
-    if env:
+    for name in ("AETHERLAB_ADAPTIVE_QUALITY", "AETHERLAB_RENDER_ADAPTIVE"):
+        env = os.getenv(name)
+        if env is None or not env.strip():
+            continue
         lowered = env.strip().lower()
         if lowered in {"0", "false", "no", "off"}:
-            return False, "env:AETHERLAB_ADAPTIVE_QUALITY=off"
-        return True, "env:AETHERLAB_ADAPTIVE_QUALITY=on"
+            return False, f"env:{name}=off"
+        if lowered in {"1", "true", "yes", "on"}:
+            return True, f"env:{name}=on"
+        log.warning("Invalid adaptive render policy in %s; ignoring it.", name)
     raw = getattr(settings, "adaptive_quality", None)
     if raw is not None:
         if isinstance(raw, bool):
@@ -323,6 +366,66 @@ def resolve_adaptive(settings: object | None, preset: str) -> tuple[bool, str]:
         if lowered in {"1", "true", "yes", "on"}:
             return True, "settings:adaptive_quality=on"
     return PRESETS[preset].adaptive, f"preset:{preset}"
+
+
+def _coerce_unt_flag(value: object) -> bool | None:
+    """Parse an explicit UNT flag; None means unset/invalid."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"0", "false", "no", "off"}:
+        return False
+    if text in {"1", "true", "yes", "on", "unt"}:
+        return True
+    return None
+
+
+def resolve_unt_mode(
+    settings: object | None = None,
+    override: object = None,
+    preset: str = "",
+) -> tuple[bool, str]:
+    """Resolve UNT exam mode. Never raises; None auto-enables on UNT presets.
+
+    Precedence: explicit ``override`` arg > ``AETHERLAB_UNT_MODE`` env >
+    ``settings.unt_mode`` > auto from preset (``unt``/``unt_vertical`` on,
+    everything else off). Legacy ``ent`` maps to ``unt``.
+    """
+    try:
+        coerced = _coerce_unt_flag(override)
+        if coerced is not None:
+            return coerced, f"arg:unt_mode={'on' if coerced else 'off'}"
+        if override is not None and str(override).strip():
+            log.warning("Invalid unt_mode override %r; ignoring it.", override)
+        env = os.getenv("AETHERLAB_UNT_MODE")
+        if env is not None and env.strip():
+            coerced = _coerce_unt_flag(env)
+            if coerced is not None:
+                return coerced, f"env:AETHERLAB_UNT_MODE={'on' if coerced else 'off'}"
+            log.warning("Invalid adaptive render policy in AETHERLAB_UNT_MODE; ignoring it.")
+        raw = getattr(settings, "unt_mode", None)
+        coerced = _coerce_unt_flag(raw)
+        if coerced is not None:
+            if isinstance(raw, bool):
+                return coerced, "settings:unt_mode"
+            return coerced, f"settings:unt_mode={'on' if coerced else 'off'}"
+        preset_name = str(preset or "").strip().lower()
+        if preset_name == "ent":
+            preset_name = "unt"
+        if not preset_name or preset_name not in VALID_PRESETS:
+            try:
+                preset_name, _ = resolve_preset_name(settings)
+            except Exception:  # noqa: BLE001 — resolver never raises
+                preset_name = "standard"
+        if preset_name == "ent":
+            preset_name = "unt"
+        return preset_name in UNT_PRESETS, f"preset:{preset_name}"
+    except Exception:  # noqa: BLE001 — resolver never raises
+        return False, "default"
 
 
 def resolve_resource_limits(settings: object | None, preset: str) -> ResourceLimits:
@@ -414,11 +517,12 @@ def adapt_profile_for_cost(
         cost = 1.0
     if not profile.adaptive:
         return profile, None
-    if cost >= 3.0 and profile.quality in ("h", "k") and profile.fps > 30:
-        downgraded = replace(profile, fps=30, source=profile.source + ";adaptive:fps60→30(cost=%.1f)" % cost)
+    if cost >= 3.0 and profile.quality in ("h", "p", "k") and profile.fps > 30:
+        transition = f"{profile.fps}→30"
+        downgraded = replace(profile, fps=30, source=profile.source + f";adaptive:fps{transition}(cost={cost:.1f})")
         return downgraded, describe_fallback(
             f"expensive scene (cost {cost:.1f}) at quality '{profile.quality}': "
-            "fps 60→30 to hold the render budget"
+            f"fps {transition} to hold the render budget"
         )
     return profile, None
 

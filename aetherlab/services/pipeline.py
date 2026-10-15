@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aetherlab.core.cache import SessionCache
 from aetherlab.core.models import PipelineResult, ProblemRequest, SceneBundle
+from aetherlab.core.render_cache import invalidate_rendered_media, scene_profile_matches
 from aetherlab.core.settings import AppSettings, load_settings
 from aetherlab.services.ingestion import LibraryIngestor
 from aetherlab.services.llm import AsyncLLMCoordinator
@@ -84,6 +85,7 @@ class AetherLabPipeline:
                     # it would silently produce only the last segment. Resume from
                     # the segment manifest instead.
                     or not _video_exists(scene.video_path)
+                    or not scene_profile_matches(scene, scene_settings)
                 )
             ):
                 # A legacy monolithic/curated cache is not a valid long-form
@@ -124,10 +126,13 @@ class AetherLabPipeline:
                     scene.diagnostics.append(f"Narration voice: {voice_note}")
                 self.cache.store_scene(key, scene)
 
+            if scene.status == "rendered" and not scene_profile_matches(scene, scene_settings):
+                invalidate_rendered_media(scene)
+                if scene.class_name == "AetherLabSegmentedScene":
+                    scene.status = "incomplete"
+                    scene.diagnostics.append("Segment assembly returned an unverified profile; no joined scene was rendered.")
             if scene.status == "rendered" and not _video_exists(scene.video_path):
-                scene.diagnostics.append("Cached rendered video missing; re-rendering.")
-                scene.status = "compiled"
-                scene.video_path = ""
+                invalidate_rendered_media(scene, "Cached rendered video missing; re-rendering.")
 
             try:
                 from aetherlab.services.scene_specification import refresh_scene_bundle_spec

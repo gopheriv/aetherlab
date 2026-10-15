@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from aetherlab.services.ent_practice_progress import full_mock_history, load_attempts
 from aetherlab.services.student_profiles import StudentProfile
@@ -25,6 +25,17 @@ class LocalMockReviewEntry:
     completed_at: str
     proctor_enabled: bool | None
     integrity_events: tuple[tuple[str, str], ...]
+
+
+def _completion_in_utc(value: str) -> datetime:
+    """Compare instants, preserving original display strings and legacy UTC."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return datetime.min.replace(tzinfo=UTC)
 
 
 def local_school_mock_review(
@@ -79,5 +90,8 @@ def local_school_mock_review(
                 proctor_enabled=proctor_enabled,
                 integrity_events=tuple(events),
             ))
-    entries.sort(key=lambda item: item.completed_at, reverse=True)
+    # A fixed name order makes equal-second attempts deterministic, while the
+    # second stable sort preserves chronological priority across UTC offsets.
+    entries.sort(key=lambda item: (item.student_name.casefold(), item.class_name.casefold()))
+    entries.sort(key=lambda item: _completion_in_utc(item.completed_at), reverse=True)
     return entries

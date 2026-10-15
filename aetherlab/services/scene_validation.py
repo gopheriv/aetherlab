@@ -2139,6 +2139,94 @@ def estimate_duration(code: str) -> DurationEstimate:
     return est
 
 
+# ── UNT exam gates (Step 2; called only when unt_mode resolves True) ────────
+
+_UNT_GIVEN_RE = re.compile(r"(Берілді|Дано|Given)", re.IGNORECASE)
+_UNT_FIND_RE = re.compile(r"(Табу|Найти|Find)", re.IGNORECASE)
+_UNT_SOLUTION_RE = re.compile(r"(Шешімі|Решение|Solution)", re.IGNORECASE)
+_UNT_ANSWER_RE = re.compile(r"(Жауап|Ответ|Answer)", re.IGNORECASE)
+_UNT_DIGIT_UNIT_RE = re.compile(
+    r"\d[\d.,]*\s*(км/ч|km/h|м/с|m/s|кДж|kJ|кВт|kW|кПа|kPa|кГц|kHz"
+    r"|кг|kg|см|cm|мм|mm|км|km|мин|min|кН|kN|мА|mA|МПа|MPa"
+    r"|м|m|с|s|ч|h|г|g|Н|N|Дж|J|Вт|W|В|V|А|A|Ом|Ohm|Ω|Тл|T|Гц|Hz|Па|Pa|К|K|°C)",
+    re.IGNORECASE,
+)
+_UNT_ANSWER_LETTER_RE = re.compile(r"(?:Answer|Ответ|Жауап)\s*[:：–—-]?\s*[A-EА-Е]\b", re.IGNORECASE)
+_UNT_GRAPH_RE = re.compile(r"\b(Axes|NumberPlane|plot\()")
+_UNT_AXIS_LABEL_RE = re.compile(r"(x_label|y_label|axis_labels)", re.IGNORECASE)
+_UNT_CONFIG_WRITE_RE = re.compile(r"config\.(frame_width|pixel_width)\s*=")
+_UNT_PORTRAIT_LAYOUT_RE = re.compile(r"(\.to_edge\(|\.arrange\(|scale_to_fit_width\()")
+
+
+def check_unt_gates(
+    code: str, *, is_task_segment: bool = True, is_vertical: bool = False,
+    require_answer_letter: bool = False,
+) -> list[str]:
+    """UNT exam/portrait gates. Blocking except the portrait-layout advisory.
+
+    Exam blocks apply to task segments (``aspect == 'full'`` single scenes);
+    chapter segments skip them until per-act UNT segmentation lands. Config
+    writes are always blocked in UNT mode; portrait layout is advisory. A
+    caller with supplied choices/key may request a labelled letter. Generic
+    numerical problems cannot be forced to invent one. These are textual
+    heuristics, not verification of units, physics or source authenticity.
+    """
+    issues: list[str] = []
+    text = str(code or "")
+    if is_task_segment:
+        if not _UNT_GIVEN_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:BLOCKS] task segment is missing the Given block "
+                "(Берілді/Дано/Given). Add a 'Given → Find → Solution → Answer' "
+                "panel with units on every quantity."
+            )
+        if not _UNT_FIND_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:BLOCKS] task segment is missing the Find block "
+                "(Табу/Найти/Find). State what must be found before solving."
+            )
+        if not _UNT_SOLUTION_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:BLOCKS] task segment is missing the Solution block "
+                "(Шешімі/Решение/Solution). Show the derivation steps, not only "
+                "the answer."
+            )
+        has_answer = bool(_UNT_ANSWER_RE.search(text))
+        if not has_answer:
+            issues.append(
+                "[UNT:EXAM:BLOCKS] task segment is missing the Answer block "
+                "(Жауап/Ответ/Answer). Box the supplied answer with units."
+            )
+        if not _UNT_DIGIT_UNIT_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:UNITS] task segment has no digit+unit quantity (e.g. "
+                "'12 m' / '12 м'). Put units on every quantity."
+            )
+        if has_answer and require_answer_letter and not _UNT_ANSWER_LETTER_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:ANSWER_LETTER] task segment shows Answer but no answer "
+                "letter (A-E). Show the letter at the hero frame and in recap."
+            )
+        if _UNT_GRAPH_RE.search(text) and not _UNT_AXIS_LABEL_RE.search(text):
+            issues.append(
+                "[UNT:EXAM:AXES] graph scene has no axis labels with units "
+                "(x_label/y_label with 'v, m/s', 't, s'). Label every axis."
+            )
+    if _UNT_CONFIG_WRITE_RE.search(text):
+        issues.append(
+            "[UNT:CONFIG:WRITE] generated code writes config.frame_width/"
+            "pixel_width; the render passes explicit -r W,H. Lay out with "
+            ".to_edge()/.arrange()/scale_to_fit_width() instead."
+        )
+    if is_vertical and not _UNT_PORTRAIT_LAYOUT_RE.search(text):
+        issues.append(
+            "[UNT:LAYOUT:PORTRAIT] unt_vertical scene uses no portrait-safe "
+            "layout (.to_edge()/.arrange()/scale_to_fit_width()). Keep hero text "
+            "out of the top ~200 px and bottom ~300 px chrome zones."
+        )
+    return issues
+
+
 # ── bundle ──────────────────────────────────────────────────────────────────
 
 

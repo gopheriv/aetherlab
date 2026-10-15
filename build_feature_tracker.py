@@ -35,7 +35,7 @@ FEATURES: list[tuple[str, ...]] = [
     # ── Launch / CLI ────────────────────────────────────────────────────────
     ("F01", "Launch", "GUI launch via CLI",
      "As a user, I run `python -m aetherlab` and the desktop app opens.",
-     "main() with no --smoke imports ui.app.run_app, builds QApplication + MainWindow(load_settings()), shows it, returns app.exec(). RuntimeError (missing PyQt6) prints to stderr and returns exit code 2.",
+     "main() with no --smoke imports ui.app.run_app. A profile launch lock is acquired before QApplication/MainWindow construction; an already running profile returns 0 without another window (F255). The owning launch shows MainWindow(load_settings()) and returns app.exec(), releasing the lock on exit or failure. RuntimeError prints to stderr and returns exit code 2.",
      "__main__.py / ui/app.py", "gui", "Documented", ""),
     ("F02", "Launch", "Headless smoke pipeline",
      "As a developer, I run `python -m aetherlab --smoke` to exercise the whole pipeline without a GUI.",
@@ -48,24 +48,24 @@ FEATURES: list[tuple[str, ...]] = [
     ("F04", "Launch", "Watchdog auto-restart",
      "As a user, if AetherLab crashes the watchdog restarts it.",
      "aetherlab_watchdog.py relaunches on non-zero exit with exponential backoff; stops on clean exit (0).",
-     "aetherlab_watchdog.py / start.bat", "static", "Documented", ""),
+     "aetherlab_watchdog.py / start.bat", "headless", "Documented", ""),
     ("F05", "Launch", "Clear error when PyQt6 missing",
      "As a user without PyQt6, I get an actionable message, not a stack trace.",
      "require_qt() raises RuntimeError with `pip install PyQt6` instructions; main() catches and prints to stderr, exit 2.",
-     "ui/qt_compat.py", "static", "Documented", ""),
+     "ui/qt_compat.py", "headless", "Documented", ""),
 
     # ── Settings / Config ───────────────────────────────────────────────────
     ("F06", "Settings", "Load settings from environment",
      "As a user, my AETHERLAB_*/OPENAI_* env vars configure the app, and I can reuse compatible manim-bot env names during migration.",
-     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, provider fields, and bounded LLM controls (`llm_timeout_seconds` via AETHERLAB_LLM_TIMEOUT, 5–900s; `llm_max_retries` via AETHERLAB_LLM_MAX_RETRIES, 0–1; both persisted in app config). Every asynchronous OpenAI-compatible client uses the same effective policy, so SDK retries cannot multiply a slow call. Compatible manim-bot aliases and a legacy .env can fill still-unset fields unless disabled.",
+     "load_settings() reads AETHERLAB_DATA_DIR/CACHE_PATH/CHROMA_PATH/LIBRARY_DIR, provider fields, and bounded LLM controls (`llm_timeout_seconds` via AETHERLAB_LLM_TIMEOUT, 5–1800s; `llm_max_retries` via AETHERLAB_LLM_MAX_RETRIES, 0–1; both persisted in app config). Async OpenAI-compatible clients share the bounded client policy; structured requests may apply a lower explicit request cap. Model pathways supply defaults, while an explicit timeout remains authoritative within the bounds. The retry selector offers No automatic retries (0) and Retry once (1). Compatible manim-bot aliases and a legacy .env can fill still-unset fields unless disabled.",
      "core/settings.py", "headless", "Documented", ""),
     ("F07", "Settings", "App-config persistence (settings.json)",
      "As a user, values I save in the Settings dialog survive restarts.",
-     "save_app_config writes data_dir/settings.json (drops empty/None); load_app_config reads it; feeds load_settings. app_config_path honors AETHERLAB_DATA_DIR.",
-     "core/settings.py", "headless", "Documented", ""),
-    ("F08", "Settings", "Provider precedence: env > app-config > qwen",
+     "save_app_config merges trimmed fields under a per-path thread lock and atomically replaces settings.json; empty/None updates remove their keys. Startup ignores missing/corrupt/unreadable config without rewriting it; saving refuses an unreadable existing file. Bounded Windows sharing retries preserve committed data. app_config_path honors AETHERLAB_DATA_DIR and saved runtime paths flow into load_settings without moving the config itself.",
+     "core/settings.py / core/atomic_json.py", "headless", "Documented", ""),
+    ("F08", "Settings", "Provider precedence: env > config > legacy > Qwen",
      "As a user, explicit env vars win over saved config, which wins over the legacy Qwen file.",
-     "load_settings resolves model/api_key/base_url in that order; provider_source labels the winning tier, api_key_source names the exact credential source, and provider_warning reports when an environment key shadows the saved key without exposing either value.",
+     "load_settings resolves each model/key/base URL independently: environment > app config > legacy .env > opted-in Qwen; Ollama fills still-unset key/URL. provider_source summarizes the highest tier used by any field, not the origin of every field. api_key_source names the exact credential source; shadow warnings expose neither key.",
      "core/settings.py", "headless", "Documented", ""),
     ("F09", "Settings", "Qwen ~/.qwen/settings.json opt-in loader",
      "As a Qwen Code user, I can intentionally reuse my provider settings.",
@@ -73,30 +73,30 @@ FEATURES: list[tuple[str, ...]] = [
      "core/settings.py", "headless", "Documented", ""),
     ("F10", "Settings", "Settings dialog (Ctrl+,/gear)",
      "As a user, I open Settings to edit provider, rendering, and paths.",
-     "SettingsDialog shows the active provider/model and exact API-key source, warns when env shadows saved config, and never copies an active environment key into the editable field. It exposes bounded model timeout and retry choices ('No automatic retries' / 'Retry once') plus provider/render/path fields in a scrollable screen-fitted form. Save persists then reloads through load_settings so in-memory behavior follows restart precedence.",
-     "ui/main_window.py (SettingsDialog) / ui/provider_status.py", "gui", "Documented", ""),
+     "SettingsDialog shows the active provider from the parsed effective endpoint (including SDK default), model and exact API-key source; a saved preset or model name cannot override endpoint identity. It warns when env shadows saved config and never copies that key into the editable field. Bounded timeout/retry and provider/render/path fields use a scrollable screen-fitted form. Save persists then reloads canonical precedence; save failures retain the draft for retry.",
+     "ui/main_window.py (SettingsDialog) / ui/provider_status.py / services/model_policy.py", "gui", "Documented", ""),
     ("F11", "Settings", "Platform-aware default paths",
      "As a Windows user my data goes under %LOCALAPPDATA%\\AetherLab; else ~/.aetherlab.",
-     "_default_data_dir / _default_chroma_path branch on LOCALAPPDATA env presence.",
+     "_default_data_dir / _default_chroma_path use a valid absolute LOCALAPPDATA path, otherwise the user home; blank and relative values cannot create launch-folder state.",
      "core/settings.py", "headless", "Documented", ""),
 
     # ── Command bar / Input ─────────────────────────────────────────────────
     ("F12", "Input", "Prompt submission",
      "As a user, I type a problem and press Enter / Run / Ctrl+Enter to start.",
-     "CommandBar validates non-empty and run visible, emits submitted(str), clears field. MainWindow.start_pipeline launches the worker.",
-     "ui/widgets.py (CommandBar) / main_window.py", "static", "Documented", ""),
+     "CommandBar validates non-empty, visible/enabled Run and emits trimmed submitted(str) once. It retains the exact draft for quota-error/cancel/failure recovery without replacing newer input. MainWindow.start_pipeline launches the worker.",
+     "ui/command_bar.py / ui/main_window.py", "gui", "Documented", ""),
     ("F13", "Input", "Examples popup",
-     "As a user, I pick a pre-made example to fill the prompt.",
-     "Examples button opens a QMenu of 10 prompts anchored above the bar; selecting fills the field and focuses it.",
-     "ui/widgets.py (CommandBar)", "gui", "Documented", ""),
+     "As a school student, I pick a physics example in my selected language to fill the prompt.",
+     "Examples opens 10 authored school-physics prompts in kk/ru/en with identical numerical conditions across translations. The menu follows language changes, anchors above the bar, and selects the full prompt with input focus without starting AI. Dismissal preserves the draft; these are not claimed as official UNT questions.",
+     "ui/command_bar.py", "gui", "Documented", ""),
     ("F14", "Input", "Render quality selector",
      "As a user, I choose Draft/Standard/High before running.",
-     "QualityCombo maps Draft (480p), Standard (720p · 30 fps), and High (1080p) → l/m/h via get_render_quality; set_quality selects by flag (Settings default).",
-     "ui/widgets.py (CommandBar)", "static", "Documented", ""),
+     "QualityCombo maps Draft (480p), Standard (720p · 30 fps), and High (1080p) → l/m/h via get_render_quality; set_quality selects by flag (Settings default). Localized labels fit the styled selector without clipping.",
+     "ui/command_bar.py", "gui", "Documented", ""),
     ("F15", "Input", "Run↔Cancel button swap",
      "As a user, the Run button becomes Cancel while a run is in flight.",
-     "set_busy(True) hides Run, shows Cancel, disables input; cancel_button emits cancel_requested.",
-     "ui/widgets.py (CommandBar)", "static", "Documented", ""),
+     "set_busy(True) hides Run/Learn/Practice, shows Cancel and disables input. Solve and Learn remain busy until QThread.finished, including after a lesson result/error. Terminal/cancelling lessons disable repeated Cancel; cleanup restores controls and the next lesson receives a usable Cancel button. Failed/cancelled drafts return without overwriting newer input.",
+     "ui/command_bar.py", "gui", "Documented", ""),
 
     # ── Pipeline ────────────────────────────────────────────────────────────
     ("F16", "Pipeline", "4-stage pipeline with progress",
@@ -104,21 +104,21 @@ FEATURES: list[tuple[str, ...]] = [
      "PipelineWorker runs solve, ensure-ingest, RAG+scene, render; emits solver/rag/scene/render_ready, status, and progress(pct,label). RAG and scene are awaited within one async run.",
      "ui/workers.py", "headless", "Documented", ""),
     ("F17", "Pipeline", "Pipeline stepper timeline",
-     "As a user, each stage node shows pending/active/complete/error with elapsed time and a pulse.",
-     "PipelineStepper paints 4 nodes, emerald connectors, active pulse + rotating arc, per-stage elapsed seconds, and an inline Cancel hit-target under the active node.",
+     "As a user, each stage node shows pending/active/complete/error/cancelled with elapsed time and an active-only pulse.",
+     "PipelineStepper paints 4 nodes, completed connectors, active pulse and per-stage elapsed time. Cancelled stages show a neutral dash and localized label, freeze timing and stop pulsing. A new run resets elapsed and stage state.",
      "ui/widgets.py (PipelineStepper)", "gui", "Documented", ""),
     ("F18", "Pipeline", "Cancellation",
      "As a user, Escape / Cancel / the stepper Cancel stops the run.",
      "worker.cancel() sets a flag; _check_cancelled between stages raises _PipelineCancelled. UI stays visibly busy with repeat Cancel disabled until QThread.finished, then restores ready state and shows the cancellation toast.",
-     "ui/workers.py / main_window.py", "static", "Documented", ""),
+     "ui/workers.py / ui/main_window.py", "gui", "Documented", ""),
     ("F19", "Pipeline", "Prevent double-run",
      "As a user, I can't start a second run while one is active.",
-     "start_pipeline returns early if worker.isRunning(); status shows 'Pipeline is already running.'",
-     "ui/main_window.py", "static", "Documented", ""),
+     "start_pipeline safely checks active solve and lesson workers and refuses duplicates with a localized status before another AI request is charged or another worker allocated.",
+     "ui/main_window.py", "gui", "Documented", ""),
     ("F20", "Pipeline", "Worker signal cleanup",
      "As a user, repeated runs don't leak old worker signal connections.",
      "start_pipeline disconnects every signal of the previous worker and deleteLater()s it before wiring the new one.",
-     "ui/main_window.py", "static", "Documented", ""),
+     "ui/main_window.py", "gui", "Documented", ""),
     ("F21", "Pipeline", "Graceful shutdown on close",
      "As a user, closing mid-run doesn't orphan the thread.",
      "closeEvent cancels workers and waits up to 5s; if any still runs, it ignores that close event and retries from finished instead of destroying a live QThread.",
@@ -173,10 +173,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user, changing the model (or adding a key) invalidates a stale solver cache.",
      "_solver_cache_usable rejects a fallback result once a key exists, and any result whose model_name isn't the current model or 'deterministic-fallback'.",
      "ui/workers.py / services/pipeline.py", "headless", "Documented", ""),
-    ("F33", "Cache", "Scene cache invalidation on engine change",
-     "As a user, switching Manim engine regenerates the scene.",
-     "Scene reused only if cached.engine == current engine and status ∈ {compiled, rendered}.",
-     "ui/workers.py / services/pipeline.py", "static", "Documented", ""),
+    ("F33", "Cache", "Scene and rendered-video cache invalidation",
+     "As a returning user, I want compatible analysis and scene code reused while a changed render profile produces a new video.",
+     "Scene code is reused only for compatible engines/status and quality thresholds. Rendered media additionally requires persisted matching requested-profile provenance. Canvas/FPS/renderer/quality/adaptive/backend changes and legacy unverified media trigger rendering while preserving solver/RAG/code and prior files. Segmented explanations resume their manifest; joined segment code is never rendered as a single scene.",
+     "ui/workers.py / services/pipeline.py / core/render_cache.py / core/models.py / tests/test_render_cache_reuse.py / tests/test_cache_compatibility_paths.py", "headless", "Documented", "Controlled render boundaries verify routing and preservation; real full media delivery remains separate."),
     ("F34", "Cache", "Video re-render on missing/unplayable file",
      "As a user, a deleted or corrupted cached video re-renders automatically.",
      "A 'rendered' scene whose video_path is missing, empty, or unplayable is re-rendered; playable-video validation covers compiled and stale rendered scenes.",
@@ -271,10 +271,10 @@ FEATURES: list[tuple[str, ...]] = [
      "As a user, the compiled scene renders to MP4 via a manim subprocess.",
      "render_scene writes the .py to a temp render dir, runs `python -m manim render -q<q> --fps <tier> --media_dir ...`, CREATE_NO_WINDOW on Windows, cleans old renders, then finds the newest MP4. render-error keeps a 1500-char stderr tail for the repair pass. Entry point is render_scene_with_repair (see F101).",
      "services/manim_runtime.py", "gui", "Documented", ""),
-    ("F55", "Render", "Hardware render tier",
-     "As a user, rendering matches my hardware (fps + priority), with override knobs when I know my machine or cloud target.",
-     "_detect_render_tier: ≥16GB/≥6cpu → cinematic 60fps; ≥10GB → standard 30fps; else constrained 30fps below-normal priority. AETHERLAB_RENDER_TIER/RENDER_TIER can force cinematic|standard|constrained|cloud_cinematic, and AETHERLAB_MANIM_FPS/MANIM_FPS can force explicit --fps.",
-     "services/manim_runtime.py", "headless", "Documented", ""),
+    ("F55", "Render", "Fresh render tier and constrained scheduling",
+     "As a user, I want profile and FPS changes to apply without restarting, while constrained scheduling keeps its lower priority.",
+     "get_render_tier resolves the shared RenderProfile on each call: default standard/30 fps, cinematic/60 fps when selected. Legacy constrained maps to the standard look with below-normal priority; explicit FPS overrides stay effective. Small machines without an explicit preset retain automatic below-normal priority. The module _RENDER_TIER value is a compatibility snapshot, not a live setting.",
+     "services/manim_runtime.py / core/render_profile.py / tests/test_render_profile.py", "headless", "Documented", ""),
     ("F56", "Render", "Quality-scaled timeouts",
      "As a user, renders can't hang forever.",
      "timeout_map l=240/m=420/h=600/k=900s; TimeoutExpired→status 'render-timeout'; non-zero exit→'render-error' with tail of stderr.",
@@ -362,9 +362,9 @@ FEATURES: list[tuple[str, ...]] = [
 
     # ── Navigation ──────────────────────────────────────────────────────────
     ("F75", "Navigation", "Sidebar rail destinations",
-     "As a user, the 5 rail items (Solve/Refs/Scene/Params/History) drive one workspace.",
-     "SidebarNav emits item_selected; _on_sidebar_select maps to empty/running/solve/scene/library/history; running/empty stand in until a result exists.",
-     "ui/widgets.py (SidebarNav) / main_window.py", "gui", "Documented", ""),
+     "As a student, I reach nine preparation and workbench destinations from a navigation rail that fits my window.",
+     "SidebarNav exposes nine localized destinations: Home, Topics, Practice, Progress, AI, Library, History, Lab and Spider. MainWindow maps pages, opens Practice and toggles Spider beside the current page. Compact/expanded rails use a tight density below 520 px and dense mode below 650 px, including tall-to-short resize; all nine buttons remain separate at 460 px. Navigation indices and result-availability behavior are preserved.",
+     "ui/navigation.py (SidebarNav) / ui/main_window.py", "gui", "Documented", ""),
     ("F76", "Navigation", "Ctrl+1..5 + arrow-key nav",
      "As a user, I switch rail items by keyboard.",
      "Ctrl+1..5 call sidebar.select(idx); SidebarNav.keyPressEvent moves selection with Up/Down/Left/Right.",
@@ -403,8 +403,8 @@ FEATURES: list[tuple[str, ...]] = [
      "ui/widgets.py (SimulationPanel) / main_window.py", "gui", "Documented", ""),
     ("F84", "Errors", "Stepper error state + status bar",
      "As a user, the failing stage turns red and the status bar explains.",
-     "on_failure sets the current stage 'error', updates the status bar with stage+message, and returns to Solve/Empty.",
-     "ui/main_window.py", "static", "Documented", ""),
+     "on_failure freezes an error stage, restores the question and shows localized context in status/toast. It preserves original diagnostic details and returns to Solve/Empty; idle controls return after worker cleanup.",
+     "ui/main_window.py", "gui", "Documented", ""),
 
     # ── Export ──────────────────────────────────────────────────────────────
     ("F85", "Export", "Export derivation as LaTeX",
@@ -613,8 +613,8 @@ FEATURES: list[tuple[str, ...]] = [
      "services/manim_runtime.py", "headless", "Documented", ""),
     ("F135", "Render", "Hard-scene survival (draft→final, weight-aware)",
      "As a user, ambitious scenes get the render time they need and always return the best result achieved.",
-     "render_scene scales the timeout by _estimate_render_cost (duration + updater/play/3D counts, capped 5x, hard ceiling 1800s) and halves fps on heavy hi-res scenes. render_scene_with_repair validates+repairs at draft quality first, then promotes to the requested quality; if the final render fails/times out it keeps the draft (partial success) instead of returning nothing. Timeout-repair instructs the model to reduce load, not gut the scene.",
-     "services/manim_runtime.py", "headless", "Documented", ""),
+     "render_scene scales timeout by scene cost (capped 5x, ceiling 1800s). FPS reduction follows the explicit adaptive policy and is reported. Render repair reuses only a draft/final with matching persisted profile and an existing video, otherwise renders again. A verified final needs no duplicate promotion; failed promotion keeps the draft with its actual profile. Timeout repair asks to reduce load without gutting the scene.",
+     "services/manim_runtime.py / core/render_cache.py / tests/test_render_cache_reuse.py", "headless", "Documented", ""),
     ("F136", "Render", "Render observability + failure classification",
      "As a user hitting a render failure, it's diagnosable and it teaches the repair loop.",
      "On any render-error/timeout the failing scene .py + full stderr are dumped to data_dir/logs/renders/<ts>_<kind>/. _classify_failure buckets stderr into latex/hallucinated-api/ffmpeg/oom/unknown; the class is stored on SceneBundle.failure_kind (round-trips through cache) and fed, with error_learner hints, into the repair prompt.",
@@ -653,8 +653,8 @@ FEATURES: list[tuple[str, ...]] = [
      "services/fact_check.py / lesson_pipeline.py / services/pdf.py / core/models.py", "headless", "Documented", ""),
     ("F145", "Lesson", "Lesson view + worker + Learn wiring",
      "As a student, I type a topic, press Learn, and get a self-contained lesson: inline narrated video, clickable chapter outline that seeks it, transcript, interactive questions, references, study-guide export.",
-     "CommandBar gains a Learn button (emits learn_requested(topic); hidden while busy). MainWindow.start_lesson runs LessonWorker (QThread → progress/lesson_ready/failure), shows the running view, then on_lesson_ready populates LessonView (workspace PAGE_LESSON=6) and loads the assembled lesson.mp4 into its INLINE player. LessonView tabs: Video (QMediaPlayer, play/pause/stop, guarded if QtMultimedia absent) + Transcript + Questions (_QuestionCard MCQ with ✓/✗ feedback + why; Reveal answer button) + References. The chapter outline click seeks the inline player to the chapter start and shows the Video tab (chapter_seek_requested), using rendered_chapter_indexes to keep partial lessons aligned when a middle chapter failed. A 'Play with it' tab embeds a LiveCanvas seeded from the lesson's domain (detect_domain → params) with the interactive chapter's guiding prompt, completing the pedagogy loop. Export-study-guide → pdf.export_lesson_study_guide. closeEvent waits on the lesson worker. Validated end-to-end: a keyless 'Kepler orbit' lesson renders 4 chapters and assembles a 21.9s lesson.mp4 + .srt in ~52s.",
-     "ui/widgets.py / ui/workers.py / ui/main_window.py", "gui", "Documented", ""),
+     "Learn starts a cancellable LessonWorker with topic/language/quality/voice settings and keeps input/actions busy until QThread.finished. LessonView presents assembled video with optional narration, mapped chapter seeking, transcript, questions/feedback, references, domain-seeded LiveCanvas and study-guide export. Completion copy distinguishes materials-only, incomplete/error, unavailable media and ready assembled video in kk/ru/en. New content clears old media; materials open on the Text tab and only available assembled video opens Video. Incomplete result bundles restore the exact retry topic without replacing newer input. Empty cancellation preserves the previous lesson. Close requests cancellation and waits for cleanup. Generation, decoding, pronunciation and exports require executed evidence.",
+     "ui/command_bar.py / ui/lesson_view.py / ui/workers.py / ui/main_window.py", "gui", "Documented", ""),
     ("F146", "Lesson", "Distinct chapter aspects (keyless lessons)",
      "As a student, a keyless lesson's chapters look different from each other, not the same clip N times.",
      "scene_templates.build_scene takes an `aspect` (setup/evolution/math/recap/full). Each aspect selects a distinct header composition — hero title-card (setup), boxed governing-idea banner (math), one-by-one takeaway bullets (recap), the classic top strip (evolution/full) — with matching intro animations, and scales the domain animation's run_time, so the SAME domain template renders four visually distinct clips. Every aspect×domain still compiles and passes the code-safety + pre-render lint gates and is Text-only (no LaTeX). Threaded through ManimRuntime.generate_scene_async → _build_scene_code; the Solve path defaults to `full` (unchanged).",
@@ -981,12 +981,12 @@ FEATURES: list[tuple[str, ...]] = [
      "aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py", "headless", "Documented", "Question content and translations still require teacher review; PASS covers software invariants only."),
     ("F226", "ENT Practice", "Three-language practice and timed mock UI",
      "As a student, I want to practice in Kazakh, Russian, or English by topic and difficulty, then review my answer and the explanation.",
-     "ExamPracticeDialog and the main selector localize setup, filters, single/multiple/matching controls, feedback, Kazakh terms, result key and timed mode. The full timed set is 40 questions / 50 points / 90 minutes. Timed setup hides the entire practice-size field; switching modes/languages preserves the practice count. The authored set is labelled educational, not an official ЕНТ variant, with NCT preparation/free-practice links.",
-     "aetherlab/ui/exam_practice.py / aetherlab/ui/command_bar.py / aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py / tests/test_timed_practice_acceptance.py", "gui", "Documented", "Original practice items are not an official NCT variant."),
+     "ExamPracticeDialog and the main selector localize setup, filters, single/multiple/matching controls, feedback, Kazakh terms, result key and timed mode. Clearing an editable multiple/matching response replaces its old saved choice on navigation, autosave, close, Check and finish; checked/pending results stay frozen and partial matching retains partial credit. The full timed set is 40 questions / 50 points / 90 minutes. Timed setup hides the entire practice-size field; switching modes/languages preserves the practice count. Authored sets are educational, with NCT preparation links.",
+     "aetherlab/ui/exam_practice.py / aetherlab/ui/command_bar.py / aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py / tests/test_timed_practice_acceptance.py / tests/test_practice_answer_capture.py", "gui", "Documented", "Original practice items are not an official NCT variant."),
     ("F227", "ENT Progress", "Local study goals and mistake review",
      "As an ЕНТ student, I want my goals, topic progress, and missed questions to persist locally so I can plan what to review next.",
-     "Goals, bounded attempts, points and mistakes persist locally. IO errors preserve data with unavailable/stale states and retry; unknown goals/mistake actions are disabled. Nonfinite preferences/points and invalid attempt aggregates cannot crash views: invalid records are omitted from calculations, recovery is disclosed and reads preserve file bytes. Draft/result failures permit retry; answers/timer freeze until a confirmed commit. Completed history omits selected answers.",
-     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / aetherlab/ui/progress_notice.py / test_features.py / tests/test_ent_practice_mvp.py / tests/test_progress_storage_recovery.py / tests/test_progress_read_views.py / tests/test_practice_result_consistency.py", "gui", "Documented", ""),
+     "Goals, bounded attempts, points and mistakes persist locally. Review mistakes resolves an interrupted attempt through the same Resume/Start again/Cancel choice as Start; it never silently replaces saved answers. IO errors preserve data with unavailable/stale states and retry; unknown actions are disabled. Invalid numeric records are omitted with recovery disclosed and file bytes preserved. Draft/result failures permit retry; answers/timer freeze until confirmed commit. Completed history omits selected answers.",
+     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / aetherlab/ui/progress_notice.py / test_features.py / tests/test_ent_practice_mvp.py / tests/test_progress_storage_recovery.py / tests/test_progress_read_views.py / tests/test_practice_result_consistency.py / tests/test_practice_session_start.py", "gui", "Documented", ""),
     ("F228", "Export", "Searchable localized ЕНТ practice PDF",
      "As a student, I want to save a readable report of my practice answers, explanations, and progress in my chosen language.",
      "The Kazakh/Russian/English A4 study report keeps searchable prose, answers, complete study key, terms, progress and NCT links. Scored count/denominator match screen/history: unattempted practice is excluded, timed items count. Shared LaTeX steps are equation images; formula questions/sources have explicit pages. Fonts register per Qt instance. QPdfWriter exports without system-printer discovery. A fresh staged PDF is parsed/text-checked before atomic replacement; failures preserve old reports. Items are authored, not official variants.",
@@ -997,8 +997,8 @@ FEATURES: list[tuple[str, ...]] = [
      "aetherlab/services/ent_lesson_catalog.py / tests/test_ent_route_stage_a.py / tools/verify_accelerated_motion_route.py", "headless", "Documented", "Kazakh terminology and translated NCT sample wording still need teacher review."),
     ("F230", "ENT Dashboard", "Localized student preparation dashboard",
      "As an ЕНТ student, I want a home screen in my selected language that points me to practice, topics, progress, and mistakes to revisit.",
-     "Kazakh/Russian/English home and progress screens show goals, best mock, attempts, mistakes and companion from one consistent file snapshot. Perfect samples invite practice without inventing mistakes/mastery. Pending exercise and mock IDs in the selected topic prompt review; cleared topics invite new questions and retain historical counts. Failed refresh retains data with a stale notice and Reload. Unavailable data shows unknown values and hides personal recommendations. File-keyed caches cannot show another learner's results after an unreadable profile switch. Successful retry restores current data.",
-     "aetherlab/ui/student_views.py / aetherlab/ui/progress_notice.py / aetherlab/services/ent_practice_progress.py / tests/test_ent_practice_mvp.py / tests/test_progress_read_views.py / tests/test_practice_explanation_display.py", "gui", "Documented", ""),
+     "Kazakh/Russian/English home and progress screens show goals, best mock, attempts, mistakes and companion from one consistent file snapshot. Perfect samples invite practice without inventing mistakes/mastery. Pending exercise and mock IDs in the selected topic prompt review; cleared topics invite new questions and retain historical counts. Failed refresh retains data with a stale notice and Reload. Unavailable data shows unknown values and hides personal recommendations. File-keyed caches cannot show another learner's results after an unreadable profile switch. Successful retry restores current data. Main-window provider readiness and explicit Spider-ready status messages follow the selected language.",
+     "aetherlab/ui/student_views.py / aetherlab/ui/progress_notice.py / aetherlab/ui/main_window.py / aetherlab/services/ent_practice_progress.py / tests/test_ent_practice_mvp.py / tests/test_progress_read_views.py / tests/test_practice_explanation_display.py / tests/test_ui_layout_regressions.py / test_features.py", "gui", "Documented", ""),
     ("F231", "References", "Localized textbook and ЕНТ source browser",
      "As a student, I want the source browser to match my selected language and keep textbooks separate from ЕНТ practice files.",
      "ReferenceSourcesDialog uses the selected Kazakh, Russian, or English locale for its title, guidance, folder picker, tabs, empty states, source status, and error messages, and registers the bundled Cyrillic/Kazakh-safe font when opened independently. It separates grade-7–11 references from ЕНТ question sets, keeps the folder read-only, opens only the chosen archive member, and persists a validated source-folder selection. MainWindow and Practice pass the active language into the dialog.",
@@ -1011,12 +1011,12 @@ FEATURES: list[tuple[str, ...]] = [
 FEATURES.extend([
     ("F232", "ENT Practice", "100 authored exercises per physics topic",
      "As a student, I want many exercises in each topic so repeated practice does not stop after one question.",
-     "build_topic_exercises produces 2500 original variations across 25 topics, 100 per topic, with stable IDs, deterministic choices and shared numerical answers for Kazakh, Russian and English. They are authored practice and retain pending teacher-review status; numerical variants are not 2500 distinct solution methods.",
-     "aetherlab/services/ent_topic_bank.py / aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py", "headless", "Documented", ""),
+     "build_topic_exercises produces 2500 original variations across 25 topics, 100 per topic, with stable IDs, deterministic choices and shared numerical answers for Kazakh, Russian and English. Worked substitutions preserve grouped negative powers and the requested quantity, including a variable length for nanometre conversion. They are authored practice with pending teacher review; numerical variants are not 2500 distinct solution methods.",
+     "aetherlab/services/ent_topic_bank.py / aetherlab/services/ent_physics_bank.py / tests/test_ent_practice_mvp.py / tests/test_topic_solution_notation.py / tests/test_all_topic_answer_keys.py / tools/accept_practice_bank.py", "headless", "Documented", ""),
     ("F233", "ENT Practice", "LaTeX solutions and finish practice early",
      "As a student, I want readable worked formulas and the ability to stop a topic practice session when I need to.",
-     "Practice feedback and completed practice/mock reviews typeset shared solution_latex. All 40 authored mock items now include language-invariant worked math, also used by PDF. A fresh review document isolates images per attempt; renderer failures use readable math or a localized diagnosis. The review uses a UI font. Answered practice alone affects totals; unattempted items say not counted. Timed items stay in totals. Screen/history/PDF share scoring; perfect samples invite further practice, later mistakes restore review. Early finish remains available.",
-     "aetherlab/ui/exam_practice.py / aetherlab/services/practice_math.py / aetherlab/services/ent_topic_bank.py / aetherlab/services/ent_mock_solutions.py / tests/test_ent_practice_mvp.py / tests/test_ui_layout_regressions.py / tests/test_practice_result_consistency.py / tests/test_practice_explanation_display.py / tests/test_mock_solution_display.py", "gui", "Documented", ""),
+     "Practice feedback and completed practice/mock reviews typeset shared solution_latex. Magnetic/photon substitutions retain complete negative exponents; nanometre conversion solves for the supplied length instead of changing the constant 1 nm. All 40 mock items share worked math with PDF. Fresh documents isolate images; renderer failure uses readable math or a localized diagnosis. Answered practice alone affects totals; timed items stay counted. Screen/history/PDF share scoring; early finish remains available and perfect samples do not invent mistakes.",
+     "aetherlab/ui/exam_practice.py / aetherlab/services/practice_math.py / aetherlab/services/mathtext.py / aetherlab/services/ent_topic_bank.py / aetherlab/services/ent_mock_solutions.py / tests/test_ent_practice_mvp.py / tests/test_ui_layout_regressions.py / tests/test_practice_result_consistency.py / tests/test_practice_explanation_display.py / tests/test_mock_solution_display.py / tests/test_topic_solution_notation.py", "gui", "Documented", ""),
     ("F234", "Profiles", "Switch local learners without sharing progress",
      "As a learner sharing this device, I want to select my profile and keep my goals, attempts and course progress separate.",
      "StudentProfileStore preserves legacy progress, separates learners and switches views to their files. An unreadable registry propagates IO failure without being reset/overwritten; missing/malformed files keep legacy recovery. Complete new profiles use one registry commit. Windows write refusals have bounded retries; failed activation/opening keeps current views and reports an error. This local selector is not authentication.",
@@ -1035,15 +1035,15 @@ FEATURES.extend([
      "aetherlab/services/ent_practice_progress.py / aetherlab/ui/student_views.py / aetherlab/ui/main_window.py / tests/test_ui_layout_regressions.py", "gui", "Documented", ""),
     ("F238", "ENT Exam", "Resume a timed mock with elapsed time retained",
      "As a student, I want to resume an interrupted mock without losing answers or resetting its deadline.",
-     "Active answers, IDs, remaining seconds and timestamp persist; resume subtracts closed time, and a full mock starts at 90 minutes. Localized Resume/Start again/Cancel controls make replacement explicit; Escape/close keeps saved bytes. A valid saved ID incompatible with the selected bank is diagnosed without replacement. Unreadable resume blocks start. Autosave failures are visible and closing retries. Pending completion resumes frozen; attempt IDs prevent duplicate history/points after stale cleanup. Finish defaults to localized Continue.",
-     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / tests/test_exam_resume_and_proctoring.py / tests/test_progress_storage_recovery.py / tests/test_exam_confirmation_localization.py", "gui", "Documented", "Active exam answers are intentionally saved; completed attempt history does not store answer selections. ID deduplication covers the retained 100-attempt history."),
+     "Active answers, IDs, remaining seconds and timestamp persist; resume subtracts closed time, and a full mock starts at 90 minutes. Start and Review mistakes share localized Resume/Start again/Cancel controls; Escape/close keeps saved bytes. Replacement requires confirmed snapshot removal; an unlink/read refusal keeps setup and gives a distinct restart error with retry. Incompatible saved IDs and unreadable resume block replacement. Autosave failures are visible and closing retries. Pending completion resumes frozen; attempt IDs prevent duplicate retained history/points. Finish defaults to Continue.",
+     "aetherlab/services/ent_practice_progress.py / aetherlab/ui/exam_practice.py / tests/test_exam_resume_and_proctoring.py / tests/test_progress_storage_recovery.py / tests/test_exam_confirmation_localization.py / tests/test_practice_session_start.py", "gui", "Documented", "Active exam answers are intentionally saved; completed attempt history does not store answer selections. ID deduplication covers the retained 100-attempt history."),
     ("F239", "ENT Exam", "Optional camera and focus review signals",
      "As a student, I want to understand what the optional camera observes during a mock and how it affects my result.",
      "The opt-in shadow pilot reports prolonged missing/multiple faces, camera interruptions and focus loss as sparse metadata. Kazakh, Russian and English notices explain that it does not track gaze, block screenshots, prove cheating or change scores. Frames are processed in memory and are not stored.",
      "aetherlab/services/proctoring.py / aetherlab/ui/camera_monitor.py / aetherlab/ui/exam_practice.py / tests/test_exam_resume_and_proctoring.py", "gui", "Documented", "Real camera availability and stream recovery require a hardware check."),
     ("F240", "Teacher Review", "Inspect local school attempts and event metadata",
      "As a reviewer using this device, I want to inspect completed school mocks and their optional review signals.",
-     "TeacherReviewDialog lists completed local school mocks and allowlisted signals in Kazakh, Russian and English. Registry or individual progress read errors retain the loaded snapshot and show a file error; Reload restores rows and clears placeholder spans. Unreadable data is not labelled as no mocks. Access is open to device users; camera signals are not cheating verdicts.",
+     "TeacherReviewDialog lists completed local school mocks and allowlisted signals in Kazakh, Russian and English. local_school_mock_review sorts actual UTC instants newest first, treats legacy naive dates as UTC, orders ties by student/class name and preserves original display timestamps. Registry or progress read errors retain the loaded snapshot with a file error; Reload restores rows and clears spans. Access remains open to device users; camera signals are not cheating verdicts.",
      "aetherlab/services/teacher_review.py / aetherlab/ui/teacher_review_dialog.py / aetherlab/ui/leaderboard_dialog.py / tests/test_teacher_review.py / tests/test_school_view_io_recovery.py", "gui", "Documented", "No teacher role authentication or remote review is implemented."),
     ("F241", "School Ranking", "Local school ranking and score history",
      "As a student, I want to compare completed mock results with local learners in my school and see each score history.",
@@ -1079,12 +1079,58 @@ FEATURES.extend([
      "aetherlab/ui/main_window.py / aetherlab/core/settings.py / tests/test_settings_startup_sync.py", "gui", "Documented", ""),
     ("F249", "Cloud Render", "Validate downloaded cloud video metadata",
      "As a learner, I want an invalid or incomplete cloud video to be reported before it is presented as ready.",
-     "Cloud artifact validation checks exact scene output, container, video stream, positive duration, requested dimensions and a decoded frame. A missing/broken PyAV decoder refuses certification with a repair hint. Segmented assembly preserves job/content identities. Diagnostics distinguish invalid media from access/render failures. Sampling a frame does not certify every frame or artistic quality.",
-     "aetherlab/services/render_backend.py / aetherlab/services/segmented_pipeline.py / tests/test_cloud_media_check.py / tests/test_cloud_failure_diagnosis.py", "headless", "Documented", "Live cloud delivery and full viewing remain separate verification requirements."),
+     "Cloud worker v8 receives the validated canvas and FPS; job/cache/ledger identities include dimensions. Download and cache reuse check the exact job output, container, stream, duration, requested dimensions/FPS and a decoded frame. Files are staged and validated before replacing a prior video. Missing PyAV refuses certification. Cloud-only OpenGL requests explicitly report the Cairo worker renderer. Sampling one frame does not certify every frame or artistic quality.",
+     "aetherlab/services/render_backend.py / aetherlab/services/manim_runtime.py / aetherlab/services/segmented_pipeline.py / .github/workflows/render.yml / tests/test_cloud_media_check.py / tests/test_cloud_failure_diagnosis.py / tests/test_render_profile_transport.py", "headless", "Documented", "Recorded live v8 technical delivery is scoped separately from educational media, player and audio acceptance."),
     ("F250", "ENT Lesson", "Acceleration route contains varied follow-up practice",
      "As a beginner, I want to practice comprehension, calculations and graph reading after the acceleration example.",
      "The fixed acceleration route serves its anchor and follow-up practice in a stable order with unique options and recomputed answers. The content retains source and pending-review distinctions rather than declaring teacher approval from software tests.",
      "aetherlab/services/ent_lesson_catalog.py / tests/test_lesson_practice_h.py", "headless", "Documented", ""),
+    ("F251", "Render", "Validated render presets and explicit overrides",
+     "As an advanced user, I want preview, standard, cinematic and UNT landscape/portrait presets with predictable overrides, cache identities and reported adaptive changes.",
+     "render_preset resolves preview 854x480/30, standard 1280x720/30, cinematic 1920x1080/60, unt 1920x1080/30 or unt_vertical 1080x1920/30; legacy ent maps to unt. UNT presets default to no adaptive downgrade. resolve_unt_mode resolves explicit argument, AETHERLAB_UNT_MODE, saved unt_mode, then preset-based auto mode; invalid flags fall through. This resolver alone does not certify exam-video generation. Quality flags l/m/h/p/k are supported; p resolves 2560x1440 while FPS follows policy. An absent adaptive_quality inherits the preset; explicit valid booleans override it. Adaptive notices report the actual old/new FPS. Saved/env/explicit overrides flow to Manim's canvas/FPS, cloud dispatch and its media gate. Odd dimensions normalize to even bounds for YUV420p. Pixel-affecting profile fields change identity; resource-only limits do not. Assembly uses the validated canvas.",
+     "aetherlab/core/render_profile.py / aetherlab/core/settings.py / aetherlab/core/render_cache.py / aetherlab/services/manim_runtime.py / aetherlab/services/render_backend.py / aetherlab/services/assembly.py / tests/test_render_profile.py / tests/test_render_profile_transport.py / tests/test_render_cache_policy.py / tests/test_render_cache_reuse.py", "headless", "Documented", "Session/worker cache checks use controlled render boundaries. Technical live v8 evidence does not certify complete educational video/audio acceptance."),
+    ("F252", "Localization", "Physics speech normalization and narration diagnostics",
+     "As a student, I want physics formulas, units and narration messages to follow Kazakh, Russian or English without silently substituting an English voice.",
+     "core.language normalizes formula tokens, units, decimal forms and abbreviations in Kazakh, Russian and English and supplies localized NARRATION_MESSAGES. Explicit request/lesson language, validated voice selection and language/voice/rate/profile-aware speech cache keys preserve routing. Incomplete trailing narration fragments are handled and subtitles keep language characters and cue boundaries. Software normalization does not certify human pronunciation or final audio alignment.",
+     "aetherlab/core/language.py / aetherlab/core/models.py / aetherlab/services/voiceover.py / aetherlab/services/lesson_planner.py / aetherlab/services/share_export.py / tests/test_dubbing_ru_kk.py", "headless", "Documented", "Native listening and complete media review remain pending."),
+    ("F253", "Render", "Bound the local Manim encoder queue",
+     "As an advanced user, I want to limit simultaneous encoding work for the resources on my computer.",
+     "_manim_render_command() passes --max-inflight-encoders. AETHERLAB_MAX_INFLIGHT_ENCODERS defaults to 4, accepts stripped integer input, clamps to 1–8 and falls back to 4 on malformed values. The encoder budget preserves explicit canvas/FPS/quality, scene selection and isolated cache arguments.",
+     "aetherlab/services/manim_runtime.py / tools/accept_encoder_budget.py / tests/test_render_quality_flags.py / tests/test_encoder_budget_contract.py", "headless", "Documented", "Acceptance observes the real local encoder queue, drained jobs and identical complete video; throughput and peak-memory benchmarks are separate."),
+    ("F254", "ENT Practice", "Synchronize exercises into the local reference database",
+     "As a returning user, I want the versioned exercise bank mirrored into SQLite while keeping my notes, other questions and indexed books.",
+     "sync_ent_practice_bank copies 2500 three-language exercise payloads to the configured reference database in one transaction. UPSERT preserves row identity, annotations and child links. A validated managed-ID manifest limits ownership: unknown rows remain, removed managed questions retire with notes, and foreign collisions abort. Fresh databases need no book index; page candidates retain path/file/page identity and unreviewed status. Legacy columns migrate. Failures roll back and no success is announced. This command does not edit book files or learner progress.",
+     "tools/sync_ent_practice_bank.py / tools/index_reference_library.py / aetherlab/services/ent_physics_bank.py / tools/accept_practice_bank.py / tests/test_bank_sync_preservation.py", "headless", "Documented", "Source-controlled question fields update deliberately; custom columns and unrelated records are preserved. Teacher/citation approval remains pending."),
+    ("F255", "Launch", "Prevent duplicate PhysLab windows for the same profile",
+     "As a returning user, I want a repeated launch or watchdog launch to leave one running application for my profile.",
+     "run_app acquires a QLockFile in the selected data folder before importing MainWindow or constructing QApplication. A duplicate returns 0, so a watchdog stops normally. Age-based expiry is disabled while live-process stale detection permits crash recovery. The owner releases the lock after normal exit or initialization/event-loop failure. Separate profiles remain independent. Storage refusals produce an actionable RuntimeError instead of masquerading as a running app. This protects future launches; existing unguarded processes are not terminated or migrated.",
+     "aetherlab/ui/app.py / aetherlab/ui/qt_compat.py / aetherlab/__main__.py / aetherlab_watchdog.py / tests/test_gui_instance_guard.py", "headless", "Documented", "No existing windows are closed, focused or restarted. Windows scheduled-task configuration is unchanged."),
+])
+
+FEATURES.extend([
+    ("F256", "ENT Lesson", "UNT storyboard policy and exam scene gates",
+     "As a learner, I want an UNT practice video to follow a paced explanation and preserve the supplied task without invented answers or official status.",
+     "SceneGenerator resolves optional UNT mode, sends five-act HOOK/THEORY/WORKED/OFFICIAL_TASK/RECAP practice instructions and an exam codegen appendix, and stamps model storyboards as practice_scaffold_unverified. The legacy OFFICIAL_TASK act name is internal. The deterministic scaffold scales eight beats to the requested target and contains no invented law, answer, letter or verified-source claim. Prompts preserve supplied facts and permit an answer letter only with supplied choices/key. Runtime uses a 10% UNT versus 20% cinematic duration window. Textual exam gates check block/unit/axis hints and reject canvas writes; chapter segments skip exam blocks, portrait-layout findings are advisory. A structured caller can explicitly require a labelled answer letter; unit A alone cannot satisfy that check. These heuristics do not verify physics, every unit, rendered layout or source authenticity.",
+     "aetherlab/services/scene_generator.py / aetherlab/services/scene_validation.py / aetherlab/services/manim_runtime.py / aetherlab/core/render_profile.py / tests/test_unt_scene_policy.py", "headless", "Documented", "Prompt capture, static gates and scheduling are software checks. Actual model compliance, source verification, final cloud video/audio and human educational review remain open."),
+])
+
+FEATURES.extend([
+    ("F257", "AI Tools", "Spider screenshot diagnosis and repair proposal",
+     "As a user, I explicitly scan the current AetherLab workbench to obtain a model diagnosis and a proposed source repair.",
+     "inspect_and_repair sends supplied PNG bytes to the configured vision/model endpoint through an awaited bounded client. Each request uses the selected model's temperature policy; clients close after use. A diagnosis must contain boolean has_error; malformed or truncated responses cannot claim a clean screen. A positive diagnosis searches bounded package excerpts and requests a minimal patch, or reports no safe match/patch. This is model interpretation, not certified correctness or a live hot reload.",
+     "aetherlab/services/spider.py / aetherlab/services/llm_client.py / aetherlab/services/model_policy.py / tests/test_spider_contract.py", "headless", "Documented", "Owned PNG/fake-provider tests only; no user screen capture or live network validation."),
+    ("F258", "AI Tools", "Spider bounded source patch, backups and rollback",
+     "As a user, I expect a Spider repair to retain a recoverable original and refuse unrelated file operations.",
+     "_patch_paths validates every diff section, matching headers, unique package Python targets and text hunks; deletion/rename/binary/mode changes and traversal are rejected. _apply_patch creates a unique backup folder, checks and applies via Git, then compiles changed Python. Syntax/operation failure restores recorded originals and removes new targets. Syntax checks cannot prove runtime correctness; concurrent external editing and abrupt termination during patch application require further acceptance.",
+     "aetherlab/services/spider.py / aetherlab/core/proc.py / tests/test_spider_contract.py", "headless", "Documented", "Actual Git operations use only temporary owned repositories; user sources are never repaired by the audit."),
+    ("F259", "AI Tools", "Spider dock, screen watch and result feedback",
+     "As a user, Spider starts closed. I open its dock when needed, opt into scanning/Watch, see progress and can stop it.",
+     "The dock stays hidden on app launch and opens only through an explicit navigation action. MainWindow captures only the current workspace page. SpiderPanel previews an 800x520-bounded PNG, runs BackgroundTask, suppresses duplicate tasks, exposes localized controls/notice and a 20-second watch timer gated by active/non-minimized app state. Scan cancellation is passed to the service and checked between model/source/patch stages. Unrepaired results display their actual summary rather than a clean-screen claim. Watch defaults off and pauses after a successful source patch; localized feedback requires restart because loaded UI objects are not replaced. Native layout, exam privacy interactions and cancellation during an already running Git command remain unverified.",
+     "aetherlab/ui/app.py / aetherlab/ui/spider_panel.py / aetherlab/ui/main_window.py / aetherlab/ui/navigation.py / aetherlab/ui/background_task.py / aetherlab/services/spider.py / tests/test_gui_instance_guard.py / tests/test_spider_contract.py", "gui", "Documented", "Offscreen launch opt-in, result feedback and cooperative service cancellation only; no native UI or actual screenshot journey."),
+    ("F260", "AI Tools", "Spider project crawl and static issue trail",
+     "As a user, I crawl project Python source to see syntax and Ruff findings with progress.",
+     "crawl_project enumerates package/tests/tools plus top-level Python, skips virtualenv/cache directories, parses UTF-8 source, reports progress and respects cancellation between files. It runs Ruff without a Windows console, deduplicates syntax/lint findings, returns up to 60 details and reports unavailable/error states. SpiderPanel animates the file trail and displays the result. Static findings are not proof of runtime correctness or an automatic project-wide fix.",
+     "aetherlab/services/spider.py / aetherlab/ui/spider_panel.py / aetherlab/core/proc.py / tests/test_spider_contract.py", "headless", "Documented", "Owned files and controlled Ruff boundary; actual installed Ruff, large trees and native animated trail remain unverified."),
 ])
 
 BASE_HEADERS = [
@@ -1221,18 +1267,22 @@ def _python_definitions(path_text: str) -> tuple[tuple[str, str, int, str], ...]
 def _project_symbol_index() -> dict[str, tuple[tuple[str, str, int], ...]]:
     """Map implementation symbols to their real source lines."""
     indexed: dict[str, list[tuple[str, str, int]]] = {}
+    files = [ROOT / "aetherlab_watchdog.py"]
     for search_root in (ROOT / "aetherlab", ROOT / "tools"):
         if not search_root.exists():
             continue
-        for path in sorted(search_root.rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            relpath = path.relative_to(ROOT).as_posix()
-            for simple, qualified, lineno, _doc in _python_definitions(str(path)):
-                entry = (relpath, qualified, lineno)
-                indexed.setdefault(qualified, []).append(entry)
-                if simple != qualified:
-                    indexed.setdefault(simple, []).append(entry)
+        files.extend(sorted(search_root.rglob("*.py")))
+    for path in files:
+        if "__pycache__" in path.parts or not path.is_file():
+            continue
+        relpath = path.relative_to(ROOT).as_posix()
+        for simple, qualified, lineno, _doc in _python_definitions(str(path)):
+            entry = (relpath, qualified, lineno)
+            indexed.setdefault(qualified, []).append(entry)
+            if path == ROOT / "aetherlab_watchdog.py":
+                indexed.setdefault(f"aetherlab_watchdog.{qualified}", []).append(entry)
+            if simple != qualified:
+                indexed.setdefault(simple, []).append(entry)
     return {key: tuple(value) for key, value in indexed.items()}
 
 
@@ -1252,32 +1302,62 @@ def _symbol_candidates(context: str) -> list[str]:
     return candidates
 
 
+@lru_cache(maxsize=None)
+def _declared_reference_paths(source: str) -> tuple[Path, ...]:
+    return tuple(dict.fromkeys(
+        path for token in re.findall(r"[\w./*\\-]+\.(?:py|md|ya?ml|json|bat)", source)
+        for path in _source_candidates(token)
+        if "tests" not in path.relative_to(ROOT).parts
+    ))
+
+
+@lru_cache(maxsize=None)
+def _imported_reference_paths(path: Path) -> dict[str, set[Path]]:
+    """Resolve explicit repository re-exports without importing application code."""
+    result: dict[str, set[Path]] = {}
+    if path.suffix != ".py":
+        return result
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError):
+        return result
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        base = path.parent if node.level else ROOT
+        for _ in range(max(0, node.level - 1)):
+            base = base.parent
+        module = base.joinpath(*(node.module or "").split("."))
+        for alias in node.names:
+            for candidate in (module.with_suffix(".py"), module / (alias.name + ".py")):
+                if candidate.is_file() and candidate.resolve().is_relative_to(ROOT.resolve()):
+                    result.setdefault(alias.asname or alias.name, set()).add(candidate)
+    return result
+
+
 def _symbols_line_refs(context: str, source_hint: str = "") -> list[str]:
     symbol_index = _project_symbol_index()
     refs: list[str] = []
-    hint = source_hint.replace("\\", "/").lower()
+    direct = _declared_reference_paths(source_hint)
+    direct_names = {path.relative_to(ROOT).as_posix() for path in direct}
     for symbol in _symbol_candidates(context):
         entries = symbol_index.get(symbol, ())
         if not entries and "." in symbol:
             entries = symbol_index.get(symbol.rsplit(".", 1)[-1], ())
+        if direct:
+            allowed = set(direct)
+            for path in direct:
+                allowed.update(_imported_reference_paths(path).get(symbol.split(".")[0], ()))
+            allowed_names = {path.relative_to(ROOT).as_posix() for path in allowed}
+            entries = [entry for entry in entries if entry[0] in allowed_names]
         if not entries:
             continue
-        sorted_entries = sorted(
-            entries,
-            key=lambda entry: (
-                -int(bool(hint and entry[0].lower().split("/")[-1] in hint)),
-                -int(bool(hint and "/".join(entry[0].lower().split("/")[:-1]) in hint)),
-                entry[0],
-                entry[2],
-            ),
-        )
+        sorted_entries = sorted(entries, key=lambda entry: (entry[0] not in direct_names, entry[0], entry[2]))
         for path, _qualified, lineno in sorted_entries:
             ref = f"{path}:{lineno}"
             if ref not in refs:
                 refs.append(ref)
                 break
-        if len(refs) >= 5:
-            break
     return refs
 
 
@@ -1359,26 +1439,26 @@ def _best_config_line(path: Path, context: str) -> int | None:
 def _source_line_refs(source: str, context: str = "") -> str:
     """Return real implementation locations, preferring named symbols to file headers."""
     symbol_refs = _symbols_line_refs(context, source)
-    refs = list(symbol_refs)
-    if not refs:
-        tokens = re.findall(r"[\w./*\\-]+\.(?:py|md|yml|json|bat)", source)
-        for token in tokens:
-            for path in _source_candidates(token):
-                if path.parts[-2:-1] == ("tests",):
-                    continue
-                if path.suffix == ".py":
-                    lineno = _best_definition(path, context)
-                elif path.suffix in {".yml", ".yaml"}:
-                    lineno = _best_config_line(path, context)
-                else:
-                    continue
-                if lineno is not None:
-                    refs.append(f"{path.relative_to(ROOT).as_posix()}:{lineno}")
-                if len(refs) >= 5:
-                    break
-            if len(refs) >= 5:
-                break
-    return " / ".join(dict.fromkeys(refs))
+    paths = _declared_reference_paths(source)
+    refs = []
+    for path in paths:
+        name = path.relative_to(ROOT).as_posix()
+        named = [ref for ref in symbol_refs if ref.rsplit(":", 1)[0] == name]
+        if path.suffix == ".py":
+            lineno = _best_definition(path, context)
+        elif path.suffix in {".yml", ".yaml"}:
+            lineno = _best_config_line(path, context)
+        else:
+            lineno = None
+        if named:
+            refs.append(named[0])
+        elif lineno is not None:
+            refs.append(f"{name}:{lineno}")
+        if len(refs) >= 5:
+            break
+    declared_names = {path.relative_to(ROOT).as_posix() for path in paths}
+    reexports = [ref for ref in symbol_refs if ref.rsplit(":", 1)[0] not in declared_names]
+    return " / ".join(list(dict.fromkeys([*reexports, *refs, *symbol_refs]))[:5])
 
 
 def _attach_implementation_references(
@@ -1403,6 +1483,94 @@ def _story_tuple(
 
 
 STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "F257": _story_tuple("US-F257: As P3 Educator, I explicitly scan an owned workbench frame. Steps: supply PNG; await diagnosis; map a reported issue to bounded source; request a patch or receive an honest unavailable result.", "P3", "The actual selected model and shared timeout/retry/temperature policy apply to awaited requests. Invalid/truncated diagnosis is rejected; absence of an error is accepted only from boolean false. Model output is evidence, not verified correctness.", "No key or invalid diagnosis yields an actionable failure; no matching source or safe patch yields an unrepaired result. No user source is changed on those paths.", "harness"),
+    "F258": _story_tuple("US-F258: As P5 Returning user, I keep an original backup for each bounded Spider patch. Steps: validate every diff; back up bytes; Git-check/apply; compile; restore on failure.", "P5", "_patch_paths() permits only one to four unique package Python text targets and validates all headers, including trailing traditional unified sections. _apply_patch() creates unique backups, uses subprocess_kwargs(), Git-checks/applies and compiles changed Python; failed syntax restores originals. Probes use owned temporary repositories only.", "Out-of-package deletion/mode/binary/rename sections are refused before mutation; invalid syntax restores original bytes. Crash consistency, concurrent editing and permission-failure rollback remain to be accepted.", "harness"),
+    "F259": _story_tuple("US-F259: As P5 Returning user, Spider is closed when PhysLab starts. I open the dock from navigation and explicitly enable Scan or Watch. Steps: inspect disclosure; scan; read honest feedback; stop/close.", "P5", "The dock remains hidden at startup and opens through an explicit navigation action. The current workspace page is the only capture target; no default watch upload occurs. Background actions remain responsive and single-task. Localized controls and model-result summaries do not misreport an unrepaired error as clean. A source patch pauses Watch and requires restart in kk/ru/en; the app is not restarted automatically.", "The old environment flag cannot open Spider or start a crawl during launch. Cancellation before work or after diagnosis prevents later source/repair steps. Active Git-command cancellation, exam isolation, native layout and shutdown recovery remain unverified.", "scripted-ui"),
+    "F260": _story_tuple("US-F260: As P5 Returning user, I crawl source for static issues. Steps: enumerate Python; parse with progress; run Ruff; view deduplicated findings and animated trail.", "P5", "The crawler checks package/tests/tools/top-level Python, honors cancellation between files, reports syntax/lint failures and caps visible details at 60. Static tools use hidden Windows child processes.", "An empty project returns a clear summary; pre-cancellation runs no tools. Unavailable, timed-out or failing Ruff is reported, not presented as a successful complete runtime audit.", "harness"),
+    "F256": _story_tuple(
+        "US-F256: As P1 Student, I use UNT scene mode to explain a supplied physics task. Preconditions: optional UNT settings/override; a model for the directing/codegen paths. Steps: 1. Build a timed practice scaffold. 2. Capture the actual directing request with a controlled model. 3. Inspect supplied conditions and unverified provenance. 4. Check open numeric versus supplied-choice task gates. 5. Check chapter/portrait policies and 10% versus 20% duration boundaries.",
+        "P1",
+        "`build_unt_storyboard()` scales the five legacy act weights and eight beats to the total duration without supplying arbitrary topic equations, numbers, keys or official labels. `SceneGenerator.storyboard()` uses the UNT director policy and fixes source_status to practice_scaffold_unverified even when the model claims otherwise. The codegen appendix requests preservation of supplied facts and conditional answer letters. `check_unt_gates()` accepts numeric answers without inventing options, and optionally checks a labelled letter for structured choice callers. `_duration_contract_delta()` implements the tighter UNT duration window; `_blocking_scene_issues()` carries gates through repair. Static checks are textual heuristics and do not certify final model/video correctness.",
+        "Malformed/empty/truncated model results retain the existing bounded retry/fallback. Missing task blocks or unit/axis hints and config writes are reported; task-block checks are skipped for chapter aspects. Portrait composition is advisory. No reference pages, official-source authenticity or answer key are invented by a scaffold; a model's self-claimed verified status is overwritten. Rendering and pedagogical acceptance remain separate.",
+        "harness",
+    ),
+    "F255": _story_tuple(
+        "US-F255: As P5 Returning user, I launch PhysLab again for an already open profile and retain one GUI. Preconditions: Qt is installed and the selected profile data folder is writable. Steps: 1. Acquire the profile launch lock. 2. Launch the actual module again. 3. Confirm exit 0 before MainWindow import or QApplication construction. 4. Close or crash the owner and retry. 5. Repeat with separate profiles and storage refusals.",
+        "P5",
+        "The same data folder has at most one new guarded GUI. Duplicate launches return 0 so the watchdog stops; another profile may open independently. The live lock has no age expiry and remains held through window construction and the event loop. Normal and exceptional exits release ownership; a dead process permits stale-lock recovery. No network/provider, visible test window or existing-window termination is needed to exercise this boundary.",
+        "Data-folder and lock-storage errors raise an actionable RuntimeError and the CLI reports exit 2. Existing unguarded windows cannot adopt the lock; the repair applies when the user next launches the updated application. Scheduled-task policy is unchanged and a duplicate does not activate or focus the existing window.",
+        "harness",
+    ),
+    "F232": _story_tuple(
+        "US-F232: As P1 Student, I receive 100 exercise variations for each of 25 physics topics in Kazakh, Russian or English. Preconditions: the bundled source bank; no provider, network or Qt is required. Steps: 1. Generate the bank. 2. Select a topic/language through questions_for_language. 3. Compare displayed conditions, worked values, choices and key. 4. Generate again and inspect IDs, filters and independent returned results.",
+        "P1",
+        "`build_topic_exercises()` returns 2500 deterministic authored single-choice records, 100 per topic with 50 A/30 B/20 C labels, unique IDs/prompts/choices and three language versions. Calculation and substitution use exactly the displayed inputs; stated approximations and unit scaling match the key. `questions_for_language()` exposes the same content, aliases, normalized locales and immutable values in new dictionaries. Teacher/language verification stays pending and the original/non-official label remains explicit. Variations do not imply 2500 different solution methods.",
+        "Unknown topic filters return an empty tuple; unknown locale normalizes to English. Returned-dictionary edits do not mutate the bank, and generation consumes no global random state. Internal template errors propagate instead of returning a partial bank. No database update or teacher approval is implied by generating data.",
+        "harness",
+    ),
+    "F254": _story_tuple(
+        "US-F254: As P5 Returning user, I synchronize the source-controlled exercises with my local SQLite library. Preconditions: a writable configured data folder and SQLite supporting UPSERT; an indexed book corpus is optional. Steps: 1. Run tools/sync_ent_practice_bank.py. 2. Check 2500 mirrored three-language payloads and candidate metadata. 3. Repeat with custom rows/notes and legacy schema. 4. Retry after a storage refusal. 5. Verify an interrupted transaction recovers the prior committed bank.",
+        "P5",
+        "`main()` in sync_ent_practice_bank resolves the configured reference database, validates source IDs and the managed manifest, migrates legacy columns and UPSERTs only versioned fields in one transaction. Rows, annotations and foreign keys retain identity. Retired managed IDs keep their notes; unknown or repurposed rows remain. Page candidates use path/file/page identity, at most three per topic and an unreviewed label; a missing corpus produces no invented page references. Counts distinguish synchronized bank items from preserved other records.",
+        "Foreign ID collisions, corrupt manifests, invalid banks and existing-corpus read errors abort with rollback. Read-only/write failures produce no success message and permit retry after access is restored. A pre-commit process crash recovers the prior committed data. No book or learner-progress file is deleted or rewritten.",
+        "harness",
+    ),
+    "F190": _story_tuple(
+        "US-F190: As P1 Student, I obtain a research PDF when pdflatex is unavailable. Preconditions: request/solver/reference data and a writable output directory. Steps: 1. Call build_research_pdf. 2. Inspect the returned PDF path and backend. 3. Repeat without pdflatex. 4. If no PDF backend works, retain the LaTeX source and read the explicit note.",
+        "P1",
+        "`build_research_pdf()` builds citations, an optional numeric figure and research.tex. It tries LaTeX compilation, then the matplotlib PDF backend, and returns ResearchResult with the actual backend, paths and note. Numeric figure generation is advisory; the fallback is a PDF operation.",
+        "If pdflatex is unavailable, try matplotlib. If no PDF backend succeeds, return backend tex-only, pdf_path=None and a source-only note while retaining the written LaTeX. Directory/source-write errors propagate to the caller.",
+        "harness",
+    ),
+    "F220": _story_tuple(
+        "US-F220: As P1 Student, I request a readable topic guide or worked-solution PDF. Preconditions: request, solver, references/settings and a writable output directory; a model is optional. Steps: 1. Use Export PDF or --pdf with the prompt. 2. Classify topic versus problem. 3. Author or build the document. 4. Inspect its steps, references, independent checks and actual output backend.",
+        "P1",
+        "`write_study_document()` classifies the prompt, authors structured content or uses solver material, saves content/claim-review JSON, builds escaped prose and dedicated math blocks, and attempts healing compilation. Returned StudyDocResult identifies mode, author, backend, repairs, checks and note. App export and the CLI use this service.",
+        "Unavailable or failed model authoring uses deterministic solver material. Bad LaTeX blocks are repaired; failed compilation tries a simplified matplotlib PDF. If that also fails, return tex-only with no PDF path and an explicit note. Preserve the authoring reason; output IO and cancellation propagate to the caller.",
+        "harness",
+    ),
+    "F233": _story_tuple(
+        "US-F233: As P1 Student, I read worked equations and finish practice early when needed. Preconditions: a local practice/mock bank and learner progress path. Steps: 1. Start practice and answer/check a question. 2. Read the explanation and worked equations. 3. Leave another item unattempted and finish early. 4. Compare review/history totals. 5. Start another attempt and confirm its equation images are independent.",
+        "P1",
+        "`_show_feedback()` and `_show_results()` use shared solution_latex and `render_math()`. Generated magnetic/photon powers and nanometre length variables preserve mathematical meaning. Mock equations are shared across languages and PDF. A fresh QTextDocument owns each review's images. `_scored_pairs()` excludes unattempted practice, includes all timed items and supports early finish with consistent totals.",
+        "If render_math returns None, keep the explanation and use readable math or the localized unavailable notice. Do not expose raw TeX as a successful equation. A failed result write freezes the same answers for retry. Unattempted practice is labelled not counted; timed blanks score zero. Stale equation images must not appear in a new attempt.",
+        "scripted-ui",
+    ),
+    "F247": _story_tuple(
+        "US-F247: As P1 Student, I change Kazakh/Russian/English interface language without losing my work. Preconditions: the workbench or a supported secondary view is open. Steps: 1. Enter a prompt and choose quality/lesson options. 2. Switch among the three languages. 3. Inspect the shell, Settings, library/history and simulation/lesson labels. 4. Confirm the profile and entered options remain selected.",
+        "P1",
+        "`_on_student_language_changed()` calls the shared views' set_language methods and updates the current page title. `SettingsDialog.set_language()` translates registered labels, buttons, combo items, hints and provider status in place. Controls retain their data selections; language updates do not allocate a generation worker or replace the active profile.",
+        "An unknown Settings locale falls back to Kazakh. An unmapped source label remains unchanged. Updating labels preserves the current prompt, profile, quality and lesson settings; language selection itself does not promise a render retry or a new output artifact.",
+        "scripted-ui",
+    ),
+    "F226": _story_tuple(
+        "US-F226: As P1 Student, I choose Kazakh, Russian or English and practice a selected topic/difficulty or start a timed mock. Preconditions: a local learner progress path and the bundled study bank. Steps: 1. Choose language, mode and filters. 2. Start or resolve the saved attempt. 3. Select, clear and revisit answers. 4. Check practice answers or finish the timed mock. 5. Read localized explanations and results.",
+        "P1",
+        "ExamPracticeDialog uses the 2500-item topic bank for exercises and the separate 40-question/50-point mock bank for timed mode. An unfiltered full mock starts at 90 minutes. Setup, question controls, feedback and results follow the chosen language. `_capture_current_answer()` captures explicit blank responses; checked/pending answers remain committed within the session. The practice size is hidden in timed mode. Authored sets retain their educational/non-official label.",
+        "An incomplete Check keeps the editable question and asks for a choice. Saving failures retain answers in the dialog and show a retry notice; close is refused until saving succeeds. Invalid filters cannot start an empty set. Start and Review mistakes resolve existing attempts before replacement.",
+        "scripted-ui",
+    ),
+    "F227": _story_tuple(
+        "US-F227: As P1 Student, I save study goals and review my recorded mistakes. Preconditions: a local progress file, with mistakes available for review. Steps: 1. Save target/date/weekly goals. 2. Complete practice and inspect progress. 3. Choose Review mistakes. 4. If an attempt is interrupted, choose Resume, Start again or Cancel. 5. Correct a missed item and inspect the updated mistake queue.",
+        "P1",
+        "`record_attempt()` stores bounded aggregate history, points and missed IDs without completed answer selections. Mistake review includes exercise and mock IDs in the selected language. `_start_mistake_review()` uses `_resolve_saved_attempt()` before replacing an interrupted attempt. Resume restores its mode/language/identity; Cancel leaves exact saved bytes; explicit Start again begins the review only after confirmed snapshot removal. Goals and progress use a consistent local snapshot.",
+        "Unavailable progress disables actions requiring confirmed data and exposes retry without replacing saved values or drafts. Empty mistakes do not start a session or touch an interrupted attempt. Invalid saved bank IDs stop resume with an error. Failed result commits freeze answers/timer until retry; numeric recovery is disclosed instead of inventing zero results.",
+        "scripted-ui",
+    ),
+    "F238": _story_tuple(
+        "US-F238: As P1 Student, I resume an interrupted mock without losing answers or resetting its deadline. Preconditions: a saved local attempt. Steps: 1. Reopen practice. 2. Choose Start or Review mistakes. 3. Choose Resume, Start again or Cancel in the localized prompt. 4. Continue or finish the same attempt. 5. Reopen after a failed result commit and retry once storage is available.",
+        "P1",
+        "`_resolve_saved_attempt()` guards both setup actions. `_resume_active_session()` restores answers, index, saved mode/language and attempt ID. Timed snapshots subtract closed wall time; full mocks start at 90 minutes. Pending completion is frozen and retries the same result identity. Successful results and stale cleanup cannot duplicate retained history/points. Autosave/close capture the current answer, including an explicit blank.",
+        "Cancel/Escape preserve saved bytes. An unreadable or incompatible snapshot blocks new starts. Explicit replacement requires confirmed removal; a failed unlink or verification read leaves setup, displays localized restart_error and permits retry. Autosave failure retains the current answers and refuses closure until a successful write. Finish defaults to Continue.",
+        "scripted-ui",
+    ),
+    "F253": _story_tuple(
+        "US-F253: As P5 Returning user, when I set the local encoder budget, I expect a bounded queue and unchanged video. Preconditions: a compatible Manim CLI and video codec are installed. Steps: 1. Set or omit AETHERLAB_MAX_INFLIGHT_ENCODERS. 2. Build a command with the chosen quality/canvas/FPS. 3. Render a scene with several animation parts. 4. Confirm the effective queue bound, completed jobs and unchanged frame order/content.",
+        "P5",
+        "`_manim_render_command()` reads the optional environment value, defaults to 4, clamps integers to 1–8 and emits exactly one --max-inflight-encoders argument. Explicit quality/FPS/canvas/seed/scene/media and cache/renderer flags are preserved. The installed Manim encoder consumes this argument while rendering. Implementation reference: aetherlab/services/manim_runtime.py:2692.",
+        "Absent, blank or malformed values use 4; integers outside 1–8 clamp to the nearest bound. Parsing produces a valid command with the other requested arguments preserved.",
+        "harness",
+    ),
     "F01": _story_tuple(
         "US-F01: As P1 Student, no AI key, when I run `python -m aetherlab`, I expect the desktop workbench to open with settings loaded. Preconditions: PyQt6 is installed. Steps: 1. Start the CLI with no flags. 2. Wait for the main window. 3. Close the app. Primary existing story: As a user, I run `python -m aetherlab` and the desktop app opens.",
         "P1",
@@ -1427,15 +1595,15 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F04": _story_tuple(
         "US-F04: As P5 Returning user, when the GUI process crashes under the watchdog, I expect AetherLab to restart with increasing delay, but a normal close should stop. Preconditions: watchdog is launched from the project root. Steps: 1. Start `aetherlab_watchdog.py` or `start.bat`. 2. Let the child exit non-zero. 3. Observe restart logging; then close cleanly and observe no relaunch.",
         "P5",
-        "`aetherlab_watchdog.main()` runs `[sys.executable, '-m', 'aetherlab']`, logs exit code and uptime, stops on exit code 0, resets delay after a healthy run, and otherwise sleeps with exponential backoff capped at 60 seconds. Implementation reference: aetherlab_watchdog.py:37.",
-        "If the child cannot start, the exception is logged, treated as exit -1, and the watchdog follows the same backoff path instead of crashing.",
+        "`aetherlab_watchdog.main()` runs `[sys.executable, '-m', 'aetherlab']`, logs exit code and uptime, stops on exit code 0, resets delay after 120 seconds of healthy uptime, and otherwise sleeps with exponential backoff capped at 60 seconds. File logging is best-effort and configured only when main starts. Implementation reference: aetherlab_watchdog.py:37.",
+        "If the child cannot start, the exception is logged, treated as exit -1, and the watchdog follows the same backoff path. A refused log directory/file does not prevent launching; Ctrl+C while the child runs or during backoff stops without a traceback or relaunch.",
         "harness",
     ),
     "F05": _story_tuple(
         "US-F05: As P1 Student, no AI key, when PyQt6 is missing, I expect an install hint instead of a Python stack trace. Preconditions: PyQt6 import fails. Steps: 1. Trigger `require_qt()` through app launch or directly in a harness. 2. Read stderr/exception text. 3. Confirm it names PyQt6 and a pip install command.",
         "P1",
-        "`require_qt()` raises RuntimeError with a PyQt6 install instruction when the optional import shim captured an import error; `main()` catches RuntimeError from import/run_app and exits 2. Implementation reference: aetherlab/ui/qt_compat.py:18 / aetherlab/__main__.py:91 / aetherlab/__main__.py:97.",
-        "The sad path is the feature: missing Qt returns an actionable message and exit code 2, not an uncaught import traceback.",
+        "`require_qt()` raises RuntimeError with an installation instruction for missing PyQt6 and a repair/load-failure diagnosis for a broken runtime, preserving the original exception cause; `main()` catches RuntimeError from import/run_app and exits 2 before creating a window. Implementation reference: aetherlab/ui/qt_compat.py:18 / aetherlab/__main__.py:91 / aetherlab/__main__.py:97.",
+        "Missing and broken Qt have distinct actionable messages and exit code 2 without an uncaught traceback or window creation; an available Qt import passes the guard.",
         "harness",
     ),
     "F06": _story_tuple(
@@ -1449,49 +1617,49 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "US-F07: As P5 Returning user, when I save fields in Settings, I expect non-empty values to survive restart and empty values to be removed. Preconditions: a writable data directory exists. Steps: 1. Save app config values. 2. Reload app config. 3. Call `load_settings()` and confirm saved path/provider values flow into settings.",
         "P5",
         "`app_config_path()` is under the AetherLab data dir, `save_app_config()` merges new values while dropping empty/None keys, and `load_app_config()` ignores missing/corrupt JSON. `load_settings()` uses saved data_dir/library/provider values below env precedence. Implementation reference: aetherlab/core/settings.py:71 / aetherlab/core/settings.py:76 / aetherlab/core/settings.py:92 / aetherlab/core/settings.py:106.",
-        "If settings.json is missing, unreadable, or invalid JSON, the app falls back to defaults instead of blocking startup.",
+        "Missing, unreadable, malformed, wrongly shaped or invalid-UTF-8 settings fall back at startup without rewriting. Save refuses read-access failure, preserves committed bytes on write/replace failure and permits retry; actual restart/crash and Windows sharing/readonly cases are required. Thread-safe merge does not promise cross-process concurrent editing.",
         "harness",
     ),
     "F08": _story_tuple(
         "US-F08: As P5 Returning user, when the same provider value exists in env, app config, legacy `.env`, and Qwen settings, I expect the documented precedence to choose the explicit environment value first. Preconditions: conflicting provider tiers are available. Steps: 1. Seed app config and legacy mappings. 2. Set an env override. 3. Call `load_settings()` and inspect provider fields/source.",
         "P5",
-        "`load_settings()` resolves model, API key, and base URL as environment, then app config, then legacy manim-bot `.env`, then opt-in Qwen settings; `provider_source` labels the winning tier. Implementation reference: aetherlab/core/settings.py:106 / aetherlab/core/settings.py:133 / aetherlab/core/settings.py:137 / aetherlab/core/settings.py:143 / aetherlab/core/settings.py:151 / aetherlab/core/settings.py:292.",
+        "`load_settings()` resolves each model, key and base URL independently as environment > app config > legacy manim-bot `.env` > opt-in Qwen, with Ollama filling unset key/URL only. `provider_source` summarizes the highest used tier, including URL-only overrides and every legacy key alias; `api_key_source` identifies the actual credential source even in mixed configurations. Implementation reference: aetherlab/core/settings.py.",
         "If lower-precedence files are corrupt or missing, they are skipped; if env values are blank, they do not override saved usable values.",
         "harness",
     ),
     "F09": _story_tuple(
         "US-F09: As P2 Student, local Ollama, when I intentionally opt into Qwen-compatible settings, I expect AetherLab to parse model, base URL, and API key without silently inheriting credentials by default. Preconditions: a Qwen settings JSON exists and `AETHERLAB_QWEN_AUTOLOAD=1` is set for full settings use. Steps: 1. Call `load_qwen_settings(path)` on a valid Qwen file. 2. Call `load_settings()` with and without the opt-in env. 3. Confirm default launches do not auto-use Qwen credentials.",
         "P2",
-        "`load_qwen_settings()` reads model name, OpenAI provider baseUrl, envKey/env API key, and source; `load_settings()` only consults it when `AETHERLAB_QWEN_AUTOLOAD == '1'`. Implementation reference: aetherlab/core/settings.py:129 / aetherlab/core/settings.py:403.",
-        "If the Qwen file is absent, corrupt, or not opted in, `{}` is returned or ignored and the app uses the next available/default provider without leaking secrets.",
+        "`load_qwen_settings()` reads string model/baseUrl/envKey/API-key fields and source, selects the matching provider or first provider mapping, and resolves embedded keys before named environment keys; `load_settings()` only consults it when `AETHERLAB_QWEN_AUTOLOAD == '1'`, below explicit settings. Implementation reference: aetherlab/core/settings.py:129 / aetherlab/core/settings.py:403.",
+        "Absent, unreadable, corrupt or non-object Qwen files are ignored without rewriting; malformed explicit model/baseUrl types reject the provider tuple without inheriting its credentials, invalid envKey uses the default key name, and no opt-in means the Qwen reader is not called. Secrets are not logged.",
         "harness",
         errors="BUG-24",
     ),
     "F10": _story_tuple(
         "US-F10: As P5 Returning user, when I open Settings, edit provider/rendering/path fields, and press Save, I expect the dialog to stay usable on small screens and persist the chosen values. Preconditions: main window is open with writable app config. Steps: 1. Press Ctrl+, or the gear. 2. Edit provider, quality, render mode, GitHub fields, library path, and data path. 3. Save and inspect the status message/reloaded settings.",
         "P5",
-        "`SettingsDialog` builds a scrollable screen-fitted form, hides secret values, shows active provider/model/exact key source and shadow warnings, and exposes timeout/retry controls; `_open_settings()` saves through `save_app_config()` then calls `load_settings()` so current and restarted precedence match. Implementation reference: aetherlab/ui/main_window.py / aetherlab/ui/provider_status.py / aetherlab/core/settings.py.",
+        "`SettingsDialog` builds a scrollable screen-fitted form, hides secret values, shows endpoint-derived provider/model/exact key source and shadow warnings, and exposes timeout/retry controls; `_open_settings()` saves then reloads canonical settings. Provider identity uses parsed effective hostname/port rather than model/preset/URL substring. Offscreen label checks in kk/ru/en do not prove native layout. Implementation reference: aetherlab/ui/main_window.py / aetherlab/ui/provider_status.py / aetherlab/core/settings.py / aetherlab/services/model_policy.py.",
         "Cancel rejects without saving; corrupt config falls back to defaults; environment overrides remain active immediately after Save and are named without displaying credential values.",
         "scripted-ui",
     ),
     "F11": _story_tuple(
         "US-F11: As P5 Returning user, when I first launch on Windows or another OS, I expect AetherLab data and Chroma directories to be placed in a stable per-user location. Preconditions: `LOCALAPPDATA` may or may not be set. Steps: 1. Clear explicit path env vars. 2. Call `load_settings()`. 3. Inspect data_dir and chroma_path.",
         "P5",
-        "`_default_data_dir()` and `_default_chroma_path()` use `%LOCALAPPDATA%/AetherLab` on Windows-like environments and `~/.aetherlab` elsewhere; `load_settings()` derives default cache/library paths from that data dir. Implementation reference: aetherlab/core/settings.py:106 / aetherlab/core/settings.py:433 / aetherlab/core/settings.py:441.",
-        "If LOCALAPPDATA is absent, paths still resolve under the user's home directory; no launch-working-directory cache is used by default.",
+        "`_default_data_dir()` and `_default_chroma_path()` use a valid absolute `%LOCALAPPDATA%/AetherLab`, otherwise `~/.aetherlab`; `load_settings()` derives default cache/library paths from that data dir. Implementation reference: aetherlab/core/settings.py.",
+        "If LOCALAPPDATA is absent, empty, whitespace-only or relative, paths resolve under the user's home directory; no launch-working-directory state is created by default.",
         "harness",
     ),
     "F12": _story_tuple(
         "US-F12: As P1 Student, no AI key, when I type a prompt and press Enter, Run, or Ctrl+Enter, I expect one solve run to start and the prompt field to clear. Preconditions: command bar is visible and not busy. Steps: 1. Type a non-empty prompt. 2. Press Enter or Run, or use Ctrl+Enter from the main window. 3. Observe the submitted signal/start pipeline and cleared input.",
         "P1",
-        "`CommandBar._submit()` trims text, emits `submitted(prompt)`, and clears the field only while Run is visible; `MainWindow._build_shortcuts()` wires Ctrl+Return to the same submit path and `_connect_signals()` wires submitted to `start_pipeline()`. Implementation reference: aetherlab/ui/widgets.py:782 / aetherlab/ui/main_window.py:774 / aetherlab/ui/main_window.py:794.",
-        "Empty prompts and busy/cancel state do nothing, preventing duplicate blank runs or submit while the cancel button is active.",
+        "`CommandBar._submit()` trims the submitted prompt while retaining the exact draft for recovery, emits once and clears only when Run is visible and enabled. Return, Run and Ctrl+Return share the same path to `start_pipeline()`. Implementation reference: aetherlab/ui/command_bar.py / aetherlab/ui/main_window.py.",
+        "Blank, busy and exhausted-allowance submissions do nothing. A quota storage refusal keeps the exact draft for retry; cancellation or failure restores it after cleanup without replacing a newer draft.",
         "scripted-ui",
     ),
     "F13": _story_tuple(
-        "US-F13: As P1 Student, no AI key, when I open Examples and choose a prompt, I expect the prompt field to fill and focus without starting a run. Preconditions: command bar is visible. Steps: 1. Click Examples. 2. Pick a listed prompt. 3. Confirm it appears in the field and focus returns there.",
+        "US-F13: As P1 Student, no AI key, I expect ten school-physics examples in the selected kk/ru/en language with matching numerical conditions. Steps: 1. Select a language. 2. Open Examples and choose any item. 3. Confirm the full prompt and input focus without starting a run. 4. Switch language and reopen; dismissing preserves the draft.",
         "P1",
-        "`CommandBar._show_examples_menu()` creates a QMenu from `EXAMPLE_PROMPTS`, truncates long labels for display, anchors the menu above the button, and `_pick_example()` writes the full prompt into the input and focuses it. Implementation reference: aetherlab/ui/widgets.py:609 / aetherlab/ui/widgets.py:745 / aetherlab/ui/widgets.py:760.",
+        "`CommandBar._show_examples_menu()` chooses ten authored school-physics prompts from `EXAMPLE_PROMPTS_BY_LANGUAGE` using the current language, truncates only menu labels, anchors above the button, and `_pick_example()` fills and focuses the input. All language versions use the same physical conditions and numbers; no official exam provenance is claimed. Implementation reference: aetherlab/ui/command_bar.py.",
         "If the menu is dismissed without choosing, no prompt is changed and no run starts.",
         "scripted-ui",
     ),
@@ -1499,14 +1667,14 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "US-F14: As P1 Student, no AI key, when I choose Draft, Standard, or High, I expect the selected render quality to be passed to Manim as l, m, or h. Preconditions: command bar is visible. Steps: 1. Select each quality. 2. Read `get_render_quality()`. 3. Start a run and inspect worker render_quality.",
         "P1",
         "`CommandBar._QUALITIES` maps Draft/Standard/High to `l/m/h`; `get_render_quality()` returns the current flag with Draft fallback, `set_quality()` selects by flag, and `MainWindow.start_pipeline()` passes the flag to `PipelineWorker`. Implementation reference: aetherlab/ui/widgets.py:640 / aetherlab/ui/widgets.py:764 / aetherlab/ui/widgets.py:769 / aetherlab/ui/main_window.py:1326.",
-        "Unknown quality text falls back to Draft (`l`) rather than passing an invalid Manim quality flag.",
-        "harness",
+        "An unknown label or programmatic flag preserves the current valid selection. Only a combo with no selected data falls back to Draft (`l`); an invalid flag is never passed to the worker.",
+        "scripted-ui",
     ),
     "F15": _story_tuple(
         "US-F15: As P1 Student, no AI key, when a run starts, I expect Run/Learn to disappear, Cancel to appear, and the prompt field to be disabled until the run ends or is cancelled. Preconditions: command bar is idle. Steps: 1. Start a solve run. 2. Observe button/input state. 3. Cancel or finish and observe idle state restored.",
         "P1",
-        "`CommandBar.set_busy()` hides Run and Learn, shows Cancel, and disables input; `start_pipeline()` calls it true, `_on_worker_finished()` calls it false, and `_cancel_pipeline()` resets it immediately on cancellation. Implementation reference: aetherlab/ui/widgets.py:776 / aetherlab/ui/main_window.py:1131 / aetherlab/ui/main_window.py:1326 / aetherlab/ui/main_window.py:1378.",
-        "If cancellation happens during loading, `_cancel_pipeline()` also hides the simulation loading surface and returns to the best available page.",
+        "`CommandBar.set_busy()` hides Run, Learn and Practice and disables input. Solve and Learn stay busy through actual worker cleanup, including lesson result/error delivery before finished. Cancellation and terminal lesson delivery disable further Cancel; each finished callback restores controls and new lessons re-enable Cancel. Implementation reference: aetherlab/ui/command_bar.py / aetherlab/ui/main_window.py.",
+        "Cancellation remains visibly in progress until worker cleanup finishes. Then the loading surface clears, the best available page returns, and the exact submitted question is restored for editing without overwriting a newer draft.",
         "scripted-ui",
     ),
     "F16": _story_tuple(
@@ -1533,16 +1701,16 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F19": _story_tuple(
         "US-F19: As P1 Student, no AI key, when I try to start a second solve while one is running, I expect AetherLab to refuse the duplicate run and keep the current one intact. Preconditions: `self.worker` is running. Steps: 1. Start a run. 2. Submit another prompt before it finishes. 3. Read the status bar.",
         "P1",
-        "`MainWindow.start_pipeline()` checks `self.worker.isRunning()` and returns after showing `Pipeline is already running.` before allocating a new worker. Implementation reference: aetherlab/ui/main_window.py:1326.",
+        "`MainWindow.start_pipeline()` uses `_is_running()` and returns with a localized already-running status before consuming another AI allowance or allocating a new worker. `_is_running()` also handles an already-deleted Qt worker. Implementation reference: aetherlab/ui/main_window.py.",
         "The duplicate attempt does not disconnect signals, delete the current worker, clear current progress, or enqueue a hidden second run.",
         "scripted-ui",
     ),
     "F20": _story_tuple(
         "US-F20: As P5 Returning user, when I run another solve after a previous worker finished, I expect old worker signals to be disconnected so callbacks do not multiply. Preconditions: a completed worker object may still be attached. Steps: 1. Finish one run. 2. Start another. 3. Confirm old signals are disconnected and the stale worker is scheduled for deletion.",
         "P5",
-        "`MainWindow.start_pipeline()` disconnects status/ready/failure/finished/progress signals from an existing non-running worker inside a guarded block, calls `deleteLater()`, clears `self.worker`, then constructs and wires a fresh `PipelineWorker`. Implementation reference: aetherlab/ui/main_window.py:1326.",
-        "If a signal was already disconnected or the worker was deleted, TypeError/RuntimeError is ignored and a fresh worker is still created.",
-        "harness",
+        "`MainWindow.start_pipeline()` disconnects each old worker signal independently, schedules the worker for deletion, deactivates the previous window-owned relay, and connects the fresh worker to Qt slots that accept only its own current events. Implementation reference: aetherlab/ui/main_window.py.",
+        "One already-disconnected signal does not skip cleanup of the remaining signals. An already-deleted worker does not prevent a new run. Late old-worker or cancelled-worker events cannot overwrite the current UI.",
+        "scripted-ui",
     ),
     "F21": _story_tuple(
         "US-F21: As P5 Returning user, when I close AetherLab during a solve or lesson, I expect background work to be asked to stop and the window to close without orphaning known Qt workers. Preconditions: a solve worker, lesson worker, or Ollama probe may be running. Steps: 1. Start a run. 2. Close the window. 3. Confirm workers receive cancel/wait and close continues.",
@@ -1589,22 +1757,22 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F27": _story_tuple(
         "US-F27: As P1 Student, no AI key, when solver-provided math expressions render, I expect only whitelisted numeric math to execute. Preconditions: plot payload contains expression strings and variables. Steps: 1. Compile allowed expressions. 2. Try names/calls/operators outside the whitelist. 3. Confirm unsafe syntax is rejected before evaluation.",
         "P1",
-        "`compile_expression()` limits length, normalizes `^` to `**`, parses AST in eval mode, validates only numeric constants, load names from params/t/constants/functions, whitelisted ops and functions, converts int literals to float, and evaluates with empty builtins. Implementation reference: aetherlab/services/plotting.py:62 / aetherlab/services/plotting.py:105 / aetherlab/services/plotting.py:156.",
-        "Unsafe names, calls, assignment contexts, unsupported operators, bool constants, or syntax errors raise ExprError and prevent arbitrary code execution.",
+        "`compile_expression()` and `_validate()` allow numeric AST math, seven binary/two unary operators and 15 unary functions, normalizing caret powers. Functions require exactly one argument; bare functions and NumPy out-array arguments are rejected. Runtime binds only used declared scalar parameters, preserving an explicitly declared constant override while protecting function names and t. Evaluation has empty builtins and returns copied scalar/vector/multidimensional arrays without mutating inputs.",
+        "Unsafe AST/names/calls, bare functions, invalid arity and missing/invalid numeric parameters raise ExprError; extra runtime fields cannot replace functions or undeclared constants. Actual numerical oracles and preservation tests certify this backend, not native canvas layout.",
         "harness",
     ),
     "F28": _story_tuple(
         "US-F28: As P1 Student, no AI key, when a plot expression is huge, pathological, or numerically unstable, I expect bounded failure or non-finite samples instead of a hang. Preconditions: expression compiler receives adversarial expressions or ranges. Steps: 1. Try overlong and oversized AST expressions. 2. Try overflow and division by zero. 3. Compile a plot with too-large t span.",
         "P1",
-        "`MAX_EXPR_CHARS`, `MAX_AST_NODES`, and `MAX_T_SPAN` bound expression/range size; `_IntToFloat` avoids giant integer materialization; runtime OverflowError becomes inf, ZeroDivisionError becomes nan, and scalar outputs broadcast to the sample grid. Implementation reference: aetherlab/services/plotting.py:27 / aetherlab/services/plotting.py:101 / aetherlab/services/plotting.py:115 / aetherlab/services/plotting.py:285.",
-        "Invalid complexity or range input raises ExprError; numeric non-finite outputs are left for the canvas filtering path rather than crashing compilation.",
+        "`compile_expression()` enforces inclusive 512-character/200-AST-node limits. `_IntToFloat()` rejects literals outside float range; float power overflow becomes inf, zero division becomes nan, NumPy domain outputs remain non-finite, and computed complex values raise ExprError. `compile_plot()` caps t span at 10000 and rejects a clamp that collapses at extreme float magnitudes. An actual bounded child process verifies pathological-power termination.",
+        "Invalid syntax/complexity, huge input literals/range endpoints/markers and unrepresentable intervals raise ExprError. Supported non-finite real samples remain available for canvas filtering. Native plot presentation is outside this numeric contract.",
         "harness",
     ),
     "F29": _story_tuple(
         "US-F29: As P1 Student, no AI key, when a plot payload is malformed, I expect validation to reject it and fallback plotting to remain available. Preconditions: plot payload may be explicit, parametric, legacy single-curve, or multi-curve. Steps: 1. Compile valid payloads. 2. Try wrong kind/ranges/curves. 3. Confirm fallback_plot_payload gives a deterministic damped oscillator plot.",
         "P1",
-        "`compile_plot()` requires an object kind in explicit/parametric, finite t/x/y pairs with lo < hi, clamps large t spans, compiles legacy or multi-curve entries, limits curves/points/labels, chooses the primary curve, and `fallback_plot_payload()` emits a safe multi-curve damped oscillator. Implementation reference: aetherlab/services/plotting.py:204 / aetherlab/services/plotting.py:269 / aetherlab/services/plotting.py:351.",
-        "Malformed payloads raise ExprError and the UI can use generated/domain fallback curves instead of showing an exception.",
+        "`compile_plot()` validates explicit/parametric legacy or multi-curve payloads, finite ascending required ranges, six curves, eight marker slots and forty-character curve/marker labels. It preserves styles/roles, chooses the first primary or first curve, compiles fill bounds and filters out-of-range markers. Missing/None/empty-string parametric x defaults to t; other invalid falsy x values are rejected. Legacy falsy optional x/y ranges mean auto-range. Compiled metadata/code is isolated from later payload edits; declared parameters update on evaluation. `fallback_plot_payload()` supplies the three-curve oscillator.",
+        "Malformed payloads, curve/fill/marker metadata and numeric ranges raise ExprError. Invalid numeric parametric x cannot silently become x=t. This certifies the compiler API; native fallback feedback/layout remains separate.",
         "harness",
     ),
     "F30": _story_tuple(
@@ -1629,10 +1797,10 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "harness",
     ),
     "F33": _story_tuple(
-        "US-F33: As P5 Returning user, when my Manim engine or scene status changes, I expect the scene cache to regenerate rather than replay incompatible code. Preconditions: cached SceneBundle exists. Steps: 1. Detect current engine. 2. Compare cached engine/status. 3. Confirm only compiled/rendered scenes from the current engine are reused.",
+        "US-F33: As P5 Returning user, when engine, scene status or render profile changes, I expect compatible analysis/code reused and incompatible media rebuilt. Preconditions: cached scene/video exists. Steps: 1. Compare engine/status/score. 2. Compare persisted render profile. 3. Change canvas/FPS/renderer/quality/adaptive/backend. 4. Confirm only media is rebuilt for a profile change, old files survive, and segmented scenes resume their manifest.",
         "P5",
-        "The headless pipeline and UI worker both compare cached scene engine to `current_engine` and require status in compiled/rendered before reuse; quality-score cache gating may reject low-score scenes. Implementation reference: aetherlab/services/pipeline.py:44 / aetherlab/services/pipeline.py:109 / aetherlab/ui/workers.py:97 / aetherlab/ui/workers.py:266.",
-        "Mismatched engine, unsupported status, or failed quality threshold forces scene regeneration instead of a stale visual artifact.",
+        "`AetherLabPipeline.run()` and `PipelineWorker._run_async()` check engine/status/score. A matching persisted SceneBundle.render_profile_key is additionally required for video reuse; `invalidate_rendered_media()` detaches legacy or changed-profile media while solver/RAG/code remains reusable. Runtime, direct rendering and segmented assembly record successful profile provenance. Implementation reference: aetherlab/core/render_cache.py:14 / aetherlab/services/pipeline.py:27 / aetherlab/ui/workers.py:103.",
+        "Profile mismatch never deletes the previous output or rerenders joined segment code. Unverified segmented output is incomplete rather than reported ready. Other engine/status/score incompatibility still regenerates the scene.",
         "harness",
     ),
     "F34": _story_tuple(
@@ -1784,10 +1952,10 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "harness",
     ),
     "F55": _story_tuple(
-        "US-F55: As P4 Power user, cloud rendering, when rendering on different hardware or with env overrides, I expect FPS/tier choices to match resources or explicit settings. Preconditions: psutil/env values may vary. Steps: 1. Detect tier on low/high resource profiles. 2. Set AETHERLAB_RENDER_TIER or RENDER_TIER. 3. Set AETHERLAB_MANIM_FPS or MANIM_FPS. 4. Inspect tier/fps.",
+        "US-F55: As P4 Power user, I expect render profile/FPS overrides to apply without a restart while constrained scheduling retains below-normal priority. Steps: 1. Resolve default standard/30. 2. Set legacy constrained and FPS 24. 3. Select cinematic without the FPS override. 4. Set FPS 48 and resolve again; previous returned dictionaries must remain unchanged.",
         "P4",
-        "`_detect_render_tier()` chooses cinematic 60 fps for >=16 GB and >=6 CPUs, standard 30 fps for >=10 GB, constrained 30 fps otherwise, honours forced tier values including cloud_cinematic, and lets explicit FPS env override the tier FPS. Implementation reference: aetherlab/services/manim_runtime.py:65 / aetherlab/services/manim_runtime.py:79 / aetherlab/services/manim_runtime.py:98.",
-        "Invalid forced tier values are ignored back to auto detection; invalid FPS env values fall back to tier FPS.",
+        "`get_render_tier()` resolves the shared profile lazily on every call. Legacy constrained maps to standard pixels while preserving below-normal scheduling; an explicit preset controls the look and explicit FPS remains independent. Small machines without an explicit preset can lower scheduling priority, without automatically selecting cinematic pixels on a large machine. Implementation reference: aetherlab/services/manim_runtime.py / aetherlab/core/render_profile.py.",
+        "Invalid profile/FPS input uses the shared profile's validated defaults. Previously returned tier dictionaries are not mutated by subsequent environment changes; the import-time compatibility snapshot is not used as a live control.",
         "harness",
     ),
     "F56": _story_tuple(
@@ -1924,9 +2092,9 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
         "scripted-ui",
     ),
     "F75": _story_tuple(
-        "US-F75: As P1 Student, no AI key, when I choose destinations on the sidebar rail, I expect the main workspace to map to empty/running/solve/scene/library/history appropriately. Preconditions: app window is open. Steps: 1. Select each rail item. 2. Observe emitted index. 3. Confirm pages respect result availability.",
+        "US-F75: As P1 Student, I select Home, Topics, Practice, Progress, AI, Library, History, Lab or Spider from a readable rail. Preconditions: main window is open. Steps: select each destination; inspect page/dialog/dock routing; resize between short and tall windows; confirm all nine controls remain distinct and active-state routing is preserved.",
         "P1",
-        "`SidebarNav.select()` emits `item_selected`; `MainWindow._on_sidebar_select()` maps rail indexes to workspace pages, using empty/running placeholders until results exist and showing library/history pages directly. Implementation reference: aetherlab/ui/widgets.py:162 / aetherlab/ui/widgets.py:209 / aetherlab/ui/main_window.py:892.",
+        "`SidebarNav.select()` emits the selected index. `MainWindow._on_sidebar_select()` maps nine localized destinations, opens Practice with the previous destination preserved, and toggles Spider without replacing the current workspace. `SidebarNav._apply_density()` fits nine compact/expanded buttons at 460 px and responds after tall-to-short resizing; native navigation/layout remains to be accepted.",
         "Selecting a gated or unavailable result page falls back to the empty/running page instead of exposing unusable controls.",
         "scripted-ui",
     ),
@@ -1989,9 +2157,9 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F84": _story_tuple(
         "US-F84: As P1 Student, no AI key, when a pipeline stage fails, I expect the stepper, status bar, toast, error banner, and workspace to show a recoverable failure state. Preconditions: MainWindow receives PipelineError. Steps: 1. Trigger on_failure. 2. Inspect current stage/error state. 3. Open details and retry from the visible page.",
         "P1",
-        "`MainWindow.on_failure()` hides loading, marks the current stepper stage error, disables cancellation, writes `stage failed: message` to the status bar, shows an error toast with Details, shows the simulation error banner, and returns to Solve or Empty depending on whether a prior result exists. Implementation reference: aetherlab/ui/main_window.py:1428.",
-        "Failures do not leave the run button permanently busy or the user stranded on a loading-only page.",
-        "harness",
+        "`MainWindow.on_failure()` restores the question, hides loading, freezes an error stage, disables cancellation, and shows a localized stage/context message in status and toast with Details. The banner retains the original message and technical traceback. Solve or Empty returns according to existing results; controls become idle after worker cleanup. Implementation reference: aetherlab/ui/main_window.py.",
+        "Known stages are localized in kk/ru/en, unknown stage identifiers and original diagnostics are preserved, and late events cannot replace the failure. A newer question draft is not overwritten.",
+        "scripted-ui",
     ),
     "F85": _story_tuple(
         "US-F85: As P3 Educator, cloud AI + vision critic, when I export a derivation as LaTeX, I expect a standalone document with escaped user/model content. Preconditions: a solver result exists and output path is chosen. Steps: 1. Click export LaTeX. 2. Save a .tex file. 3. Open it and inspect summary, steps, variables, and escaping.",
@@ -2349,7 +2517,7 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F135": _story_tuple(
         "US-F135: As P3 Educator, cloud AI + vision critic, when a scene is heavy, I expect render budgets and quality promotion to preserve a usable draft if final quality fails. Preconditions: render_scene_with_repair targets non-draft quality. Steps: 1. Estimate render cost. 2. Render draft/repair. 3. Promote final. 4. Force final timeout and confirm draft survives.",
         "P3",
-        "`_estimate_render_cost()` scales timeout by duration/updater/play/3D signals, render_scene halves FPS on heavy high-res scenes, and render_scene_with_repair validates/repairs at draft before final promotion, keeping a successful draft when final render fails. Implementation reference: aetherlab/services/manim_runtime.py:466 / aetherlab/services/manim_runtime.py:540 / aetherlab/services/manim_runtime.py:989.",
+        "Scene cost scales timeout; FPS reduction obeys explicit adaptive policy. Repair validates draft before promotion and keeps it when final rendering fails. Existing draft/final reuse requires matching profile provenance; a verified final avoids duplicate rendering. Implementation reference: aetherlab/services/manim_runtime.py:1560 / aetherlab/core/render_cache.py:14.",
         "Timeout repair prompts ask for load reduction without stripping the scene to an empty plot.",
         "harness",
     ),
@@ -2419,8 +2587,8 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F145": _story_tuple(
         "US-F145: As P1 Student, no AI key, when I press Learn, I expect a cancellable worker, running progress, lesson player, transcript, questions, references, chapter seeking, playground, and study-guide export. Preconditions: command bar has a topic. Steps: 1. Press Learn. 2. Watch progress. 3. Interact with LessonView tabs and chapter outline. 4. Export study guide.",
         "P1",
-        "`CommandBar.learn_requested` starts `LessonWorker`; MainWindow shows RunningView and then populates LessonView; LessonView handles inline video, transcript, _QuestionCard MCQs, references, chapter seek using rendered_chapter_indexes, interactive LiveCanvas, regenerate, and export signals. Implementation reference: aetherlab/ui/workers.py:231 / aetherlab/ui/main_window.py:1164 / aetherlab/ui/widgets.py:3523 / aetherlab/ui/widgets.py:3698 / aetherlab/ui/widgets.py:3815.",
-        "QtMultimedia absence, cancellation, or partial lesson state shows guarded messages rather than a blank lesson page.",
+        "`CommandBar.learn_requested` starts `LessonWorker`; MainWindow shows progress, retains busy controls through finished, and populates LessonView with video/transcript/questions/references/chapter seeking/playground/export actions. Localized completion copy distinguishes materials, incomplete/error, unavailable file and assembled video. New lesson content clears the previous media source. Implementation reference: aetherlab/ui/workers.py / aetherlab/ui/main_window.py / aetherlab/ui/lesson_view.py.",
+        "QtMultimedia absence and partial/failed states are guarded. Missing, empty, unreadable or directory media never retains the prior source or advertises a completed assembled video. Nonassembled bundles do not load video paths. Materials open on Text; incomplete bundles restore the exact retry topic and preserve newer input. Cancellation without new video retains the previous lesson, and repeated/terminal Cancel is disabled through cleanup. Playback/exports retain separate complete-story verification requirements.",
         "scripted-ui",
     ),
     "F146": _story_tuple(
@@ -2562,8 +2730,8 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "F165": _story_tuple(
         "US-F165: As a maintainer, when tracker artifacts drift, I expect the integrity audit to fail before commits hide the mismatch. Preconditions: generator, CSV, XLSX, result JSON, tests, and error log exist. Steps: 1. Run tracker_integrity_audit --check. 2. Modify one artifact by hand. 3. Confirm non-zero drift report.",
         "P3",
-        "`tracker_integrity_audit` imports the generator, applies results, compares CSV/XLSX exactly, checks contiguous IDs, non-empty user story/expected/story columns, valid methods/statuses/personas/phase results, test/result parity, DEFECTS consistency, and documented bug IDs. Implementation reference: tools/tracker_integrity_audit.py:1 / build_feature_tracker.py:1.",
-        "Any hand-edited tracker artifact or undocumented defect fails the gate.",
+        "`tracker_integrity_audit.audit()` imports the generator, applies results, compares CSV/XLSX exactly, checks contiguous IDs, non-empty user story/expected/story columns, valid methods/statuses/personas/phase results, test/result parity, DEFECTS consistency and both directions of bug links. Duplicate BUG table definitions and duplicate literal ERROR_FEATURE_LINKS keys are rejected before colliding records can be silently treated as one issue.",
+        "Hand-edited artifact drift, undocumented/unlinked defects and duplicate issue IDs/mapping keys fail the gate. A failed prior feature run remains visible; structural checking inside F165 permits an internally consistent REGRESSED snapshot so the repaired story can be retested.",
         "harness",
     ),
     "F166": _story_tuple(
@@ -2704,31 +2872,39 @@ STORY_OVERRIDES: dict[str, tuple[str, ...]] = {
 #            GitHub render credentials); never stamped PASS without evidence.
 # "Errors found" lists the associated BUG ids (historical or Phase-2), or None.
 PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
+    "F257": ("FAIL", "BUG-279; BUG-280", "PENDING"),
+    "F258": ("FAIL", "BUG-281; BUG-282", "PENDING"),
+    "F259": ("FAIL", "BUG-283; BUG-284", "PENDING"),
+    "F260": ("PARTIAL", "BUG-285", "PENDING"),
     # ── Batch 1: Launch / Settings / Input / Pipeline core (F01-F21) ────────
     # Audited by reading __main__.py, ui/app.py, core/settings.py end-to-end and
     # confirming each t_fNN asserts observable behaviour (real smoke subprocess,
     # settings precedence round-trips, command-bar/stepper widget interaction,
     # a real pipeline run). BUG-4/BUG-5 fixes re-verified in source.
+    "F256": ("FAIL", "BUG-266/267: UNT scaffolds inserted unrelated kinematics/12 m/answer B and official claims; generic numeric tasks were forced to show letters while unit A could satisfy the letter regex. BUG-250 follow-up: qualify the storyboard method and cite the actual duration/gate helpers, not a data field.", "PASS"),
+    "F232": ("FAIL", "BUG-259/260: independent displayed-condition oracles found 107 wrong keys beyond rounding tolerance; preserve inputs and use their visible precision and stated AC approximation.", "PASS"),
+    "F254": ("FAIL", "BUG-261/262/263/264: real database probes reproduced destructive ownership/REPLACE behaviour, missing-corpus refusal and collapsed source identities.", "PASS"),
+    "F255": ("FAIL", "BUG-265: two live PhysLab windows and no launch ownership guard; 17 real-lock/CLI, corruption, race and controlled lifecycle checks cover the repair.", "PASS"),
     "F01": ("PASS", "BUG-113", "PASS"),
     "F02": ("PASS", "None", "PASS"),
     "F03": ("PASS", "None", "PASS"),
-    "F04": ("PASS", "None", "PASS"),
-    "F05": ("PASS", "None", "PASS"),
+    "F04": ("FAIL", "BUG-225/226: watchdog logging refusals blocked launch; backoff interrupt escaped with a traceback. Ten executed recovery/child-process cases replace the old source-only probe.", "PASS"),
+    "F05": ("FAIL", "BUG-227: a broken Qt runtime was incorrectly diagnosed as an uninstalled package; distinct guard/entry-point cases now cover both.", "PASS"),
     "F06": ("PASS", "BUG-5; BUG-34", "PASS"),
     "F07": ("PASS", "BUG-44; BUG-45", "PASS"),
     "F08": ("PASS", "None", "PASS"),
-    "F09": ("PASS", "BUG-24", "PASS"),
+    "F09": ("FAIL", "BUG-24; BUG-228: malformed Qwen schema/fields produced misleading source/model/URL values; the fresh-process matrix covers typed fallback and explicit opt-in.", "PASS"),
     "F10": ("PASS", "BUG-4; BUG-42", "PASS"),
     "F11": ("PASS", "None", "PASS"),
-    "F12": ("PASS", "None", "PASS"),
-    "F13": ("PASS", "None", "PASS"),
-    "F14": ("PASS", "None", "PASS"),
-    "F15": ("PASS", "BUG-11", "PASS"),
+    "F12": ("FAIL", "BUG-229: quota storage refusal, cancellation and failure discarded the exact question; actual Qt retry/recovery cases now preserve it.", "PASS"),
+    "F13": ("FAIL", "BUG-239: all selected languages showed English examples, including university physics and pure mathematics outside the school preparation flow. Use ten localized school-physics prompts with identical conditions and retain menu selection/dismissal behaviour.", "PASS"),
+    "F14": ("FAIL", "BUG-232: inventory incorrectly described unknown quality flags as Draft fallback. BUG-234: fixed selector width clipped localized quality labels; reserve styled padding/arrow space and allow content sizing.", "PASS"),
+    "F15": ("FAIL", "BUG-11; BUG-232: inventory incorrectly promised immediate idle on cancellation; real QThread cleanup remains busy until finished.", "PASS"),
     "F16": ("PASS", "None", "PASS"),
-    "F17": ("PASS", "BUG-1", "PASS"),
+    "F17": ("FAIL", "BUG-1; BUG-230: cancelled timeline remained active and late events replaced terminal status; cancellation now freezes the timeline and rejects late data.", "PASS"),
     "F18": ("PASS", "BUG-49; BUG-56; BUG-114", "PASS"),
-    "F19": ("PASS", "None", "PASS"),
-    "F20": ("PASS", "None", "PASS"),
+    "F19": ("FAIL", "BUG-238: Solve could start and charge another allowance while a lesson worker was still cleaning up; guard both worker kinds before allocation or consumption.", "PASS"),
+    "F20": ("FAIL", "BUG-231: partial disconnect skipped remaining cleanup and deleted QThread prevented restart; per-signal cleanup and safe running checks are exercised.", "PASS"),
     "F21": ("PASS", "BUG-48; BUG-54", "PASS"),
     # ── Batch 2: Solver / Plot / Cache / RAG / Ingestion / Library / Scene ──
     # Audited services/plotting.py end-to-end (probed the safe expression
@@ -2778,7 +2954,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F52": ("PASS", "None", "PASS"),
     "F53": ("PASS", "None", "PASS"),
     "F54": ("PARTIAL", "BUG-115", "PASS"),
-    "F55": ("PASS", "None", "PASS"),
+    "F55": ("FAIL", "BUG-241: the catalog still claimed automatic hardware-based cinematic selection and required the obsolete constrained tier name after migration to shared profiles. Match the current lazy profile contract while verifying FPS overrides and below-normal constrained scheduling.", "PASS"),
     "F56": ("PASS", "BUG-55", "PASS"),
     "F57": ("PASS", "BUG-21", "PASS"),
     "F58": ("PASS", "None", "PASS"),
@@ -2807,7 +2983,7 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F81": ("PASS", "None", "PASS"),
     "F82": ("PASS", "None", "PASS"),
     "F83": ("PASS", "None", "PASS"),
-    "F84": ("PASS", "None", "PASS"),
+    "F84": ("FAIL", "BUG-233: English error wrappers and stage IDs appeared in Russian/Kazakh UI; localized context now preserves original technical diagnostics.", "PASS"),
     "F85": ("PASS", "None", "PASS"),
     "F86": ("PASS", "BUG-10; BUG-57", "PASS"),
     "F87": ("PASS", "None", "PASS"),
@@ -2883,11 +3059,11 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
     "F142": ("PASS", "None", "PASS"),
     "F143": ("PASS", "BUG-9; BUG-23; BUG-44; BUG-45", "PASS"),
     "F144": ("PASS", "None", "PASS"),
-    "F145": ("PASS", "BUG-8; BUG-9", "PASS"),
+    "F145": ("FAIL", "BUG-8; BUG-9; BUG-235: Learn discarded its exact topic on refusal/failure/cancellation and could restore a previous Solve draft; keep separate lesson draft ownership and preserve newer input.", "PASS"),
     "F146": ("PASS", "None", "PASS"),
     "F147": ("PASS", "BUG-120", "PASS"),
     "F149": ("PASS", "None", "PASS"),
-    "F150": ("PASS", "BUG-56", "PASS"),
+    "F150": ("FAIL", "BUG-56; BUG-236: an empty cancelled lesson replaced the previous lesson and always selected the lesson page; preserve the valid prior result or return to Empty.", "PASS"),
     "F151": ("PASS", "None", "PASS"),
     "F152": ("PASS", "None", "PASS"),
     "F153": ("PARTIAL", "BUG-19", "PASS"),
@@ -3004,6 +3180,81 @@ PHASE_RESULTS: dict[str, tuple[str, str, str]] = {
 # symptoms and fixes live in ERRORS_FOUND.md; this map keeps each logged issue
 # attached to the canonical user story that exercises its behavior.
 ERROR_FEATURE_LINKS: dict[str, tuple[str, str]] = {
+    "BUG-273": ("F165", "legacy-phase compatibility treated an explicit null phase4_status as an absent field and falsely promoted acceptance; require every present phase field to be PASS while preserving genuinely absent legacy fields"),
+    "BUG-274": ("F06", "tracker described a 900-second ceiling and an old model-policy docstring claimed hidden timeout floors, although runtime bounds are 5–1800 with authoritative explicit values; align descriptions and check actual bounds"),
+    "BUG-275": ("F10", "active-provider labels trusted stale Ollama presets, model names and URL substrings over the resolved endpoint; classify the parsed hostname/port and default SDK endpoint, preserve values and never expose keys"),
+    "BUG-276": ("F08", "provider-source summary missed URL-only environment overrides and legacy DASHSCOPE/model/URL fields, and let a saved Ollama preset hide higher-tier saved fields; summarize the highest tier actually used while retaining exact separate key origin"),
+    "BUG-277": ("F165", "settings acceptance trusted listed checks without retained raw execution evidence and bound stale generated CSV contracts; persist and verify exact JUnit nodes/modules, log, isolation hook, runtime, current code contracts and source hashes, including cache reuse"),
+    "BUG-278": ("F10", "catalog still expected a DashScope label for the owned dashscope.example URL after endpoint-based identity repair; assert generic endpoint plus unchanged Qwen model and exact credential source"),
+    "BUG-279": ("F257", "incoming Spider called an async provider without awaiting and sent raw temperature values; preserve the shared-tree async adapter and use the actual selected model's temperature/pathway policy, with client cleanup"),
+    "BUG-280": ("F257", "invalid, empty or non-boolean model diagnoses were treated as a clean frame; require an explicit boolean diagnosis and reject truncated replies"),
+    "BUG-281": ("F258", "checking only +++ paths allowed an extra deletion, binary, mode or rename section to escape target validation; validate every diff block and matching headers before Git runs"),
+    "BUG-282": ("F258", "second-resolution backup directories could overwrite a preceding repair backup; add a unique per-operation suffix"),
+    "BUG-283": ("F259", "Spider's background task discarded cancellation when calling the service, permitting later source lookup/repair after a cancelled diagnosis; forward the event and check between stages; in-flight Git interruption remains open"),
+    "BUG-284": ("F259", "every unrepaired result was labelled as no visible error even when a diagnosis found an error without a safe patch; display the actual unrepaired summary"),
+    "BUG-285": ("F260", "Spider launched Ruff, ripgrep and Git without the app's Windows hidden-process policy, risking repeated console flashes in watch mode; use subprocess_kwargs for all four tool invocations"),
+    "BUG-286": ("F133", "incoming Spider text subprocess calls omitted UTF-8 and replacement decoding, violating the global Unicode-path contract; set encoding/errors on Ruff, ripgrep and both Git calls and check a real Kazakh-path lookup"),
+    "BUG-287": ("F259", "a source-only repair was labelled as a fixed live error and Watch kept scanning old imported UI objects; report that restart is required in kk/ru/en and pause Watch after a successful source patch"),
+    "BUG-288": ("F240", "the teacher-review fixture assumed real-time attempts share a second and flaked when a clock boundary changed their order; use fixed distinct completion times without weakening school/privacy assertions"),
+    "BUG-289": ("F240", "review sorted ISO text rather than actual completion instants and had input-order ties; normalize offsets/legacy UTC and sort equal instants by name while preserving display strings"),
+    "BUG-290": ("F75", "the ninth navigation item raised layout minima above the density threshold, preventing short-mode entry and later shrinking; bootstrap density, remove the circular minimum constraint and fit tight buttons in both rail modes"),
+    "BUG-291": ("F27", "unvalidated NumPy call arity allowed an out array to mutate the shared sample grid and accepted bare function values; require unary calls and reject function objects before evaluation"),
+    "BUG-292": ("F27", "runtime parameters could overwrite functions or undeclared constants and unused nonnumeric values broke unrelated curves; bind only used declared scalar parameters, keeping math functions and t reserved"),
+    "BUG-293": ("F28", "huge literals/range endpoints/marker times and computed complex math escaped as raw OverflowError/TypeError; produce explicit numeric-domain errors and retain supported real inf/nan handling"),
+    "BUG-294": ("F29", "numeric zero, False or empty objects in parametric x silently became x=t in legacy and multi-curve payloads; preserve missing/empty-string defaults and reject invalid non-string fields"),
+    "BUG-295": ("F28", "a capped t span could round its upper bound back to its enormous lower bound, producing a zero-width range; reject unrepresentable capped intervals"),
+    "BUG-297": ("F230", "startup and provider readiness status stayed in English under Kazakh/Russian; localize provider, settings, Ollama, and explicit Spider-ready messages and refresh active readiness text on language change"),
+    "BUG-296": ("F259", "an undocumented AETHERLAB_SPIDER_CRAWL environment flag opened the Spider dock and started a project crawl on app launch, contrary to the explicit opt-in story; remove the startup hook and keep Spider behind its navigation action"),
+    "BUG-298": ("F230", "the Ollama status regression inherited the workstation's provider/model environment, so _enable_ollama reloaded MiniMax instead of the test's detected model; clear provider aliases in the isolated test profile"),
+    "BUG-266": ("F256", "new UNT scaffolds invented a kinematics law, 12 m, key B and official-task claims for unrelated topics; remove fabricated content, label practice and prevent model self-certification of source status"),
+    "BUG-267": ("F256", "UNT scene policy demanded an answer letter even for open numeric problems and matched unit A as a key; letters are conditional on supplied choices/key and the optional strict gate requires an answer-labelled letter"),
+    "BUG-265": ("F255", "manual and scheduled watchdog launches could construct duplicate PhysLab windows for one profile; acquire a process-aware profile lock before any window import/construction and return cleanly for duplicates"),
+    "BUG-259": ("F232", "AC keys used exact sqrt(2) despite the stated 1.414 approximation; calculation and worked substitution now use the supplied approximation"),
+    "BUG-260": ("F232", "repeated electrostatic/relativity inputs were displayed to four significant digits but computed/substituted at hidden precision; normalize inputs through their visible representation before both operations"),
+    "BUG-261": ("F254", "sync deleted every row outside the current bank and blindly overwrote foreign ID collisions; validate ownership, preserve unmanaged rows and retire only previously managed records"),
+    "BUG-262": ("F254", "INSERT OR REPLACE deleted/reinserted question and metadata rows, resetting custom columns and cascading notes; update versioned fields with UPSERT while retaining row identity"),
+    "BUG-263": ("F254", "a fresh database without physics_pages failed before any question sync; an absent corpus is optional while errors in an existing corpus still abort safely"),
+    "BUG-264": ("F254", "page candidates with the same filename/page from different source paths collapsed into one; use source path, filename and page as identity with deterministic ordering"),
+    "BUG-257": ("F233", "magnetic/photon f-strings consumed negative-exponent braces, so typesetting placed the final digit on the baseline; escape literal braces and verify all generated steps plus actual equation images"),
+    "BUG-258": ("F233", "nanometre solution steps reused the conversion constant 1 nm as the unknown and produced false equalities for other sizes; solve for length l while preserving every question, choice and answer key"),
+    "BUG-255": ("F227", "Review mistakes bypassed the saved-attempt decision and overwrote interrupted practice/mock/review sessions; share the Resume/Start again/Cancel resolver before starting a replacement"),
+    "BUG-256": ("F238", "clear_active_session intentionally swallowed unlink failures, so Start again proceeded despite a retained read-only snapshot; confirm removal before replacement and show a distinct localized restart error with retry"),
+    "BUG-254": ("F226", "clearing all multiple/matching choices retained the prior saved response and could award stale points on navigation, autosave, close or finish; capture None explicitly while preserving checked/pending commits, partial credit and safe write retry"),
+    "BUG-253": ("F165", "generic Render templates invented AI/UI-retry requirements for the encoder command and video-failure handling for PDF, formula-review and language stories; use explicit code-derived boundary contracts for F253/F190/F220/F233/F247"),
+    "BUG-252": ("F249", "incoming 1440p support updated bundled workflow choices but omitted the shipped workflow, failing worker parity; align shipped quality choices with the bundled l/m/h/p/k contract"),
+    "BUG-251": ("F171", "candidate fan-out catalog fixture stubbed only _render_once, allowing real preflight/LLM repair and a rejected provider request; stub the complete scorer renderer and guard against provider/preflight traffic"),
+    "BUG-250": ("F165", "implementation references matched unrelated global acronym constants such as FPS and displaced declared source modules; restrict resolution to declared implementations and explicit repository re-exports, with per-source fallback references"),
+    "BUG-248": ("F251", "adaptive policy changed real render FPS but was omitted from profile/chapter/segment identities; identity now includes adaptive policy while excluding resource-only limits"),
+    "BUG-249": ("F33", "session/worker cache and runtime fast path reused video without render-profile provenance; persist successful profile keys, retain reusable analysis/code, rebuild changed or legacy media, and protect segmented assembly"),
+    "BUG-244": ("F251", "saved settings forced adaptive=True even for cinematic defaults; missing/invalid policy now inherits the preset and explicit valid booleans remain effective; fallback notices use the actual starting FPS"),
+    "BUG-245": ("F249", "cloud dispatch/cache identity omitted custom dimensions and media checks omitted requested FPS; worker v8 transports the canvas, validates dimensions/FPS and aligns cache/ledger lookup"),
+    "BUG-246": ("F251", "odd validated canvas dimensions failed actual YUV420p encoding; normalize to even dimensions and record the normalization in profile provenance"),
+    "BUG-247": ("F249", "downloaded bytes overwrote a prior video before validation; validate an isolated staged file and atomically replace only on success, cleaning rejected staging files"),
+    "BUG-243": ("F145", "incomplete/error lesson bundles announced success and new materials retained the previous lesson's media; localized result-specific feedback and source reset keep content/file ownership aligned, while empty cancellation preserves the prior lesson"),
+    "BUG-242": ("F145", "lesson result delivery advertised idle before QThread.finished and repeated cancellation stayed enabled; retain busy/input guards through cleanup, disable terminal/repeated Cancel and restore the next lesson's controls"),
+    "BUG-241": ("F55", "stale inventory/test required the old hardware tier name and auto-cinematic policy; describe and verify fresh shared profiles, legacy constrained priority and independent FPS overrides"),
+    "BUG-239": ("F13", "Examples ignored the selected language and included off-topic advanced/mathematics prompts; ten authored school-physics examples now follow kk/ru/en with matching conditions and numerical data"),
+    "BUG-240": ("F165", "ordinary audit checks repeatedly launched visible Windows Qt acceptance windows; both catalog and runner now require an explicit visible-test opt-in"),
+    "BUG-235": ("F145", "Learn lost the exact topic on allowance refusal, failure or cancellation and reused a previous Solve draft; track the lesson draft separately and preserve newer input"),
+    "BUG-236": ("F150", "empty cancellation installed an unusable last lesson and always opened the lesson page; retain a valid previous lesson or return to the empty page while preserving partial-video routes"),
+    "BUG-237": ("F145", "late or queued prior-lesson signals overwrote failure or a fresh lesson; use a current-worker window-owned Qt relay, independent disconnects and safe deleted-lesson wrapper checks"),
+    "BUG-238": ("F19", "Solve could allocate a second worker and charge another allowance while a lesson worker was still cleaning up; guard both worker kinds before consumption or allocation"),
+    "BUG-233": ("F84", "failure status/toast wrappers exposed English stage identifiers and 'failed' in Russian/Kazakh UI; known stages and context are localized while original error details and unknown stage identifiers are preserved"),
+    "BUG-234": ("F14", "fixed quality selector width clipped Standard and localized labels; use sufficient minimum space for styled padding and arrow with content-based sizing"),
+    "BUG-229": ("F12", "exact submitted draft was lost after quota storage refusal, cancellation or pipeline failure; retain it for retry without replacing newer user input"),
+    "BUG-230": ("F17", "cancelled timeline kept pulsing and late status/progress overwrote cancelling or error state; terminal timeline state and current-worker Qt relay reject late data"),
+    "BUG-231": ("F20", "one disconnected signal skipped remaining old-worker cleanup and a deleted QThread raised before restart; independent disconnects and a safe running guard preserve restart"),
+    "BUG-232": ("F14", "inventory contracts misstated unknown-quality fallback and immediate cancellation idle; corrected from actual combo and QThread behaviour, with no fabricated application bug"),
+    "BUG-227": ("F05", "a broken Qt runtime was reported as an uninstalled PyQt6 package; guard and actual CLI entry point now distinguish missing-package from load/repair failure without a traceback"),
+    "BUG-228": ("F09", "non-object Qwen JSON and malformed model/baseUrl/envKey fields were accepted or stringified; malformed model/URL tuples are rejected without inheriting credentials, while valid opt-in, precedence and unchanged input are preserved"),
+    "BUG-225": ("F04", "watchdog log directory/file creation at import could prevent all launching and crash recovery on read-only storage; logging is now delayed and best-effort"),
+    "BUG-226": ("F04", "Ctrl+C during restart backoff escaped with a traceback; both child execution and backoff now stop cleanly without relaunch"),
+    "BUG-209": ("F215", "long catalog fixture names exceeded nested Windows paths and repeated plain invocations reused old state; compact per-invocation UUID/index folders preserve every original assertion"),
+    "BUG-224": ("F54", "legacy batch render validation depended on an unrelated cached MP4; it now creates an isolated scene and decodes its own new output, while pytest collection no longer executes legacy run_check jobs"),
+    "BUG-220": ("F07", "invalid UTF-8 in app configuration, opted-in Qwen settings or legacy env raised an uncaught decoding error; readers now fall back without rewriting the corrupt input"),
+    "BUG-221": ("F07", "saving after a configuration read refusal treated it as empty and overwrote prior values; read/modify/write now requires a successful read or a genuinely missing/corrupt file"),
+    "BUG-222": ("F10", "settings/Ollama save failures escaped the UI callback and discarded the settings draft; localized errors retain entries for retry/cancel without claiming activation on failure"),
+    "BUG-223": ("F11", "blank or relative LOCALAPPDATA bound default data and Chroma paths to the launch folder; invalid values now fall back to a stable per-user home path"),
     "BUG-173": ("F233", "mock solutions were empty and completed practice/mock review omitted typeset math; all 40 mock items now have shared equations rendered in review and PDF with per-attempt image resources"),
     "BUG-174": ("F226", "Qt stock Yes/No labels remained English in Kazakh/Russian exam prompts; explicit localized Resume, Start again, Cancel, Finish and Continue labels retain safe defaults"),
     "BUG-175": ("F238", "closing or escaping Resume could act as No and discard saved answers; Cancel now preserves exact saved bytes, and incompatible-bank resume diagnoses rather than replacing the attempt"),
@@ -3096,6 +3347,11 @@ ERROR_FEATURE_LINKS: dict[str, tuple[str, str]] = {
     "BUG-98": ("F194", "symbolic scale factors were accepted without proving nonzero; regression in tests/test_bugcheck_regressions.py"),
     "BUG-99": ("F141", "a complete authored lesson was discarded when optional scaffolds were absent; regression in the lesson-planner suite"),
     "BUG-100": ("F194", "unchecked derivation records were omitted from aggregate verification; regression in tests/test_upgrade_missions.py"),
+    "BUG-268": ("F106", "the timing-repair regression's scene-lint stub rejected newly forwarded UNT/portrait context; accept optional context and rerun test_pipeline_repairs_drift_only_when_it_helps"),
+    "BUG-269": ("F131", "F131 still inspected run_app after taskbar identity/icon setup moved into _run_owned_app; regression in t_f131; unique ID restores the prior colliding fixture record"),
+    "BUG-270": ("F106", "runtime now forwards unt_mode; regression fakes must accept the current generator keyword interface; unique ID restores the prior colliding adapter record"),
+    "BUG-271": ("F165", "issue IDs and literal mapping keys collided during parallel work, silently replacing feature links; audit duplicate table definitions and literal dictionary keys and preserve all records under unique IDs"),
+    "BUG-272": ("F165", "legacy catalog rows have no phase4_status field; accept their current PASS only when the complete source-bound story matrix verifies, while rejecting explicit unfinished phase statuses"),
 }
 
 
@@ -3260,20 +3516,21 @@ def set_phase4(feature_id: str, result: str) -> None:
 # Logistical/UX defects found by code review in Phase 2 (see ERRORS_FOUND.md),
 # fixed in Phase 3. Keyed by the feature they affect.
 DEFECTS: dict[str, str] = {
+    "F128": "BUG-278: the preset adapter mixed provider identity with configuration origin. A saved model comes from app config while the missing key/URL may be filled by Ollama. The repaired probe separately checks config source, no-secret key source and the resolved Ollama endpoint. Actual negative evidence: tmp/provider-preset-adapter-negative-20261015-evidence.json.",
     "F07": "BUG-44: settings.json used a direct unprotected read/merge/write and could lose concurrent saves or be truncated on interruption; it now shares the path transaction and atomic replace. BUG-45: valid JSON arrays/null caused load_app_config().items() to crash startup/save; wrong shapes now recover as empty config. Regressions in t_f07.",
     "F17": "BUG-1: duplicate reset() shadowed the clearing one; stale elapsed leaked across runs.",
     "F70": "BUG-2: update_variable used setRange(0,span)/`value>span`; dropped negative range.",
     "F38": "BUG-3: filesystem RAG score is a raw count, not 0-1; pill/label semantics broke.",
     "F36": "BUG-3: filesystem RAG score normalization (see F38).",
     "F10": "BUG-4: Settings 'Data path' field never persisted. BUG-42: Settings hid active provider/key source, temporarily bypassed env precedence after Save, and could copy the active env secret into settings.json. AppSettings now tracks exact source/shadow warning, a dedicated panel shows provider/model/source without values, the editable field uses only saved config when env is active, timeout/retry controls are visible, and Save reloads canonical precedence. Regression in t_f10.",
-    "F06": "BUG-5: llm_context_window setting was defined but unused (dead config). BUG-34: every asynchronous provider client inherited the OpenAI SDK's two automatic retries and most forced the configured timeout up to 300s, turning one slow request into three long waits. All async clients now share a bounded 5–900s timeout and explicit 0–1 retry policy; both controls honor env/app config. Regression in t_f06.",
+    "F06": "BUG-5: llm_context_window setting was defined but unused (dead config). BUG-34: every asynchronous provider client inherited the OpenAI SDK's two automatic retries and most forced the configured timeout up to 300s, turning one slow request into three long waits. All async clients now share a bounded 5–1800s client timeout and explicit 0–1 retry policy; both controls honor env/app config. Structured calls may apply a lower request cap. Regression in t_f06; BUG-274 independently checks the documented bounds.",
     "F148": "BUG-119: xfade chain double-subtracted the overlap (cum += durs[k]-d), drifting every later crossfade early and over-clipping produced-lesson segments. BUG-105: a 0.2 s minimum fade exceeded very short chapter clips, and two-decimal FFmpeg arguments drifted from full-precision seek offsets; fades now stay within the shortest segment and filter parameters retain six decimals. Regression in t_f148.",
     "F147": "BUG-120: _chapter_aspect compared chapter .id (LLM plans default to ''), tagging every id-less chapter 'setup'; now compares by object identity.",
     "F143": "BUG-9: partial lesson renders compacted successful scenes, then zipped them against all renderable chapters; surviving clips could receive the wrong narration/title. Pipeline now carries plan indexes with rendered scenes. BUG-23: lesson chapter cache accepted any existing video path, including zero-byte/corrupt MP4s; cached chapter videos now require a playable video. BUG-44: parallel chapter completions could overwrite each other's cache entries; updates now use a shared path transaction and atomic replace. BUG-45: wrong-shape plan/chapter JSON now becomes a cache miss and the next write repairs the store. BUG-103: multilingual narration referenced an out-of-scope `plan` while narrating chapters, so narration-enabled lessons failed instead of using the lesson's selected voice language. `_narrate_chapters` now receives `plan.language`; t_f143 checks localized voice selection.",
     "F145": "BUG-8/BUG-9: chapter-seek offsets use produced-video starts, and partial lessons map chapter offsets by plan index so skipped middle chapters do not mislabel surviving clips.",
     "F86": "BUG-10: compile_latex_to_pdf could return a stale PDF after a failed pdflatex run; it now removes stale output first and requires returncode 0 plus fresh output. BUG-57: PDF compilation blocked the GUI for up to 60 seconds and failure claimed a LaTeX fallback was saved without a user-selected path. It now runs in BackgroundTask, supports process cancellation, copies atomically, and saves the fallback beside the destination with its exact path in status.",
     "F09": "BUG-24: tracker copy described Qwen settings as automatic autoload, but load_settings gates Qwen reuse behind AETHERLAB_QWEN_AUTOLOAD=1; canonical wording now matches the implemented privacy guard.",
-    "F15": "BUG-11: pipeline cancellation did not explicitly clear the scene loading stack; it now calls SimulationPanel.hide_loading() during cancel.",
+    "F15": "BUG-11: cancellation left the scene loading stack visible; `_on_worker_finished()` now clears it after cleanup. BUG-232: the inventory incorrectly promised immediate idle at the cancel request; busy controls remain until the actual QThread.finished signal.",
     "F103": "BUG-13: safety gate allowed string-based runtime escape helpers (`getattr(__builtins__, 'open')`, dunder strings); these handles are now blocked. BUG-28: numpy (an allowed import) exposed raw file-I/O sinks (tofile/fromfile/frombuffer/savetxt/loadtxt/genfromtxt/load/save/memmap/DataSource) giving arbitrary host read/write with no banned name/attribute; these attribute sinks are now rejected while legitimate numpy math stays allowed. BUG-107: NumPy ndarray.dump could pickle to an arbitrary host path; block the method and cover it in t_f103.",
     "F43": "BUG-14: incremental Chroma ingestion left stale chunks when a source file shrank or changed shape; changed files now delete old path chunks before upsert.",
     "F153": "BUG-19: legacy manim-bot .env and existing gh auth sessions were ignored; settings now migrate CLOUD_RENDER_* aliases and GitHub CLI tokens without exposing secrets.",
@@ -3357,6 +3614,35 @@ for _feature_id, _note in DEFECTS.items():
 NON_FEATURE_DEFECTS: dict[str, str] = {}
 
 
+def _recorded_profile_evidence_scope(pointer) -> str:
+    """Describe a bound historical probe without promoting story acceptance."""
+    import hashlib
+    import json
+    if not isinstance(pointer, dict):
+        return ""
+    try:
+        path = (ROOT / pointer["path"]).resolve()
+        if not path.is_relative_to(ROOT.resolve()):
+            return ""
+        raw = path.read_bytes()
+        data = json.loads(raw)
+        media = data["media"]
+        if (hashlib.sha256(raw).hexdigest() != pointer["sha256"] or data["status"] != "PASS"
+                or type(data["exit_code"]) is not int or data["exit_code"] != 0 or data["workflow_version"] != "8"
+                or data["head_before"] != data["head_after"] or not data["completed_at"]
+                or data["changed_during_run"] or data["dispatch_count"] != 1
+                or data["first_status"] != "rendered" or data["cached_status"] != "rendered"
+                or (media["width"], media["height"], media["fps"], media["frame_count"]) != (960, 540, 24, 48)
+                or not media["all_frames_decoded"] or not media["moving_object"]):
+            return ""
+        output = Path(data["output"]).resolve()
+        if not output.is_relative_to(ROOT.resolve()) or hashlib.sha256(output.read_bytes()).hexdigest() != data["output_sha256"]:
+            return ""
+        return "; recorded real v8 technical scene: 960x540/24 FPS, all 48 frames decoded/moving object, same-byte cache hit, one dispatch; no educational/audio/native-player acceptance"
+    except (OSError, ValueError, TypeError, KeyError):
+        return ""
+
+
 def apply_results(results: dict[str, dict] | None = None) -> None:
     """Stamp statuses from feature_test_results.json + Phase-2 defects.
 
@@ -3423,9 +3709,12 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
             "gui": "Offscreen widget and signal checks; no native UI journey",
             "headless": "Automated service/harness checks; see result note",
         }.get(row[6], "Automated harness only")
+        if row[0] in {"F257", "F258", "F259", "F260"}:
+            scope = str(res.get("note") or "Spider contract probes not yet recorded")
         live_evidence = res.get("live_cloud_evidence")
         if isinstance(live_evidence, dict) and live_evidence.get("confirmed"):
-            scope += "; live GitHub v7: 4s 720p30 fully decoded, cache reuse and missing-output refusal"
+            scope += "; historical live GitHub v7: 4s 720p30 decoded/cache/missing-output checks; v7 evidence does not certify the current worker"
+        scope += _recorded_profile_evidence_scope(res.get("live_profile_v8_evidence"))
         native_evidence = res.get("native_ui_evidence")
         if isinstance(native_evidence, dict) and native_evidence.get("confirmed"):
             scope = scope.replace("; no native UI journey", "")
@@ -3434,7 +3723,15 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
         remaining = "Complete story-level acceptance including failure paths"
         if row[13] == "live-cloud":
             remaining = "Live cloud dispatch, artifact delivery and user playback"
-        if row[0] == "F239":
+        if row[0] == "F257":
+            remaining = "Actual vision/repair provider, transport/invalid-reply recovery and full scan-to-result acceptance"
+        elif row[0] == "F258":
+            remaining = "Crash consistency, backup/write/rollback permission failures and concurrent external edits"
+        elif row[0] == "F259":
+            remaining = "Native dock/Watch/capture disclosure, exam privacy, in-flight Git cancellation, shutdown recovery and localized results"
+        elif row[0] == "F260":
+            remaining = "Actual Ruff unavailable/timeout/error paths, large trees, cancellation while Ruff runs and native trail"
+        elif row[0] == "F239":
             remaining = "Real camera opt-in, interruption and recovery in native UI"
         elif row[0] == "F235":
             remaining = "Native profile save/cancel, avatar file picker, keyboard and layout acceptance"
@@ -3453,11 +3750,20 @@ def apply_results(results: dict[str, dict] | None = None) -> None:
         elif row[0] == "F158":
             remaining = "Native cloud setup and permission recovery; ambiguous remote outputs and full lesson playback"
         elif row[0] == "F249":
-            remaining = "Live cloud artifact delivery, packaged decoder availability, full playback and visual/audio review"
+            remaining = "Packaged decoder availability, full playback, educational visual/audio review and complete cloud failure/recovery acceptance"
         elif row[6] == "gui":
             remaining = "Native UI journey, layout, persisted state and failure paths"
         if isinstance(native_evidence, dict) and native_evidence.get("confirmed") and native_evidence.get("remaining"):
             remaining = str(native_evidence["remaining"])
+        if res.get("behaviour_acceptance_evidence"):
+            from tools.feature_acceptance import verify_acceptance
+
+            accepted, detail = verify_acceptance(ROOT, dict(zip(HEADERS, row)), res)
+            if accepted:
+                behaviour, remaining = "PASS", "None"
+                scope += "; " + detail
+            else:
+                remaining += "; full acceptance: " + detail
         FEATURES[index] = row[:17] + (checked, scope, behaviour, remaining)
 
 

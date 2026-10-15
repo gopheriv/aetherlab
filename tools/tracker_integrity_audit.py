@@ -8,6 +8,8 @@ import csv
 import importlib.util
 import json
 import re
+import sys
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,25 @@ VALID_PERSONAS = {"P1", "P2", "P3", "P4", "P5"}
 VALID_STORY_TEST_METHODS = {"harness", "scripted-ui", "manual", "live-cloud"}
 VALID_PHASE_RESULTS = {"PENDING", "PASS", "FAIL", "BLOCKED", "PARTIAL", "DEFERRED"}
 VALID_RESULTS = {"PASS", "FAIL"}
+
+
+def duplicate_literal_mapping_keys(source: str, mapping_name: str) -> list[str]:
+    """Detect source collisions before Python silently replaces earlier keys."""
+    repeated = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        else:
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == mapping_name for target in targets):
+            continue
+        if isinstance(value, ast.Dict):
+            counts = Counter(key.value for key in value.keys
+                             if isinstance(key, ast.Constant) and isinstance(key.value, str))
+            repeated.update(key for key, count in counts.items() if count > 1)
+    return sorted(repeated)
 REQUIRED_STORY_COLUMNS = [
     "Story",
     "Persona",
@@ -46,8 +67,13 @@ def _load_generator() -> Any:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load {GENERATOR}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.apply_results()
+    previous_path = list(sys.path)
+    try:
+        sys.path.insert(0, str(ROOT))
+        spec.loader.exec_module(module)
+        module.apply_results()
+    finally:
+        sys.path[:] = previous_path
     return module
 
 
@@ -107,7 +133,8 @@ def _contiguous(ids: list[str]) -> list[str]:
 
 
 def audit(
-    *, allow_pending_result: str | set[str] | None = None, include_run_status: bool = True
+    *, allow_pending_result: str | set[str] | None = None, include_run_status: bool = True,
+    require_complete_behaviours: bool = False,
 ) -> dict[str, Any]:
     issues: list[str] = []
     module = _load_generator()
@@ -243,7 +270,14 @@ def audit(
         )
 
     errors_text = ERRORS_FOUND.read_text(encoding="utf-8")
-    errors_bug_ids = set(re.findall(r"^\|\s*(BUG-\d+)\s*\|", errors_text, re.M))
+    issue_definitions = re.findall(r"^\|\s*(BUG-\d+)\s*\|", errors_text, re.M)
+    duplicate_issues = sorted(key for key, count in Counter(issue_definitions).items() if count > 1)
+    if duplicate_issues:
+        issues.append(f"Duplicate BUG definitions in ERRORS_FOUND.md: {duplicate_issues}")
+    duplicate_links = duplicate_literal_mapping_keys(GENERATOR.read_text(encoding="utf-8"), "ERROR_FEATURE_LINKS")
+    if duplicate_links:
+        issues.append(f"Duplicate literal keys in ERROR_FEATURE_LINKS: {duplicate_links}")
+    errors_bug_ids = set(issue_definitions)
     tracker_bug_ids = {
         bug_id
         for row in csv_rows
@@ -295,6 +329,10 @@ def audit(
             f"Logged BUG rows are not linked to a feature story: {unlinked_logged_bugs}"
         )
 
+    unfinished_behaviours = [row["ID"] for row in expected if row.get("Behaviour status") != "PASS"]
+    if require_complete_behaviours and unfinished_behaviours:
+        issues.append(f"Complete user-story acceptance remains open for {len(unfinished_behaviours)} stories; first: {unfinished_behaviours[:12]}")
+
     return {
         "ok": not issues,
         "issues": issues,
@@ -307,6 +345,8 @@ def audit(
         "logged_bug_count": len(errors_bug_ids),
         "linked_bug_count": len(errors_bug_ids & tracker_bug_ids),
         "unlinked_logged_bug_ids": unlinked_logged_bugs,
+        "accepted_behaviour_count": len(expected) - len(unfinished_behaviours),
+        "unfinished_behaviour_ids": unfinished_behaviours,
     }
 
 
@@ -318,6 +358,8 @@ def main() -> int:
         description="Verify tracker generator/CSV/XLSX/results/test parity."
     )
     parser.add_argument("--json", action="store_true", help="Print the full JSON report.")
+    parser.add_argument("--complete-behaviours", action="store_true",
+                        help="Require complete, current evidence for every user story as well as tracker integrity.")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -325,7 +367,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    report = audit()
+    report = audit(require_complete_behaviours=args.complete_behaviours)
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -335,7 +377,7 @@ def main() -> int:
         )
         for issue in report["issues"]:
             print(f"ISSUE {issue}")
-    return 1 if args.check and not report["ok"] else 0
+    return 1 if (args.check or args.complete_behaviours) and not report["ok"] else 0
 
 
 if __name__ == "__main__":

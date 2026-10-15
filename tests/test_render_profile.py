@@ -50,19 +50,28 @@ def _clean_profile_env(monkeypatch):
 
 
 def test_presets_cover_preview_standard_cinematic():
-    assert set(PRESETS) == {"preview", "standard", "cinematic"}
+    assert set(PRESETS) == {"preview", "standard", "cinematic", "unt", "unt_vertical"}
     assert (PRESETS["preview"].width, PRESETS["preview"].height,
             PRESETS["preview"].fps, PRESETS["preview"].quality) == (854, 480, 30, "l")
     assert (PRESETS["standard"].width, PRESETS["standard"].height,
             PRESETS["standard"].fps, PRESETS["standard"].quality) == (1280, 720, 30, "m")
     assert (PRESETS["cinematic"].width, PRESETS["cinematic"].height,
             PRESETS["cinematic"].fps, PRESETS["cinematic"].quality) == (1920, 1080, 60, "h")
+    assert (PRESETS["unt"].width, PRESETS["unt"].height,
+            PRESETS["unt"].fps, PRESETS["unt"].quality) == (1920, 1080, 30, "h")
+    assert (PRESETS["unt_vertical"].width, PRESETS["unt_vertical"].height,
+            PRESETS["unt_vertical"].fps, PRESETS["unt_vertical"].quality) == (1080, 1920, 30, "h")
 
 
 def test_cinematic_is_non_adaptive_by_default():
     assert PRESETS["cinematic"].adaptive is False
     assert PRESETS["preview"].adaptive is True
     assert PRESETS["standard"].adaptive is True
+
+
+def test_unt_presets_are_non_adaptive_by_default():
+    assert PRESETS["unt"].adaptive is False
+    assert PRESETS["unt_vertical"].adaptive is False
 
 
 def test_default_profile_is_standard_without_settings():
@@ -138,12 +147,14 @@ def test_env_renderer_overrides_settings(monkeypatch):
 
 
 def test_manim_args_always_carry_explicit_fps():
-    for preset in ("preview", "standard", "cinematic"):
+    for preset in ("preview", "standard", "cinematic", "unt", "unt_vertical"):
         args = get_effective_profile(None, preset=preset).manim_args()
         assert "--fps" in args
         assert args[args.index("--fps") + 1] == str(PRESETS[preset].fps)
     # Low quality must NOT inherit Manim's silent 15 fps default.
     assert get_effective_profile(None, preset="preview").manim_args() == ["-ql", "--fps", "30"]
+    assert get_effective_profile(None, preset="unt").manim_args() == ["-qh", "--fps", "30"]
+    assert get_effective_profile(None, preset="unt_vertical").manim_args() == ["-qh", "--fps", "30"]
 
 
 def test_low_quality_resolution_is_480p_not_manim_default():
@@ -208,7 +219,7 @@ def test_identity_key_stable_and_preset_sensitive():
     assert PRESETS["standard"].identity_key() == PRESETS["standard"].identity_key()
     assert len(PRESETS["standard"].identity_key()) == 16
     keys = {name: PRESETS[name].identity_key() for name in PRESETS}
-    assert len(set(keys.values())) == 3
+    assert len(set(keys.values())) == 5
 
 
 def test_identity_key_ignores_machine_only_limits():
@@ -252,6 +263,7 @@ def test_runtime_tier_refreshes_and_preserves_legacy_constrained_limits(monkeypa
 
 def test_runtime_hardware_changes_priority_without_raising_quality(monkeypatch):
     import psutil
+
     from aetherlab.services.manim_runtime import get_render_tier
 
     for name in _PROFILE_ENV_VARS:
@@ -270,6 +282,54 @@ def test_profile_for_quality_pins_flag():
 def test_canvas_filter_normalizes_to_profile():
     filt = PRESETS["cinematic"].canvas_filter()
     assert "scale=1920:1080" in filt and "fps=60" in filt and "format=yuv420p" in filt
+
+
+# ── UNT presets ─────────────────────────────────────────────────────────────
+
+
+def test_unt_preset_resolves_1080p30():
+    profile = get_effective_profile(None, preset="unt")
+    assert (profile.preset, profile.width, profile.height, profile.fps,
+            profile.quality, profile.renderer) == ("unt", 1920, 1080, 30, "h", "cairo")
+    assert profile.adaptive is False
+
+
+def test_unt_vertical_bypasses_quality_dims():
+    # Manim -q flags are landscape-only; portrait must keep 1080x1920
+    # instead of QUALITY_DIMS["h"] (1920x1080).
+    profile = get_effective_profile(None, preset="unt_vertical")
+    assert (profile.width, profile.height, profile.fps) == (1080, 1920, 30)
+    assert "preset:unt_vertical" in profile.source
+    assert profile.manim_args() == ["-qh", "--fps", "30"]
+
+
+def test_env_preset_unt_and_ent_mapping(monkeypatch):
+    monkeypatch.setenv("AETHERLAB_RENDER_PRESET", "unt")
+    assert get_effective_profile(None).preset == "unt"
+    monkeypatch.setenv("AETHERLAB_RENDER_PRESET", "unt_vertical")
+    profile = get_effective_profile(None)
+    assert (profile.preset, profile.width, profile.height) == ("unt_vertical", 1080, 1920)
+    monkeypatch.setenv("AETHERLAB_RENDER_PRESET", "ent")
+    assert get_effective_profile(None).preset == "unt"
+
+
+def test_settings_preset_unt_used_when_no_env():
+    profile = get_effective_profile(SimpleNamespace(render_preset="unt"))
+    assert (profile.preset, profile.width, profile.height, profile.fps) == ("unt", 1920, 1080, 30)
+    vertical = get_effective_profile(SimpleNamespace(render_preset="unt_vertical"))
+    assert (vertical.width, vertical.height) == (1080, 1920)
+
+
+def test_unt_presets_never_downgrade():
+    effective, notice = adapt_profile_for_cost(PRESETS["unt"], 9.9)
+    assert (effective.fps, notice) == (30, None)
+    effective, notice = adapt_profile_for_cost(PRESETS["unt_vertical"], 9.9)
+    assert (effective.fps, notice) == (30, None)
+
+
+def test_canvas_filter_unt_vertical():
+    filt = PRESETS["unt_vertical"].canvas_filter()
+    assert "scale=1080:1920" in filt and "fps=30" in filt
 
 
 # ── assembly: explicit quality must survive ─────────────────────────────────

@@ -76,13 +76,14 @@ class AppSettings:
     # Render profile (Agent 1): single source of truth lives in
     # aetherlab/core/render_profile.py. These fields persist the preset and
     # explicit overrides; env vars (AETHERLAB_*) always win at resolve time.
-    render_preset: str = "standard"  # preview | standard | cinematic
+    render_preset: str = "standard"  # preview | standard | cinematic | unt | unt_vertical
     render_quality: str = ""  # explicit Manim -q flag (l/m/h/k); "" = preset default
     render_width: int = 0  # 0 = derive from quality/preset
     render_height: int = 0  # 0 = derive from quality/preset
     render_fps: int = 0  # 0 = preset default; explicit --fps otherwise
     render_renderer: str = ""  # cairo | opengl; "" = cairo default
-    adaptive_quality: bool = True  # allow reported fps fallback on heavy scenes
+    adaptive_quality: bool | None = None  # None inherits the selected preset
+    unt_mode: bool | None = None  # None auto-enables on unt/unt_vertical presets
     render_max_local: int = 0  # 0 = auto (cpu_count//2 clamped 1..4)
     render_below_normal: bool = False  # legacy constrained-tier priority
     render_timeout_scale: float = 1.0
@@ -205,10 +206,12 @@ def load_settings() -> AppSettings:
         or legacy_api_key
         or qwen.get("api_key")
     )
+    env_base_url = _first_env("AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
+    legacy_base_url = _first_mapping(legacy_env, "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
     base_url = (
-        _first_env("AETHERLAB_OPENAI_BASE_URL", "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
+        env_base_url
         or app_cfg.get("base_url")
-        or _first_mapping(legacy_env, "OPENAI_BASE_URL", "GPT_BASE_URL", "LLM_BASE_URL")
+        or legacy_base_url
         or qwen.get("base_url")
     )
 
@@ -236,14 +239,18 @@ def load_settings() -> AppSettings:
         else ""
     )
 
-    if env_model or env_api_key_name:
+    # Fields resolve independently. This summary names the highest tier used
+    # by any provider field; api_key_source separately identifies the key.
+    if env_model or env_api_key_name or env_base_url:
         source = "environment"
-    elif preset == "ollama":
-        source = "ollama-local"
     elif app_cfg.get("api_key") or app_cfg.get("model") or app_cfg.get("base_url"):
         source = str(app_config_path())
-    elif legacy_env and (legacy_env.get("OPENAI_API_KEY") or legacy_env.get("GPT_API_KEY")):
+    elif legacy_model or legacy_api_key_name or legacy_base_url:
         source = str(_legacy_env_path() or "legacy manim-bot .env")
+    elif any(qwen.get(name) for name in ("model", "api_key", "base_url")):
+        source = qwen.get("source", "Qwen settings")
+    elif preset == "ollama":
+        source = "ollama-local"
     else:
         source = qwen.get("source", "environment")
 
@@ -439,11 +446,14 @@ def load_settings() -> AppSettings:
         render_renderer=_render_renderer(
             os.getenv("AETHERLAB_MANIM_RENDERER") or app_cfg.get("render_renderer")
         ),
-        adaptive_quality=_as_bool(
+        adaptive_quality=_optional_render_bool(
             os.getenv("AETHERLAB_ADAPTIVE_QUALITY"),
             os.getenv("AETHERLAB_RENDER_ADAPTIVE"),
             app_cfg.get("adaptive_quality"),
-            default=True,
+        ),
+        unt_mode=_optional_render_bool(
+            os.getenv("AETHERLAB_UNT_MODE"),
+            app_cfg.get("unt_mode"),
         ),
         render_max_local=_as_int(
             os.getenv("AETHERLAB_LOCAL_RENDER_LIMIT"),
@@ -575,6 +585,21 @@ def _legacy_env_path() -> Path | None:
     return None
 
 
+def _optional_render_bool(*values) -> bool | None:
+    """Only explicit valid policy values override a render preset's default."""
+    for value in values:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"0", "false", "no", "off"}:
+            return False
+        if text in {"1", "true", "yes", "on"}:
+            return True
+    return None
+
+
 def _as_bool(*values, default: bool) -> bool:
     """First non-None value coerced to bool ('0'/'false'/'no'/'off' → False)."""
     for v in values:
@@ -623,6 +648,7 @@ def _render_preset(value: str | None) -> str:
         "cinematic": "cinematic", "cloud_cinematic": "cinematic", "high": "cinematic",
         "standard": "standard", "constrained": "standard",
         "preview": "preview", "draft": "preview", "low": "preview",
+        "unt": "unt", "unt_vertical": "unt_vertical", "ent": "unt",
         "auto": "standard", "": "standard",
     }
     return mapping.get(raw, "standard")
@@ -630,7 +656,7 @@ def _render_preset(value: str | None) -> str:
 
 def _render_quality(value: str | None) -> str:
     raw = str(value or "").strip().lower().lstrip("-q")
-    return raw if raw in {"l", "m", "h", "k"} else ""
+    return raw if raw in {"l", "m", "h", "p", "k"} else ""
 
 
 def _render_renderer(value: str | None) -> str:

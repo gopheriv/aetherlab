@@ -109,3 +109,43 @@ def camera_static_hold() -> dict:
     that need a move should key it to a beat boundary with :func:`ease_in_out`.
     """
     return {"mode": "static", "ease": "ease_in_out"}
+
+
+def mathtex_or_text(
+    var: str,
+    latex: str,
+    fallback: str,
+    *,
+    scale: float = 0.6,
+    color: str = "WHITE",
+) -> str:
+    """Source lines for a MathTex formula with a Text fallback (codegen helper).
+
+    Generated scenes run in isolated Manim workers that may lack LaTeX, so a
+    bare ``MathTex`` would crash the render there. The emitted snippet tries
+    the typeset formula and falls back to a plain-text rendering — formulas
+    always appear, typeset when possible. Builders inline the returned lines
+    into their template (generated code cannot import :mod:`aetherlab`).
+
+    ``latex`` is the raw math string (no ``$`` needed — ``MathTex`` adds math
+    mode); ``fallback`` is the unicode-approximation Text shown without LaTeX.
+
+    Sibling: ``problems/_kit.py`` ships an ``eq()`` scene-side helper with the
+    same try-MathTex-fall-back-to-Text idea for the problems/* video family
+    (which pastes HELPERS via ``fill``). This one serves the curated
+    .format-template components instead — same contract, different layer.
+    """
+    name = str(var or "formula").strip() or "formula"
+    try:
+        gain = float(scale)
+    except (TypeError, ValueError):
+        gain = 0.6
+    paint = str(color or "WHITE").strip() or "WHITE"
+    return (
+        f"try:\n"
+        f"    {name} = MathTex({latex!r})\n"
+        f"except Exception:  # noqa: BLE001 — no LaTeX in this worker\n"
+        f"    {name} = Text({fallback!r})\n"
+        f"{name}.scale({gain}).set_color({paint})\n"
+        f"{name}.set_z_index(5)"
+    )

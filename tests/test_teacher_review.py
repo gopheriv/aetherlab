@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 
@@ -31,7 +32,14 @@ def _mock(path, *, score: int, proctor_enabled: bool, events=None, full_mock=Tru
     )[-1]
 
 
-def test_local_review_shows_only_school_full_mocks_and_allowlisted_signals(tmp_path):
+def test_local_review_shows_only_school_full_mocks_and_allowlisted_signals(tmp_path, monkeypatch):
+    import aetherlab.services.ent_practice_progress as progress
+    moments = iter(datetime(2026, 1, 1, 12, 0, second, tzinfo=timezone.utc) for second in (3, 2, 1, 0))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(moments)
+    monkeypatch.setattr(progress, "datetime", Clock)
     store = StudentProfileStore(tmp_path / "profiles", default_name="Learner")
     teacher_group = store.create_profile(
         "Aruzhan", username="aruzhan", school_id="school-77", class_name="11 A",
@@ -61,6 +69,22 @@ def test_local_review_shows_only_school_full_mocks_and_allowlisted_signals(tmp_p
     assert entries[1].proctor_enabled is False
     assert entries[1].integrity_events == ()
     assert local_school_mock_review(store.list_profiles(), " ") == []
+
+
+def test_review_orders_actual_instants_across_offsets_and_breaks_ties_by_name(tmp_path):
+    store = StudentProfileStore(tmp_path / "profiles", default_name="Learner")
+    dias = store.create_profile("Dias", school_id="same")
+    aruzhan = store.create_profile("Aruzhan", school_id="same")
+    for profile, stamp in ((dias, "2026-01-01T08:00:00Z"), (aruzhan, "2026-01-01T12:00:00+05:00")):
+        _mock(profile.progress_path, score=40, proctor_enabled=False)
+        data = json.loads(profile.progress_path.read_text(encoding="utf-8"))
+        data["attempts"][-1]["completed_at"] = stamp
+        profile.progress_path.write_text(json.dumps(data), encoding="utf-8")
+    assert [entry.student_name for entry in local_school_mock_review([aruzhan, dias], "same")] == ["Dias", "Aruzhan"]
+    data = json.loads(aruzhan.progress_path.read_text(encoding="utf-8"))
+    data["attempts"][-1]["completed_at"] = "2026-01-01T13:00:00+05:00"
+    aruzhan.progress_path.write_text(json.dumps(data), encoding="utf-8")
+    assert [entry.student_name for entry in local_school_mock_review([dias, aruzhan], "same")] == ["Aruzhan", "Dias"]
 
 
 def test_camera_event_time_does_not_replace_attempt_completion_time(tmp_path):

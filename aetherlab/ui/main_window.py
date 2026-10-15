@@ -9,6 +9,7 @@ bar at the bottom. Screens follow design/ui_kits/aetherlab-desktop/.
 from __future__ import annotations
 
 import subprocess
+import weakref
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -31,6 +32,7 @@ from aetherlab.ui import icons
 from aetherlab.ui.background_task import BackgroundTask
 from aetherlab.ui.fonts import install_ui_fonts
 from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
+from aetherlab.ui.spider_panel import SpiderPanel
 from aetherlab.ui.student_views import (
     ProgressOverview,
     StudentDashboard,
@@ -74,6 +76,99 @@ PAGE_LESSON = 6
 PAGE_STUDENT_HOME = 7
 PAGE_TOPICS = 8
 PAGE_PROGRESS = 9
+
+
+_PIPELINE_COPY = {
+    "kk": {"launching": "Есепті өңдеу басталуда…", "cancelling": "Өңдеу тоқтатылуда…",
+           "cancelled": "Өңдеу тоқтатылды. Сұрақты өзгертіп, қайта көріңіз.",
+           "already_running": "Бір есеп өңделіп жатыр.", "running": "{stage} орындалуда…",
+           "complete": "Өңдеу аяқталды", "failure": "«{stage}» кезеңіндегі қате: {message}",
+           "stages": {"pipeline": "Өңдеу", "solver": "Шешу", "rag": "Іздеу", "scene": "Сахна", "render": "Рендер", "planner": "Жоспарлау", "lesson": "Сабақ"}},
+    "ru": {"launching": "Запускаем обработку…", "cancelling": "Останавливаем обработку…",
+           "cancelled": "Обработка отменена. Можно изменить вопрос и попробовать снова.",
+           "already_running": "Один запрос уже выполняется.", "running": "Выполняется: {stage}…",
+           "complete": "Обработка завершена", "failure": "Ошибка на этапе «{stage}»: {message}",
+           "stages": {"pipeline": "Обработка", "solver": "Решение", "rag": "Поиск", "scene": "Сцена", "render": "Рендер", "planner": "Планирование", "lesson": "Урок"}},
+    "en": {"launching": "Launching pipeline…", "cancelling": "Cancelling pipeline…",
+           "cancelled": "Run cancelled by user.", "already_running": "Pipeline is already running.",
+           "running": "Running {stage}…", "complete": "Pipeline complete", "failure": "{stage} failed: {message}",
+           "stages": {"pipeline": "Processing", "solver": "Solve", "rag": "Search", "scene": "Scene", "render": "Render", "planner": "Planning", "lesson": "Lesson"}},
+}
+
+_MAIN_STATUS_COPY = {
+    "kk": {
+        "no_api": "API кілті бапталмаған",
+        "ready": "PhysLab дайын · {provider}",
+        "settings_saved": "Баптаулар сақталды · {provider}",
+        "local_ready": "PhysLab дайын · {model} (жергілікті)",
+        "ollama_detected": "Ollama табылды — қолжетімді жергілікті модельдер: {count}.",
+        "ollama_enabled": "Ollama арқылы жергілікті AI қосылды ({model}). Модельді баптаулардан өзгертуге болады.",
+        "spider_ready": "Өрмекші дайын · экранды сканерлеу және автоматты түзету үшін басыңыз",
+    },
+    "ru": {
+        "no_api": "API-ключ не настроен",
+        "ready": "PhysLab готов · {provider}",
+        "settings_saved": "Настройки сохранены · {provider}",
+        "local_ready": "PhysLab готов · {model} (локально)",
+        "ollama_detected": "Найдена Ollama — доступно локальных моделей: {count}.",
+        "ollama_enabled": "Локальный ИИ включён через Ollama ({model}). Модель можно изменить в настройках.",
+        "spider_ready": "Spider готов · нажмите «Сканировать экран и исправить»",
+    },
+    "en": {
+        "no_api": "No API key configured",
+        "ready": "PhysLab ready · {provider}",
+        "settings_saved": "Settings saved · {provider}",
+        "local_ready": "PhysLab ready · {model} (local)",
+        "ollama_detected": "Ollama detected — {count} local model(s) available.",
+        "ollama_enabled": "Local AI enabled via Ollama ({model}). You can change the model in Settings.",
+        "spider_ready": "Spider is ready · click Scan screen + auto-fix",
+    },
+}
+
+
+def _main_status_copy(language: str, key: str, **values: object) -> str:
+    lang = normalize_language(language, "kk")
+    return _MAIN_STATUS_COPY[lang][key].format(**values)
+
+
+_LESSON_COPY = {
+    "kk": {"building": "Сабақ жасалуда…", "rebuilding": "Сабақ қайта жасалуда…",
+           "cancelling": "Сабақ тоқтатылуда…", "cancelled": "Сабақ тоқтатылды.",
+           "partial": "Сабақ тоқтатылды. Дайын бөлімдер көрсетілген; жалғастыру үшін сабақты қайта бастаңыз.",
+           "empty": "Сабақ тоқтатылды. Бұл әрекеттің бейнесі қолжетімсіз. Тақырып сақталды.",
+           "ready": "Сабақтың бейнесі дайын: «{title}». Бөлімдер: {count}.",
+           "materials": "Сабақ материалдары дайын. Бейне әлі жасалған жоқ.",
+           "incomplete": "Сабақ аяқталмады: жалпы бейне жасалмады. Материалдарды оқуға немесе қайта жасап көруге болады.",
+           "failed": "Сабақты жасау сәтсіз аяқталды. Қолжетімді материалдарды оқыңыз немесе қайта жасап көріңіз.",
+           "missing": "Сабақтың бейнефайлы қолжетімсіз. Материалдар сақталған; бейнені қайта жасап көріңіз.",
+           "planning": "Сабақ жоспары жасалмады. {detail}",
+           "offline": "Офлайн жаттығу қолжетімді. {detail}",
+           "unknown": "Сабақтың күйі расталмады: {status}. Бейненің дайын екенін растау мүмкін болмады."},
+    "ru": {"building": "Создаём урок…", "rebuilding": "Пересоздаём урок…",
+           "cancelling": "Останавливаем урок…", "cancelled": "Создание урока отменено.",
+           "partial": "Создание урока отменено. Показываем готовые главы; запустите урок снова, чтобы продолжить.",
+           "empty": "Создание урока отменено. Видео этой попытки недоступно. Тема сохранена.",
+           "ready": "Видео урока готово: «{title}». Глав: {count}.",
+           "materials": "Материалы урока готовы. Видео ещё не создано.",
+           "incomplete": "Урок не завершён: общее видео не собрано. Материалы доступны; попробуйте создать урок снова.",
+           "failed": "Не удалось создать урок. Изучите доступные материалы или попробуйте снова.",
+           "missing": "Видеофайл урока недоступен. Материалы сохранены; попробуйте создать видео снова.",
+           "planning": "Не удалось составить план урока. {detail}",
+           "offline": "Доступна офлайн-практика. {detail}",
+           "unknown": "Состояние урока не подтверждено: {status}. Готовность видео не подтверждена."},
+    "en": {"building": "Building lesson…", "rebuilding": "Rebuilding lesson…",
+           "cancelling": "Cancelling lesson…", "cancelled": "Lesson cancelled.",
+           "partial": "Lesson cancelled — showing completed chapters. Start the lesson again to continue.",
+           "empty": "Lesson cancelled. This attempt's video is unavailable. The topic was preserved.",
+           "ready": "Lesson video is ready: '{title}'. Chapters: {count}.",
+           "materials": "Lesson materials are ready. The video has not been created yet.",
+           "incomplete": "Lesson is incomplete: the combined video was not assembled. Read the available materials or try again.",
+           "failed": "Could not create the lesson. Read the available materials or try again.",
+           "missing": "The lesson video file is unavailable. Materials are preserved; try creating the video again.",
+           "planning": "Could not plan the lesson. {detail}",
+           "offline": "Offline practice is available. {detail}",
+           "unknown": "Lesson status is unconfirmed: {status}. Video readiness could not be confirmed."},
+}
 
 
 _SETTINGS_COPY = {
@@ -895,12 +990,129 @@ class _OllamaProbe(QtCore.QThread):
             self.found.emit(models)
 
 
+class _PipelineUiRelay(QtCore.QObject):
+    """Worker-owned slots are dropped with their window; no detached lambdas."""
+
+    def __init__(self, window, worker):
+        super().__init__(window)
+        self._window = weakref.ref(window)
+        self._worker = worker
+        self._active = self._accept_data = True
+
+    def _current(self, *, terminal=False):
+        window = self._window()
+        if not self._active or window is None or window.worker is not self._worker:
+            return None
+        if not terminal and (not self._accept_data or self._worker._cancelled):
+            return None
+        return window
+
+    def deactivate(self):
+        self._active = False
+
+    @QtCore.pyqtSlot(str)
+    def status(self, value):
+        if (window := self._current()) is not None:
+            window.statusBar().showMessage(value)
+
+    @QtCore.pyqtSlot(int, str)
+    def progress(self, value, text):
+        if (window := self._current()) is not None:
+            window._on_progress(value, text)
+
+    @QtCore.pyqtSlot(object)
+    def plan(self, value):
+        if (window := self._current()) is not None: window.on_plan_ready(value)
+
+    @QtCore.pyqtSlot(object)
+    def solver(self, value):
+        if (window := self._current()) is not None: window.on_solver_ready(value)
+
+    @QtCore.pyqtSlot(object)
+    def rag(self, value):
+        if (window := self._current()) is not None: window.on_rag_ready(value)
+
+    @QtCore.pyqtSlot(object)
+    def scene(self, value):
+        if (window := self._current()) is not None: window.on_scene_ready(value)
+
+    @QtCore.pyqtSlot(object)
+    def render(self, value):
+        if (window := self._current()) is not None: window.on_render_ready(value)
+
+    @QtCore.pyqtSlot(object)
+    def result(self, value):
+        if (window := self._current()) is not None: window.on_pipeline_finished(value)
+
+    @QtCore.pyqtSlot(object)
+    def failure(self, value):
+        if (window := self._current()) is not None:
+            self._accept_data = False
+            window.on_failure(value)
+
+    @QtCore.pyqtSlot()
+    def finished(self):
+        window = self._current(terminal=True)
+        self._active = False
+        if window is not None:
+            window._on_worker_finished()
+
+
+class _LessonUiRelay(QtCore.QObject):
+    """Route only the current lesson's live events to its owning window."""
+
+    def __init__(self, window, worker):
+        super().__init__(window)
+        self._window = weakref.ref(window)
+        self._worker = worker
+        self._active = self._accept_data = True
+
+    def _current(self, terminal=False):
+        window = self._window()
+        if not self._active or window is None or window.lesson_worker is not self._worker:
+            return None
+        return window if terminal or self._accept_data else None
+
+    def deactivate(self):
+        self._active = False
+
+    @QtCore.pyqtSlot(str, int, int)
+    def progress(self, message, done, total):
+        window = self._current()
+        cancelled = getattr(self._worker, "_cancel", None)
+        if window is not None and not (cancelled is not None and cancelled.is_set()):
+            window._on_lesson_progress(message, done, total)
+
+    @QtCore.pyqtSlot(object)
+    def ready(self, bundle):
+        if (window := self._current()) is not None:
+            self._accept_data = False
+            window.on_lesson_ready(bundle)
+
+    @QtCore.pyqtSlot(object)
+    def failure(self, error):
+        if (window := self._current()) is not None:
+            self._accept_data = False
+            window._on_lesson_failure(error)
+
+    @QtCore.pyqtSlot()
+    def finished(self):
+        window = self._current(terminal=True)
+        self._active = False
+        if window is not None:
+            window._on_lesson_worker_finished()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, settings: AppSettings) -> None:
         super().__init__()
         _install_ui_fonts()
         self.settings = settings
         self.worker: PipelineWorker | None = None
+        self._pipeline_ui_relay = None
+        self._lesson_ui_relay = None
+        self._active_prompt_draft = ""
+        self._pipeline_failed = False
         self._export_task: BackgroundTask | None = None
         self._close_pending = False
         self._last_result: PipelineResult | None = None
@@ -1083,6 +1295,29 @@ class MainWindow(QtWidgets.QMainWindow):
         root_layout.addWidget(shell, 1)
         self.setCentralWidget(root)
 
+        # Spider stays alongside the current workbench page so it can inspect
+        # the same visible surface while showing its crawl and repair trail.
+        project_root = Path(__file__).resolve().parents[2]
+        self.spider_panel = SpiderPanel(
+            settings=self.settings,
+            project_root=project_root,
+            backup_root=self.settings.data_dir / "spider" / "backups",
+            capture_view=self._capture_spider_view,
+            parent=self,
+        )
+        self.spider_dock = QtWidgets.QDockWidget("Spider", self)
+        self.spider_dock.setObjectName("SpiderDock")
+        self.spider_dock.setAllowedAreas(QtCore.Qt.DockWidgetArea.RightDockWidgetArea)
+        self.spider_dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
+        self.spider_dock.setMinimumWidth(390)
+        self.spider_dock.setWidget(self.spider_panel)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.spider_dock)
+        self.spider_dock.hide()
+        self.spider_dock.visibilityChanged.connect(self._on_spider_visibility_changed)
+
         self._build_shortcuts()
         self._connect_signals()
 
@@ -1097,6 +1332,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.library_panel.set_language(current_language)
         self.history_panel.set_language(current_language)
         self.lesson_view.set_language(current_language)
+        self.spider_panel.set_language(current_language)
         self.title_bar.set_page_title(self.sidebar.label_for(0))
         self.sidebar.set_result_available(False)
         self.library_panel.set_settings(settings)
@@ -1107,8 +1343,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.history_panel.init_persistence(settings.data_dir / "history.sqlite3")
 
-        provider_note = settings.llm_model if settings.openai_api_key else "No API key"
-        self.statusBar().showMessage(f"PhysLab ready · {provider_note}")
+        self._show_provider_status(
+            "ready",
+            model=settings.llm_model,
+            provider_available=bool(settings.openai_api_key),
+        )
 
         self._ai_quota_timer = QtCore.QTimer(self)
         self._ai_quota_timer.setInterval(60_000)
@@ -1161,6 +1400,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.cancel_requested.connect(self._cancel_pipeline)
         self.lesson_view.export_requested.connect(self._export_study_guide)
         self.lesson_view.share_bundle_requested.connect(self._export_lesson_bundle)
+        self.lesson_view.study_pdf_requested.connect(self._open_study_pdf)
         self.lesson_view.quiz_answered.connect(self._record_lesson_quiz_answer)
         self.lesson_view.review_due_clicked.connect(self._review_due_questions)
         self.lesson_view.regenerate_requested.connect(self.regenerate_lesson)
@@ -1261,7 +1501,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.settings.openai_api_key:
             self.empty_view.offer_ollama(len(self._ollama_models))
             self.statusBar().showMessage(
-                f"Ollama detected — {len(self._ollama_models)} local model(s) available."
+                _main_status_copy(
+                    self.command_bar.get_language(),
+                    "ollama_detected",
+                    count=len(self._ollama_models),
+                )
             )
 
     def _enable_ollama(self) -> None:
@@ -1273,31 +1517,46 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         model = self._ollama_models[0] if self._ollama_models else ""
-        save_app_config(
-            {
-                "provider_preset": "ollama",
-                "model": model,
-                "base_url": OLLAMA_OPENAI_BASE_URL,
-                "api_key": "ollama",
-            }
-        )
+        try:
+            save_app_config({
+                "provider_preset": "ollama", "model": model,
+                "base_url": OLLAMA_OPENAI_BASE_URL, "api_key": "ollama",
+            })
+        except (OSError, ValueError):
+            self._report_settings_save_failure()
+            return
         self.settings = load_settings()
+        self._set_spider_settings(self.settings)
         self._refresh_empty_status()
         self.toast.show_message(
             "success",
-            f"Local AI enabled via Ollama ({self.settings.llm_model}). "
-            "You can change the model in Settings.",
+            _main_status_copy(
+                self.command_bar.get_language(),
+                "ollama_enabled",
+                model=self.settings.llm_model,
+            ),
         )
-        self.statusBar().showMessage(f"PhysLab ready · {self.settings.llm_model} (local)")
+        self._show_provider_status("local_ready", model=self.settings.llm_model)
 
     def _on_sidebar_select(self, index: int) -> None:
         """Route the student-first rail while keeping the original lab available."""
         previous_destination = getattr(self, "_current_nav_index", 0)
-        if index != 2:
+        if index not in (2, 8):
             self._current_nav_index = index
         language = self.command_bar.get_language()
         self.sidebar.set_language(language)
         self.title_bar.set_page_title(self.sidebar.label_for(previous_destination if index == 2 else index))
+        if index == 8:
+            opening = not self.spider_dock.isVisible()
+            self.spider_dock.setVisible(opening)
+            destination = 8 if opening else previous_destination
+            self.sidebar.set_current(destination)
+            self.title_bar.set_page_title(self.sidebar.label_for(destination))
+            if opening:
+                self.statusBar().showMessage(
+                    _main_status_copy(language, "spider_ready")
+                )
+            return
         if index == 0:
             self.student_dashboard.set_language(language)
             self._workspace.setCurrentIndex(
@@ -1346,6 +1605,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self.library_panel.library_file_count(),
         )
 
+    def _provider_status_message(self, language: str) -> str:
+        key = getattr(self, "_provider_status_key", None)
+        if key is None:
+            return ""
+        values = dict(self._provider_status_values)
+        if key in {"ready", "settings_saved"}:
+            provider = (
+                values["model"]
+                if values["provider_available"]
+                else _main_status_copy(language, "no_api")
+            )
+            return _main_status_copy(language, key, provider=provider)
+        return _main_status_copy(language, key, **values)
+
+    def _show_provider_status(self, key: str, **values: object) -> None:
+        self._provider_status_key = key
+        self._provider_status_values = dict(values)
+        self.statusBar().showMessage(
+            self._provider_status_message(self.command_bar.get_language())
+        )
+
+    def _retranslate_provider_status(self, language: str) -> None:
+        current = self.statusBar().currentMessage()
+        if any(
+            current == self._provider_status_message(candidate)
+            for candidate in ("kk", "ru", "en")
+        ):
+            self.statusBar().showMessage(self._provider_status_message(language))
+
     def _on_student_language_changed(self, _index: int = -1) -> None:
         language = self.command_bar.get_language()
         self.title_bar.set_language(language)
@@ -1364,6 +1652,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.topic_catalog.set_language(language)
         self.progress_overview.set_language(language)
         self.empty_view.set_language(language)
+        self.spider_panel.set_language(language)
+        self._retranslate_provider_status(language)
+
+    def _capture_spider_view(self) -> QtGui.QPixmap:
+        """Capture only the visible workbench page, excluding Spider and the desktop."""
+        page = self._workspace.currentWidget()
+        return page.grab() if page is not None else QtGui.QPixmap()
+
+    def open_spider(self, *, crawl: bool = False) -> None:
+        """Show Spider and optionally begin a source crawl after the window paints."""
+        self._current_nav_index = getattr(self, "_current_nav_index", 0)
+        self.sidebar.set_current(8)
+        self.title_bar.set_page_title(self.sidebar.label_for(8))
+        self.spider_dock.show()
+        if crawl:
+            QtCore.QTimer.singleShot(700, self.spider_panel.crawl_project)
+
+    def _on_spider_visibility_changed(self, visible: bool) -> None:
+        if visible or self.sidebar.selected_index() != 8:
+            return
+        destination = getattr(self, "_current_nav_index", 0)
+        self.sidebar.set_current(destination)
+        self.title_bar.set_page_title(self.sidebar.label_for(destination))
+
+    def _set_spider_settings(self, settings: AppSettings) -> None:
+        self.spider_panel.set_settings(settings)
 
     def _manage_student_profiles(self) -> None:
         from aetherlab.services.course_mode import CourseProgressStore
@@ -1427,7 +1741,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.command_bar._language.setCurrentIndex(index)
 
     def _is_running(self) -> bool:
-        return bool(self.worker and self.worker.isRunning())
+        try:
+            return bool(self.worker and self.worker.isRunning())
+        except RuntimeError:
+            self.worker = None
+            return False
+
+    def _is_lesson_running(self) -> bool:
+        try:
+            return bool(self.lesson_worker and self.lesson_worker.isRunning())
+        except RuntimeError:
+            self.lesson_worker = None
+            return False
 
     # ── exports (in-context, design: DerivationBlock / SceneView / VideoControls) ──
 
@@ -1624,15 +1949,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_export_task("Converting video to GIF…", export_gif)
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = getattr(self, "_settings_save_draft", None)
+        if dialog is None:
+            dialog = SettingsDialog(self.settings, self)
         dialog.set_language(self.command_bar.get_language())
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             vals = dialog.get_settings()
 
             # Persist to the app config so the values survive restarts.
             from aetherlab.core.settings import load_settings, save_app_config
-            save_app_config(
-                {
+            try:
+                save_app_config({
                     "provider_preset": vals["provider_preset"],
                     "model": vals["model"],
                     "llm_timeout_seconds": vals["llm_timeout_seconds"],
@@ -1655,13 +1982,18 @@ class MainWindow(QtWidgets.QMainWindow):
                     "auto_tournament": "1" if vals["auto_tournament"] else "0",
                     "tts_voice": vals["tts_voice"],
                     "review_intervals_days": vals["review_intervals_days"],
-                }
-            )
+                })
+            except (OSError, ValueError):
+                self._settings_save_draft = dialog
+                self._report_settings_save_failure(reopen=True)
+                return
+            self._settings_save_draft = None
 
             # Re-resolve the just-saved config through the canonical precedence
             # chain. Direct replacement made a saved key appear active until
             # restart even when an environment key actually shadows it.
             self.settings = load_settings()
+            self._set_spider_settings(self.settings)
             self.command_bar.set_quality(vals["default_quality"])
             self.history_panel.init_persistence(self.settings.data_dir / "history.sqlite3")
             from aetherlab.services.course_mode import CourseProgressStore
@@ -1676,14 +2008,32 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.settings.llm_model,
                 self.library_panel.library_file_count(),
             )
-            provider_note = (
-                self.settings.llm_model if self.settings.openai_api_key else "No API key"
+            self._show_provider_status(
+                "settings_saved",
+                model=self.settings.llm_model,
+                provider_available=bool(self.settings.openai_api_key),
             )
-            self.statusBar().showMessage(f"Settings saved · {provider_note}")
+        else:
+            self._settings_save_draft = None
+
+    def _report_settings_save_failure(self, *, reopen: bool = False) -> None:
+        message, retry = {
+            "kk": ("Баптауларды сақтау мүмкін болмады. Баптаулар папкасына қолжетімділікті тексеріңіз.",
+                   "Енгізілген мәндер сақталды. Қайталау үшін баптауларды қайта ашыңыз."),
+            "ru": ("Не удалось сохранить настройки. Проверьте доступ к папке настроек.",
+                   "Введённые значения сохранены. Откройте настройки снова, чтобы повторить."),
+            "en": ("Could not save settings. Check access to the settings folder.",
+                   "Your entries are retained. Open Settings again to retry."),
+        }[normalize_language(self.command_bar.get_language(), "kk")]
+        if reopen:
+            message += " " + retry
+        self.statusBar().showMessage(message)
+        self.toast.show_message("warning", message)
 
     def _apply_reference_sources_settings(self, settings) -> None:
         """Apply a folder chosen from either the library or ENT practice UI."""
         self.settings = settings
+        self._set_spider_settings(settings)
         if hasattr(self, "library_panel"):
             self.library_panel.set_settings(settings)
         path = getattr(settings, "reference_sources_path", None)
@@ -1699,29 +2049,36 @@ class MainWindow(QtWidgets.QMainWindow):
             self.simulation_panel.show_code()
 
     def _cancel_pipeline(self) -> None:
-        if self.worker and self.worker.isRunning():
+        if self._is_running():
             self.worker.cancel()
-            self.statusBar().showMessage("Cancelling pipeline…")
+            self.statusBar().showMessage(self._pipeline_message("cancelling"))
             self.command_bar.set_busy(True)
             self.command_bar.cancel_button.setEnabled(False)
             self.stepper.set_cancellable(False)
-            self.running_view.set_stage_text("Cancelling pipeline…", "")
-        elif self.lesson_worker and self.lesson_worker.isRunning():
-            # Learn is cancellable too — the pipeline stops after the current
-            # chapter and returns whatever rendered (on_lesson_ready handles it).
+            self.running_view.set_stage_text(self._pipeline_message("cancelling"), "")
+        elif self._is_lesson_running():
+            if not self.command_bar.cancel_button.isEnabled():
+                return
+            # Cancellation propagates into the current chapter; the lesson
+            # pipeline returns the completed partials when cleanup finishes.
             self.lesson_worker.cancel()
-            self.statusBar().showMessage("Cancelling lesson… (stops after this chapter)")
-            self.toast.show_message("warning", "Cancelling lesson…")
+            self.command_bar.set_busy(True)
+            self.command_bar.cancel_button.setEnabled(False)
+            self.stepper.set_cancellable(False)
+            message = self._lesson_message("cancelling")
+            self.statusBar().showMessage(message)
+            self.toast.show_message("warning", message)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         probe = getattr(self, "_ollama_probe", None)
-        if self.worker and self.worker.isRunning():
+        if self._is_running():
             self.worker.cancel()
-        if self.lesson_worker and self.lesson_worker.isRunning():
+        if self._is_lesson_running():
             self.lesson_worker.cancel()
         if self._export_task and self._export_task.is_running:
             self._export_task.cancel()
         self.library_panel.request_background_cancel()
+        self.spider_panel.stop()
 
         threads = [
             thread
@@ -1765,15 +2122,39 @@ class MainWindow(QtWidgets.QMainWindow):
         voiceover: bool | None = None,
         regenerate: bool = False,
     ) -> None:
-        if self.lesson_worker and self.lesson_worker.isRunning():
-            self.statusBar().showMessage("A lesson is already being built.")
+        submitted = getattr(self.command_bar, "_lesson_submission_draft", None)
+        draft = submitted if isinstance(submitted, str) and submitted.strip() == topic else topic
+        if self._is_lesson_running():
+            if submitted is not None:
+                self._restore_pipeline_prompt(draft)
+            self.statusBar().showMessage(self._pipeline_message("already_running"))
             return
-        if self.worker and self.worker.isRunning():
-            self.statusBar().showMessage("Finish or cancel the current run first.")
+        if self._is_running():
+            if submitted is not None:
+                self._restore_pipeline_prompt(draft)
+            self.statusBar().showMessage(self._pipeline_message("already_running"))
             return
         if not self._try_consume_ai_help():
+            self._restore_pipeline_prompt(draft)
             return
 
+        previous = self.lesson_worker
+        if previous is not None:
+            for name in ("progress", "lesson_ready", "failure", "finished"):
+                try:
+                    getattr(previous, name).disconnect()
+                except (AttributeError, TypeError, RuntimeError):
+                    pass
+            try:
+                previous.deleteLater()
+            except (AttributeError, RuntimeError):
+                pass
+        if self._lesson_ui_relay is not None:
+            self._lesson_ui_relay.deactivate()
+            self._lesson_ui_relay.deleteLater()
+
+        self._active_lesson_draft = draft
+        self._lesson_failed = False
         self._last_lesson_topic = topic
         language = normalize_language(language or self.command_bar.get_language(), "kk")
         self._last_lesson_language = language
@@ -1788,20 +2169,33 @@ class MainWindow(QtWidgets.QMainWindow):
             quality=self.command_bar.get_render_quality(),
             regenerate=regenerate,
         )
-        self.lesson_worker.progress.connect(self._on_lesson_progress)
-        self.lesson_worker.lesson_ready.connect(self.on_lesson_ready)
-        self.lesson_worker.failure.connect(self.on_failure)
-        self.lesson_worker.finished.connect(self._on_lesson_worker_finished)
+        relay = self._lesson_ui_relay = _LessonUiRelay(self, self.lesson_worker)
+        self.lesson_worker.progress.connect(relay.progress)
+        self.lesson_worker.lesson_ready.connect(relay.ready)
+        self.lesson_worker.failure.connect(relay.failure)
+        self.lesson_worker.finished.connect(relay.finished)
 
         self.command_bar.set_busy(True)
+        self.command_bar.cancel_button.setEnabled(True)
         self.toast.hide()
-        verb = "Rebuilding" if regenerate else "Building"
-        self.running_view.set_stage_text(f"{verb} lesson…", topic[:80])
+        message = self._lesson_message("rebuilding" if regenerate else "building")
+        self.running_view.set_stage_text(message, topic[:80])
         # Learn is cancellable (Esc / the running view's Cancel button).
         self.stepper.set_cancellable(True)
         self._workspace.setCurrentIndex(PAGE_RUNNING)
-        self.statusBar().showMessage(f"{verb} lesson: {topic}")
+        self.statusBar().showMessage(f"{message} {topic}")
         self.lesson_worker.start()
+
+    def _lesson_message(self, key: str) -> str:
+        return _LESSON_COPY.get(self.command_bar.get_language(), _LESSON_COPY["kk"])[key]
+
+    def _on_lesson_failure(self, error: PipelineError) -> None:
+        self._lesson_failed = True
+        self._restore_pipeline_prompt(getattr(self, "_active_lesson_draft", ""))
+        self.on_failure(error)
+        pending = self._is_lesson_running()
+        self.command_bar.set_busy(pending)
+        self.command_bar.cancel_button.setEnabled(not pending)
 
     def regenerate_lesson(self) -> None:
         """Rebuild the current lesson from scratch (ignore plan + clip caches)."""
@@ -1850,14 +2244,14 @@ class MainWindow(QtWidgets.QMainWindow):
         normalized = str(topic or "").casefold().replace("_", " ").replace("-", " ")
         if normalized == "constant acceleration":
             self.start_lesson(
-                "constant_acceleration", language=language,
+                "constant_acceleration_5min", language=language,
                 voiceover=self.command_bar.get_voiceover_enabled(),
             )
             return
         if "кинематик" in normalized or "kinematic" in normalized or "кинематика" in normalized:
-            # The initial curated lesson covers this specific kinematics unit.
+            # The v2 5-minute lesson covers this specific kinematics unit.
             self.start_lesson(
-                "constant_acceleration", language=language,
+                "constant_acceleration_5min", language=language,
                 voiceover=self.command_bar.get_voiceover_enabled(),
             )
             return
@@ -1873,62 +2267,82 @@ class MainWindow(QtWidgets.QMainWindow):
         # Bound method (not a lambda) so a QThread finishing after the window
         # is destroyed cannot touch the deleted command bar.
         self.command_bar.set_busy(False)
+        self.command_bar.cancel_button.setEnabled(True)
+        self.stepper.set_cancellable(False)
+        cancelled = getattr(self.lesson_worker, "_cancel", None)
+        if getattr(self, "_lesson_failed", False) or (cancelled is not None and cancelled.is_set()):
+            self._restore_pipeline_prompt(getattr(self, "_active_lesson_draft", ""))
+            self.command_bar.input.setFocus()
 
     def _on_lesson_progress(self, message: str, done: int, total: int) -> None:
         self.running_view.set_stage_text(message, f"{done}/{total}" if total else "")
         self.statusBar().showMessage(f"Lesson · {message}")
 
     def on_lesson_ready(self, bundle) -> None:
-        self.command_bar.set_busy(False)
+        from aetherlab.ui.lesson_view import video_file_available
+
+        # A result can arrive before QThread.finished. Keep new submissions
+        # disabled until actual cleanup, while allowing the result to be read.
+        pending = self._is_lesson_running()
+        self.command_bar.set_busy(pending)
+        self.command_bar.cancel_button.setEnabled(not pending)
         self.stepper.set_cancellable(False)
 
         # A cancelled lesson may have partial/no video — never dump the student
         # on a blank page with no explanation.
         if bundle.status == "cancelled":
-            self._last_lesson = bundle
-            if bundle.video_path:
+            self.simulation_panel.hide_loading()
+            self._restore_pipeline_prompt(getattr(self, "_active_lesson_draft", ""))
+            if video_file_available(bundle.video_path):
+                self._last_lesson = bundle
                 self.lesson_view.set_lesson(bundle)
                 self._refresh_course_summary(bundle)
                 self.lesson_view.set_video(bundle.video_path)
                 self._workspace.setCurrentIndex(PAGE_LESSON)
                 self.toast.show_message(
                     "warning",
-                    "Lesson cancelled — showing the chapters that finished. "
-                    "Press Learn again to build the rest.",
+                    self._lesson_message("partial"),
                 )
             else:
-                self._workspace.setCurrentIndex(PAGE_LESSON if self._last_lesson else PAGE_EMPTY)
+                previous = getattr(self, "_last_lesson", None)
+                self._workspace.setCurrentIndex(PAGE_LESSON if previous else PAGE_EMPTY)
                 self.toast.show_message(
-                    "warning", "Lesson cancelled before any chapter finished.",
+                    "warning", self._lesson_message("empty"),
                 )
-            self.statusBar().showMessage("Lesson cancelled.")
+            self.statusBar().showMessage(self._lesson_message("cancelled"))
             return
 
         self._last_lesson = bundle
         self.lesson_view.set_lesson(bundle)
         self._refresh_course_summary(bundle)
-        if bundle.video_path:
+        video_ready = bundle.status == "assembled" and video_file_available(bundle.video_path)
+        if video_ready:
             self.lesson_view.set_video(bundle.video_path)
         self._workspace.setCurrentIndex(PAGE_LESSON)
-        if bundle.status == "offline_practice_available":
-            note = bundle.plan.chapters[0].goal if bundle.plan.chapters else "Offline practice is available."
-            self.statusBar().showMessage(note)
-            self.toast.show_message("warning", note)
-            return
-        if bundle.status == "planning_error":
-            note = bundle.plan.chapters[0].goal if bundle.plan.chapters else "The lesson could not be prepared."
-            self.statusBar().showMessage(note)
-            self.toast.show_message("warning", note)
-            return
-        note = bundle.status
-        self.statusBar().showMessage(
-            f"Lesson ready · {len(bundle.plan.chapters)} chapters · {note}"
-        )
-        self.toast.show_message(
-            "success",
-            f"Lesson '{bundle.plan.title}' built ({note}). "
-            "Watch it, read the transcript, or try the questions.",
-        )
+        if bundle.status in {"offline_practice_available", "planning_error"}:
+            key = "offline" if bundle.status == "offline_practice_available" else "planning"
+            detail = bundle.plan.chapters[0].goal if bundle.plan.chapters else ""
+            kind, message = "warning", self._lesson_message(key).format(detail=detail).strip()
+        elif video_ready:
+            kind, message = "success", self._lesson_message("ready").format(
+                title=bundle.plan.title, count=len(bundle.plan.chapters))
+        elif bundle.status == "assembled":
+            kind, message = "warning", self._lesson_message("missing")
+        elif bundle.status == "planned":
+            kind, message = "info", self._lesson_message("materials")
+        elif bundle.status == "rendering":
+            kind, message = "warning", self._lesson_message("incomplete")
+        elif bundle.status == "error":
+            kind, message = "error", self._lesson_message("failed")
+        else:
+            kind, message = "warning", self._lesson_message("unknown").format(status=bundle.status)
+        if kind in {"warning", "error"}:
+            # Incomplete bundles arrive through lesson_ready, not failure.
+            # They need the same exact-topic retry and focus after cleanup.
+            self._lesson_failed = True
+            self._restore_pipeline_prompt(getattr(self, "_active_lesson_draft", ""))
+        self.statusBar().showMessage(message)
+        self.toast.show_message(kind, message)
 
     def _refresh_course_summary(self, bundle) -> None:
         try:
@@ -2037,6 +2451,18 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Review saved · {count} question{'s' if count != 1 else ''} due"
         )
 
+    def _open_study_pdf(self) -> None:
+        """Open the current lesson's bundled study PDF (Stage O prebuilt media)."""
+        from aetherlab.ui.lesson_view import video_file_available
+
+        bundle = getattr(self, "_last_lesson", None)
+        pdf_path = str(getattr(bundle, "pdf_path", "") or "") if bundle else ""
+        if not video_file_available(pdf_path):
+            self.statusBar().showMessage("No study PDF is attached to this lesson yet.")
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(pdf_path))
+        self.statusBar().showMessage(f"Study PDF opened: {pdf_path}")
+
     def _export_study_guide(self) -> None:
         bundle = getattr(self, "_last_lesson", None)
         if not bundle:
@@ -2082,30 +2508,40 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_export_task("Exporting lesson bundle…", export_bundle)
 
     def start_pipeline(self, prompt: str) -> None:
-        if self.worker and self.worker.isRunning():
-            self.statusBar().showMessage("Pipeline is already running.")
+        submitted_draft = getattr(self.command_bar, "_submission_draft", None)
+        draft = submitted_draft if isinstance(submitted_draft, str) and submitted_draft.strip() == prompt else prompt
+        if self._is_running() or self._is_lesson_running():
+            if submitted_draft is not None:
+                self._restore_pipeline_prompt(draft)
+            self.statusBar().showMessage(self._pipeline_message("already_running"))
             return
         if not self._try_consume_ai_help():
+            self._restore_pipeline_prompt(draft)
             return
 
         # Disconnect and clean up old worker to prevent signal accumulation
         if self.worker is not None:
+            for name in ("status", "plan_ready", "solver_ready", "rag_ready", "scene_ready",
+                         "render_ready", "failure", "pipeline_finished", "progress", "finished"):
+                try:
+                    getattr(self.worker, name).disconnect()
+                except (TypeError, RuntimeError):
+                    pass
             try:
-                self.worker.status.disconnect()
-                self.worker.plan_ready.disconnect()
-                self.worker.solver_ready.disconnect()
-                self.worker.rag_ready.disconnect()
-                self.worker.scene_ready.disconnect()
-                self.worker.render_ready.disconnect()
-                self.worker.failure.disconnect()
-                self.worker.pipeline_finished.disconnect()
-                self.worker.progress.disconnect()
-                self.worker.finished.disconnect()
-            except (TypeError, RuntimeError):
+                self.worker.deleteLater()
+            except RuntimeError:
                 pass
-            self.worker.deleteLater()
             self.worker = None
+        previous_relay = self._pipeline_ui_relay
+        if previous_relay is not None:
+            previous_relay.deactivate()
+            try:
+                previous_relay.deleteLater()
+            except RuntimeError:
+                pass
 
+        self._active_prompt_draft = draft
+        self._pipeline_failed = False
         request = ProblemRequest(
             prompt=prompt,
             duration_target_s=self.command_bar.get_duration_target(),
@@ -2115,16 +2551,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = PipelineWorker(
             request=request, settings=self.settings, render_quality=render_quality
         )
-        self.worker.status.connect(self.statusBar().showMessage)
-        self.worker.plan_ready.connect(self.on_plan_ready)
-        self.worker.solver_ready.connect(self.on_solver_ready)
-        self.worker.rag_ready.connect(self.on_rag_ready)
-        self.worker.scene_ready.connect(self.on_scene_ready)
-        self.worker.render_ready.connect(self.on_render_ready)
-        self.worker.failure.connect(self.on_failure)
-        self.worker.pipeline_finished.connect(self.on_pipeline_finished)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_worker_finished)
+        relay = _PipelineUiRelay(self, self.worker)
+        self._pipeline_ui_relay = relay
+        self.worker.status.connect(relay.status)
+        self.worker.plan_ready.connect(relay.plan)
+        self.worker.solver_ready.connect(relay.solver)
+        self.worker.rag_ready.connect(relay.rag)
+        self.worker.scene_ready.connect(relay.scene)
+        self.worker.render_ready.connect(relay.render)
+        self.worker.failure.connect(relay.failure)
+        self.worker.pipeline_finished.connect(relay.result)
+        self.worker.progress.connect(relay.progress)
+        self.worker.finished.connect(relay.finished)
 
         self.command_bar.set_busy(True)
         self.toast.hide()
@@ -2136,10 +2574,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stepper.set_cancellable(True)
         self.stepper.set_stage(0)
 
-        self.running_view.set_stage_text("Running Solve…", prompt[:80])
+        self.running_view.set_stage_text(self._pipeline_message("running", stage=self.stepper._stage_labels[0]), prompt[:80])
         self._workspace.setCurrentIndex(PAGE_RUNNING)
-        self.statusBar().showMessage("Launching pipeline…")
+        self.statusBar().showMessage(self._pipeline_message("launching"))
         self.worker.start()
+
+    def _pipeline_message(self, key: str, **values) -> str:
+        language = self.command_bar.get_language()
+        return _PIPELINE_COPY.get(language, _PIPELINE_COPY["kk"])[key].format(**values)
+
+    def _restore_pipeline_prompt(self, draft: str | None = None) -> None:
+        if self.command_bar.input.text():
+            return
+        value = draft if draft is not None else self._active_prompt_draft
+        if value:
+            self.command_bar.input.setText(value)
 
     def _try_consume_ai_help(self) -> bool:
         """Meter explicit learner AI requests without touching background jobs."""
@@ -2199,11 +2648,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_bar.cancel_button.setEnabled(True)
         self.stepper.set_cancellable(False)
         if cancelled:
+            self._restore_pipeline_prompt()
+            self.stepper.set_stage(max(0, self.stepper._current_stage), "cancelled")
             self.simulation_panel.hide_loading()
-            self.toast.show_message("warning", "Run cancelled by user.")
+            message = self._pipeline_message("cancelled")
+            self.statusBar().showMessage(message)
+            self.toast.show_message("warning", message)
             self._workspace.setCurrentIndex(
                 PAGE_SOLVE if self._has_result else PAGE_EMPTY
             )
+        if cancelled or self._pipeline_failed:
+            self.command_bar.input.setFocus()
 
     def _on_progress(self, value: int, text: str = "") -> None:
         if value < 30:
@@ -2221,7 +2676,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.stepper.set_stage(i, "complete")
         self.stepper.set_stage(stage, "complete" if value >= 100 else "active")
         self.running_view.set_stage_text(
-            "Pipeline complete" if value >= 100 else f"Running {label}…",
+            self._pipeline_message("complete") if value >= 100 else self._pipeline_message("running", stage=self.stepper._stage_labels[stage]),
             text,
         )
 
@@ -2281,16 +2736,22 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def on_failure(self, error: PipelineError) -> None:
+        self._pipeline_failed = True
+        self._restore_pipeline_prompt()
         self.simulation_panel.hide_loading()
-        self.stepper.set_stage(self.stepper._current_stage, "error")
+        self.stepper.set_stage(max(0, self.stepper._current_stage), "error")
         self.stepper.set_cancellable(False)
-        self.statusBar().showMessage(f"{error.stage} failed: {error.message}")
+        language = self.command_bar.get_language()
+        copy = _PIPELINE_COPY.get(language, _PIPELINE_COPY["kk"])
+        stage_label = copy["stages"].get(error.stage, error.stage)
+        message = copy["failure"].format(stage=stage_label, message=error.message)
+        self.statusBar().showMessage(message)
         # Error voice (design): fact + cause, Details affordance
         self.toast.show_message(
-            "error", f"{error.stage} failed: {error.message}", details=True
+            "error", message, details=True
         )
         self.simulation_panel.show_error_banner(
-            error.stage, error.message, error.traceback or error.message
+            stage_label, error.message, error.traceback or error.message
         )
         self._workspace.setCurrentIndex(
             PAGE_SOLVE if self._has_result else PAGE_EMPTY

@@ -12,10 +12,22 @@ from aetherlab.ui.qt_compat import QtCore, QtGui, QtWidgets, require_qt
 require_qt()
 
 
+def video_file_available(path: str) -> bool:
+    """Cheap UI availability check; decoding is verified by the render backend."""
+    if not path:
+        return False
+    try:
+        candidate = Path(path)
+        return candidate.is_file() and candidate.stat().st_size > 0
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 _COPY = {
     "kk": {
         "lesson": "Сабақ", "regenerate": "Қайта жасау", "regenerate_tip": "Бұл сабақты кэшті пайдаланбай, басынан құрастыру",
         "guide": "Оқу құралын экспорттау", "bundle": "Сабақты жинақтау", "bundle_tip": "Бейнені, субтитрді, оқу құралын және HTML ойнатқышты ZIP архивіне сақтау",
+        "pdf": "PDF конспект", "pdf_tip": "Оқу PDF конспектісін ашу", "content_review": "Мазмұн тексерісі қажет", "cc": "Субтитр · {n} жол",
         "video": "Бейне", "transcript": "Мәтін", "terms": "Қазақша терминдер", "questions": "Сұрақтар", "references": "Дереккөздер", "explore": "Тәжірибе жасау",
         "course_status": "Курс прогресі сұраққа жауап бергеннен кейін басталады.", "review_due": "Қайталау уақыты келген сұрақтар", "review_count": "Қайталау керек сұрақтар: {n}",
         "empty": "Тақырып енгізіп, «Оқу» түймесін бассаңыз, сабақ жасалады.", "video_unavailable": "Бұл нұсқада бейне ойнатқыш қолжетімсіз.",
@@ -33,6 +45,7 @@ _COPY = {
     "ru": {
         "lesson": "Урок", "regenerate": "Создать заново", "regenerate_tip": "Собрать урок заново без использования кэша",
         "guide": "Экспорт конспекта", "bundle": "Экспорт урока", "bundle_tip": "Сохранить видео, субтитры, конспект и HTML-плеер в ZIP-архив",
+        "pdf": "PDF-конспект", "pdf_tip": "Открыть учебный PDF-конспект", "content_review": "Требуется проверка содержания", "cc": "Субтитры · {n}",
         "video": "Видео", "transcript": "Текст", "terms": "Казахские термины", "questions": "Вопросы", "references": "Источники", "explore": "Эксперимент",
         "course_status": "Прогресс курса начнётся после ответа на вопрос.", "review_due": "Повторить вопросы по расписанию", "review_count": "Вопросов для повторения: {n}",
         "empty": "Введите тему и нажмите «Изучить», чтобы создать урок.", "video_unavailable": "В этой сборке видеоплеер недоступен.",
@@ -50,6 +63,7 @@ _COPY = {
     "en": {
         "lesson": "Lesson", "regenerate": "Regenerate", "regenerate_tip": "Rebuild this lesson from scratch without using the cache",
         "guide": "Export study guide", "bundle": "Export lesson bundle", "bundle_tip": "Export a ZIP with video, subtitles, study guide, and HTML player",
+        "pdf": "Study PDF", "pdf_tip": "Open the study PDF", "content_review": "Needs content review", "cc": "Subtitles · {n}",
         "video": "Video", "transcript": "Transcript", "terms": "Kazakh terms", "questions": "Questions", "references": "References", "explore": "Explore",
         "course_status": "Course progress starts when you answer a quiz question.", "review_due": "Review due questions", "review_count": "Review {n} due question(s)",
         "empty": "Enter a topic and press Learn to generate a lesson.", "video_unavailable": "Video playback is unavailable in this build.",
@@ -278,6 +292,7 @@ class LessonView(QtWidgets.QWidget):
     quiz_answered = QtCore.pyqtSignal(int, bool, str)  # question index, correct, choice
     review_due_clicked = QtCore.pyqtSignal()
     regenerate_requested = QtCore.pyqtSignal()  # rebuild this lesson from scratch
+    study_pdf_requested = QtCore.pyqtSignal()  # open the bundled study PDF
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -301,6 +316,14 @@ class LessonView(QtWidgets.QWidget):
         self._audience = QtWidgets.QLabel("")
         self._audience.setStyleSheet("color: #65758A; font-size: 11px;")
         header.addWidget(self._audience)
+        self._review_badge = QtWidgets.QLabel("")
+        self._review_badge.setStyleSheet(
+            "color: #8A5A1B; font-size: 11px; font-weight: 700; "
+            "background: #FBF1E4; border: 1px solid #E3C98F; "
+            "border-radius: 8px; padding: 3px 8px;"
+        )
+        self._review_badge.hide()
+        header.addWidget(self._review_badge)
         self._regen_btn = QtWidgets.QPushButton()
         self._regen_btn.setObjectName("SecondaryButton")
         self._regen_btn.setIcon(icons.icon("refresh-cw", 13, "#65758A"))
@@ -320,6 +343,13 @@ class LessonView(QtWidgets.QWidget):
         self._bundle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._bundle_btn.clicked.connect(self.share_bundle_requested.emit)
         header.addWidget(self._bundle_btn)
+        self._pdf_btn = QtWidgets.QPushButton()
+        self._pdf_btn.setObjectName("SecondaryButton")
+        self._pdf_btn.setIcon(icons.icon("file-text", 13, "#65758A"))
+        self._pdf_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._pdf_btn.clicked.connect(self.study_pdf_requested.emit)
+        self._pdf_btn.hide()
+        header.addWidget(self._pdf_btn)
         layout.addLayout(header)
 
         self._split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -414,6 +444,7 @@ class LessonView(QtWidgets.QWidget):
         v.setSpacing(6)
         self._player = None
         self._video_control_buttons: list[tuple[QtWidgets.QPushButton, str]] = []
+        self._cc_label = None
         self._video_unavailable_label = None
         try:
             from PyQt6.QtMultimedia import QMediaPlayer
@@ -463,6 +494,10 @@ class LessonView(QtWidgets.QWidget):
                 b.clicked.connect(slot)
                 controls.addWidget(b)
             controls.addStretch()
+            self._cc_label = QtWidgets.QLabel("")
+            self._cc_label.setStyleSheet("color: #65758A; font-size: 11px;")
+            self._cc_label.hide()
+            controls.addWidget(self._cc_label)
             v.addLayout(controls)
         except Exception:  # noqa: BLE001 — multimedia optional
             self._video_unavailable_label = QtWidgets.QLabel()
@@ -480,6 +515,10 @@ class LessonView(QtWidgets.QWidget):
         self._export_btn.setText(text["guide"])
         self._bundle_btn.setText(text["bundle"])
         self._bundle_btn.setToolTip(text["bundle_tip"])
+        self._pdf_btn.setText(text["pdf"])
+        self._pdf_btn.setToolTip(text["pdf_tip"])
+        self._review_badge.setText(text["content_review"])
+        self._refresh_cc_label()
         for index, key in enumerate(("video", "transcript", "terms", "questions", "references", "explore")):
             self._tabs.setTabText(index, text[key])
         self._course_status.setText(text["course_status"])
@@ -497,12 +536,18 @@ class LessonView(QtWidgets.QWidget):
         if self._bundle is not None:
             self._tabs.setTabText(2, text["terms"])
 
+    def clear_video(self) -> None:
+        """Release the previous lesson's media before presenting new content."""
+        if self._player:
+            self._player.stop()
+            self._player.setSource(QtCore.QUrl())
+        if hasattr(self, "_video_empty_overlay"):
+            self._video_empty_overlay.show()
+
     def set_video(self, path: str) -> None:
         """Load the assembled lesson MP4 into the inline player."""
-        if not self._player:
-            return
-        if not path or not Path(path).exists():
-            self._video_empty_overlay.show()
+        self.clear_video()
+        if not self._player or not video_file_available(path):
             return
         from PyQt6.QtCore import QUrl
 
@@ -510,12 +555,30 @@ class LessonView(QtWidgets.QWidget):
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         self._tabs.setCurrentIndex(0)  # Video tab
 
+    def _refresh_cc_label(self) -> None:
+        """Show the subtitle cue count for bundles that ship an .srt file."""
+        if self._cc_label is None:
+            return
+        cues = 0
+        srt_path = str(getattr(self._bundle, "srt_path", "") or "")
+        if srt_path:
+            try:
+                cues = Path(srt_path).read_text(encoding="utf-8").count("-->")
+            except (OSError, ValueError):
+                cues = 0
+        if cues > 0:
+            self._cc_label.setText(_COPY[self._language]["cc"].format(n=cues))
+            self._cc_label.show()
+        else:
+            self._cc_label.hide()
+
     def _set_populated(self, populated: bool) -> None:
         self._split.setVisible(populated)
         self._empty.setVisible(not populated)
 
     def set_lesson(self, bundle) -> None:
         """Populate the view from a LessonBundle (plan + rendered chapters)."""
+        self.clear_video()
         self._bundle = bundle
         plan = bundle.plan
         from aetherlab.core.language import LANGUAGE_NAMES, normalize_language
@@ -644,9 +707,18 @@ class LessonView(QtWidgets.QWidget):
         )
 
         self._seed_explore(plan)
+        self._pdf_btn.setVisible(video_file_available(str(getattr(bundle, "pdf_path", "") or "")))
+        review = getattr(bundle, "review_status", {}) or {}
+        self._review_badge.setVisible(
+            str(review.get("teacher_translation_review", "")) == "pending"
+        )
+        self._refresh_cc_label()
         self.set_course_summary(_COPY[language]["course_status"])
         self.set_due_review_count(0)
         self._set_populated(True)
+        # Materials are usable before video generation; a subsequent valid
+        # set_video() selects the Video tab when the assembled file is ready.
+        self._tabs.setCurrentIndex(1)
 
     def set_course_summary(self, message: str) -> None:
         self._course_status.setText(message)

@@ -7,18 +7,48 @@ from aetherlab.ui.qt_compat import QtCore, QtWidgets, require_qt
 
 require_qt()
 
-EXAMPLE_PROMPTS = [
-    "Derive the damped harmonic oscillator and visualize phase space.",
-    "Solve the simple pendulum for large angles using energy methods.",
-    "Show the Kepler orbit for an inverse-square central force.",
-    "Derive the heat equation on a rod with fixed boundary conditions.",
-    "Prove that e is irrational using a contradiction argument.",
-    "Solve the two-body problem and plot the relative trajectory.",
-    "Derive the Euler-Lagrange equations for a double pendulum.",
-    "Show the Fourier series convergence for a square wave.",
-    "Solve the RLC circuit ODE and plot current vs time.",
-    "Derive the Navier-Stokes equations for incompressible flow.",
-]
+# Authored school-physics prompts, not official UNT questions. Keep each
+# translated row's physical conditions and numerical data identical.
+EXAMPLE_PROMPTS_BY_LANGUAGE = {
+    "kk": (
+        "Дене тыныштықтан қозғалады: бастапқы жылдамдығы 0 м/с, тұрақты үдеуі 2 м/с², уақыт 5 с. Үдеу нені білдіретінін қарапайым тілмен түсіндір, соңғы жылдамдық пен жүрген жолды тап, жылдамдық–уақыт графигін көрсет.",
+        "Массасы 2 кг дененің үдеуі 3 м/с². Қорытқы күшті тап. Алдымен күш пен үдеудің мағынасын түсіндір, содан кейін Ньютон заңын қолданып, өлшем бірліктерін тексер.",
+        "Массасы 2 кг дене 5 м биіктікке көтерілді. Еркін түсу үдеуі 10 м/с². Ауырлық күшінің потенциалдық энергиясының артуын тап, жерге қатысты нөлдік деңгейді және энергияның мағынасын түсіндір.",
+        "Массасы 2 кг арба 3 м/с жылдамдықпен қозғалып, массасы 1 кг, жылдамдығы 0 м/с арбамен соқтығысады да, екеуі бірігіп қозғалады. Сыртқы күштердің импульсін елеме. Ортақ жылдамдықты тап, импульсті қозғалыс мөлшері ретінде түсіндір.",
+        "Бетке перпендикуляр 200 Н күш әсер етеді, жанасу ауданы 0.5 м². Қысымды тап. Бірдей күш кіші ауданға түссе не өзгеретінін күнделікті мысалмен түсіндір.",
+        "Массасы 0.2 кг су қызады. Судың меншікті жылусыйымдылығы 4200 Дж/(кг·°C), температурасы 20 °C-қа артады. Жылу шығынын елемей, қажетті жылу мөлшерін тап және меншікті жылусыйымдылықты қарапайым тілмен түсіндір.",
+        "Резистордағы кернеу 12 В, кедергісі 6 Ом. Ток күшін тап. Алдымен кернеу, ток күші және кедергіні түсіндір, содан кейін Ом заңын қолдан.",
+        "Кедергілері 2 Ом және 4 Ом екі резистор тізбектей жалғанған. Жалпы кернеу 12 В. Жалпы кедергі мен ток күшін тап, қарапайым тізбек сызбасын көрсет.",
+        "Толқынның жиілігі 5 Гц, толқын ұзындығы 2 м. Таралу жылдамдығын тап, жиілік пен толқын ұзындығының мағынасын суретпен түсіндір.",
+        "Жинағыш линзаның фокус аралығы 20 см. Нәрсе линзадан 30 см қашықтықта тұр. Жұқа линза формуласымен кескіннің қашықтығын тап, сәулелер сызбасын және кескіннің шын не жалған екенін түсіндір.",
+    ),
+    "ru": (
+        "Тело начинает движение из состояния покоя: начальная скорость 0 м/с, постоянное ускорение 2 м/с², время 5 с. Объясни смысл ускорения простыми словами, найди конечную скорость и пройденный путь, покажи график скорости от времени.",
+        "Масса тела 2 кг, ускорение 3 м/с². Найди равнодействующую силу. Сначала объясни смысл силы и ускорения, затем примени закон Ньютона и проверь единицы.",
+        "Тело массой 2 кг подняли на высоту 5 м. Ускорение свободного падения 10 м/с². Найди увеличение потенциальной энергии силы тяжести, объясни выбор нулевого уровня у земли и смысл энергии.",
+        "Тележка массой 2 кг движется со скоростью 3 м/с и сталкивается с тележкой массой 1 кг со скоростью 0 м/с. После удара они движутся вместе. Импульсом внешних сил пренебречь. Найди общую скорость и объясни импульс как количество движения.",
+        "На поверхность перпендикулярно действует сила 200 Н, площадь контакта 0.5 м². Найди давление. На бытовом примере объясни, что изменится при уменьшении площади с той же силой.",
+        "Нагревают воду массой 0.2 кг. Удельная теплоёмкость воды 4200 Дж/(кг·°C), температура увеличивается на 20 °C. Пренебрегая потерями, найди количество теплоты и объясни удельную теплоёмкость простыми словами.",
+        "Напряжение на резисторе 12 В, сопротивление 6 Ом. Найди силу тока. Сначала объясни напряжение, силу тока и сопротивление, затем примени закон Ома.",
+        "Два резистора сопротивлением 2 Ом и 4 Ом соединены последовательно. Общее напряжение 12 В. Найди общее сопротивление и силу тока, покажи простую схему цепи.",
+        "Частота волны 5 Гц, длина волны 2 м. Найди скорость распространения, объясни смысл частоты и длины волны с помощью рисунка.",
+        "Фокусное расстояние собирающей линзы 20 см. Предмет находится в 30 см от линзы. По формуле тонкой линзы найди расстояние до изображения, покажи ход лучей и объясни, действительное оно или мнимое.",
+    ),
+    "en": (
+        "A body starts from rest: initial speed 0 m/s, constant acceleration 2 m/s², time 5 s. Explain acceleration in simple words, find the final speed and distance travelled, and show a velocity–time graph.",
+        "A body has mass 2 kg and acceleration 3 m/s². Find the net force. Explain force and acceleration first, then apply Newton's law and check the units.",
+        "A body of mass 2 kg is raised by 5 m. Gravitational acceleration is 10 m/s². Find the increase in gravitational potential energy, explaining the zero level at the ground and the meaning of energy.",
+        "A cart of mass 2 kg moving at 3 m/s hits a cart of mass 1 kg with speed 0 m/s. They move together after the collision. Ignore external impulse. Find their common speed and explain momentum as quantity of motion.",
+        "A force of 200 N acts perpendicular to a surface with contact area 0.5 m². Find the pressure. Use an everyday example to explain what changes when the area decreases with the same force.",
+        "Water of mass 0.2 kg is heated. Its specific heat capacity is 4200 J/(kg·°C), and its temperature rises by 20 °C. Ignore heat loss, find the heat required, and explain specific heat capacity in simple words.",
+        "The voltage across a resistor is 12 V and its resistance is 6 ohms. Find the current. Explain voltage, current and resistance before applying Ohm's law.",
+        "Two resistors of 2 ohms and 4 ohms are connected in series. The total voltage is 12 V. Find the total resistance and current, and show a simple circuit diagram.",
+        "A wave has frequency 5 Hz and wavelength 2 m. Find its propagation speed and explain frequency and wavelength with a diagram.",
+        "A converging lens has focal length 20 cm. An object is 30 cm from the lens. Use the thin-lens formula to find the image distance, draw the rays, and explain whether the image is real or virtual.",
+    ),
+}
+# Compatibility for callers that inspect the English example inventory.
+EXAMPLE_PROMPTS = list(EXAMPLE_PROMPTS_BY_LANGUAGE["en"])
 
 class CommandBar(QtWidgets.QWidget):
     """Command bar (design: components/forms/CommandBar.jsx).
@@ -102,7 +132,9 @@ class CommandBar(QtWidgets.QWidget):
         for label, value in self._QUALITIES.items():
             self._quality.addItem(label, value)
         self._quality.setCurrentIndex(1)
-        self._quality.setFixedWidth(104)
+        # Leave room for the styled padding/arrow as well as translated text.
+        self._quality.setMinimumWidth(120)
+        self._quality.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         self._quality.setToolTip(
             "Render quality — Draft 480p / Standard 720p at 30 fps / High 1080p"
         )
@@ -285,7 +317,7 @@ class CommandBar(QtWidgets.QWidget):
 
     def _show_examples_menu(self) -> None:
         menu = QtWidgets.QMenu(self)
-        for prompt in EXAMPLE_PROMPTS:
+        for prompt in EXAMPLE_PROMPTS_BY_LANGUAGE[self.get_language()]:
             label = prompt[:64] + "…" if len(prompt) > 64 else prompt
             action = menu.addAction(label)
             action.triggered.connect(
@@ -334,15 +366,25 @@ class CommandBar(QtWidgets.QWidget):
         self._apply_ai_quota_enabled_state()
 
     def _submit(self) -> None:
-        prompt = self.input.text().strip()
+        draft = self.input.text()
+        prompt = draft.strip()
         if prompt and self.run_button.isVisible() and self.run_button.isEnabled():
-            self.submitted.emit(prompt)
             self.input.clear()
+            self._submission_draft = draft
+            try:
+                self.submitted.emit(prompt)
+            finally:
+                self._submission_draft = None
 
     def _learn(self) -> None:
-        topic = self.input.text().strip()
+        draft = self.input.text()
+        topic = draft.strip()
         if topic and self.learn_button.isVisible() and self.learn_button.isEnabled():
-            self.learn_requested.emit(
-                topic, self.get_language(), self.get_voiceover_enabled()
-            )
             self.input.clear()
+            self._lesson_submission_draft = draft
+            try:
+                self.learn_requested.emit(
+                    topic, self.get_language(), self.get_voiceover_enabled()
+                )
+            finally:
+                self._lesson_submission_draft = None

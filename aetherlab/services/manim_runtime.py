@@ -229,6 +229,28 @@ class ManimRuntime:
         duration_target_s = float(request.duration_target_s)
         duration_failure_reason = ""
         try:
+            from aetherlab.core.render_profile import (
+                CINEMATIC_DURATION_TOLERANCE,
+                UNT_DURATION_TOLERANCE,
+                get_effective_profile,
+                resolve_unt_mode,
+            )
+
+            unt_mode, _unt_provenance = resolve_unt_mode(s)
+            duration_tolerance = (
+                UNT_DURATION_TOLERANCE if unt_mode else CINEMATIC_DURATION_TOLERANCE
+            )
+            try:
+                _unt_preset = get_effective_profile(s).preset
+            except Exception:  # noqa: BLE001 - preset resolve never blocks generation
+                _unt_preset = ""
+            is_vertical = str(_unt_preset or "").strip().lower() == "unt_vertical"
+        except Exception:  # noqa: BLE001 - UNT resolve never blocks generation
+            unt_mode = False
+            duration_tolerance = 0.20
+            is_vertical = False
+        is_task_segment = str(aspect or "full").strip().lower() == "full"
+        try:
             from aetherlab.services.verify import physics_expectations
 
             expected_physics = physics_expectations(solver, request)
@@ -248,6 +270,7 @@ class ManimRuntime:
         if s and s.openai_api_key:
             from aetherlab.services.code_safety import validate_code_safety
             from aetherlab.services.scene_validation import (
+                check_unt_gates,
                 count_construct_play_calls,
                 estimate_duration,
                 normalize_timeline_markers,
@@ -283,13 +306,22 @@ class ManimRuntime:
                         require_motion=True,
                         timeline=repaired_board.get("timeline"),
                     )
+                    if unt_mode:
+                        _unt_issues = check_unt_gates(
+                            repaired,
+                            is_task_segment=is_task_segment,
+                            is_vertical=is_vertical,
+                        )
+                        if _unt_issues:
+                            lint_issues = list(lint_issues) + _unt_issues
+                            repaired_lint_ok = False
                     repaired_overlaps = [
                         issue for issue in scene_hygiene_warnings(repaired)
                         if issue.startswith(_LAYOUT_BLOCKERS)
                     ]
                     repaired_estimate = estimate_duration(repaired)
                     target_miss = _estimate_misses_target(
-                        repaired_estimate, duration_target_s
+                        repaired_estimate, duration_target_s, duration_tolerance
                     )
                     if not repaired_safe or not repaired_lint_ok or repaired_overlaps or target_miss:
                         problems = (
@@ -320,8 +352,8 @@ class ManimRuntime:
                 code_to_repair: str, estimate_seconds: float, attempt_no: int
             ) -> str | None:
                 """Adjust readable holds when valid AI code misses its target."""
-                low = duration_target_s * 0.8
-                high = duration_target_s * 1.2
+                low = duration_target_s * (1.0 - duration_tolerance)
+                high = duration_target_s * (1.0 + duration_tolerance)
                 if estimate_seconds < low:
                     instruction = (
                         f"The safe, valid scene is estimated at {estimate_seconds:.1f}s; "
@@ -361,6 +393,15 @@ class ManimRuntime:
                         timeline=generator._last_storyboard.get("timeline")
                         if isinstance(generator._last_storyboard, dict) else None,
                     )
+                    if unt_mode:
+                        _unt_issues = check_unt_gates(
+                            repaired,
+                            is_task_segment=is_task_segment,
+                            is_vertical=is_vertical,
+                        )
+                        if _unt_issues:
+                            lint_issues = list(lint_issues) + _unt_issues
+                            repaired_lint_ok = False
                     repaired_hygiene = scene_hygiene_warnings(repaired)
                     repaired_overlaps = [
                         issue for issue in repaired_hygiene
@@ -378,7 +419,7 @@ class ManimRuntime:
                         and repaired_play_calls > 16
                     )
                     still_misses = _estimate_misses_target(
-                        repaired_estimate, duration_target_s
+                        repaired_estimate, duration_target_s, duration_tolerance
                     )
                     if (
                         not repaired_safe or not repaired_lint_ok or repaired_overlaps
@@ -431,11 +472,14 @@ class ManimRuntime:
 
             for attempt in range(max_retries + 1):
                 if locked_storyboard is None:
-                    code = await generator.generate(request, solver, rag, class_name)
+                    code = await generator.generate(
+                        request, solver, rag, class_name, unt_mode=unt_mode
+                    )
                 else:
                     code = await generator.generate(
                         request, solver, rag, class_name,
                         locked_storyboard=locked_storyboard,
+                        unt_mode=unt_mode,
                     )
                 # A fallback scene compiles and renders perfectly, so without an
                 # explicit signal it is indistinguishable from a real AI answer.
@@ -488,6 +532,15 @@ class ManimRuntime:
                     require_motion=True,
                     timeline=storyboard.get("timeline"),
                 )
+                if unt_mode:
+                    _unt_issues = check_unt_gates(
+                        code,
+                        is_task_segment=is_task_segment,
+                        is_vertical=is_vertical,
+                    )
+                    if _unt_issues:
+                        lint_issues = list(lint_issues) + _unt_issues
+                        lint_ok = False
                 cloud_mode = str(getattr(s, "render_mode", "local") or "local").lower() in {
                     "cloud", "auto",
                 }
@@ -517,13 +570,21 @@ class ManimRuntime:
                 # Render-crash findings (unknown names, invalid kwargs, broken
                 # LaTeX, ManimGL leftovers). Fed to the same bounded repair
                 # instead of discarding an otherwise good scene outright.
+                # UNT exam/config findings get their own repair instruction below.
                 crash_issues = [
                     issue for issue in lint_issues
-                    if not _is_advisory_issue(issue) and not issue.startswith("[MOTION:")
+                    if not _is_advisory_issue(issue)
+                    and not issue.startswith("[MOTION:")
+                    and not issue.startswith("[UNT:")
+                ]
+                unt_blocking = [
+                    issue for issue in lint_issues
+                    if issue.startswith("[UNT:") and not _is_advisory_issue(issue)
                 ]
                 if (
                     missing_markers or timing_runtime_issues or overlap_issues or expensive_scene
                     or play_budget_exceeded or updater_animate_issues or crash_issues
+                    or unt_blocking
                 ):
                     timeline = storyboard.get("timeline", [])
                     marker_lines = [
@@ -607,6 +668,18 @@ class ManimRuntime:
                             "play. Preserve the visual beat and its scheduled duration:\n"
                             + "\n".join(updater_animate_issues)
                         )
+                    if unt_blocking:
+                        repair_instructions.append(
+                            "This is UNT exam mode: restore the official task structure "
+                            "without changing the physics or timing. Add Given "
+                            "(Berildi/Dano/Given) → Find → Solution → Answer blocks with "
+                            "units on every quantity, the answer letter (A-E) at the hero "
+                            "frame, axis labels with units on every graph, and shaded "
+                            "area segments where they carry the solution. Never write "
+                            "config.frame_width/pixel_width; lay out with .to_edge()/ "
+                            ".arrange()/scale_to_fit_width() instead:\n"
+                            + "\n".join(unt_blocking)
+                        )
                     if repair_instructions:
                         repair_error = "\n\n".join(repair_instructions)
                         repair_error += (
@@ -637,6 +710,18 @@ class ManimRuntime:
                                     require_motion=True,
                                     timeline=timeline,
                                 )
+                                if unt_mode:
+                                    _unt_repair_issues = check_unt_gates(
+                                        repaired_code,
+                                        is_task_segment=is_task_segment,
+                                        is_vertical=is_vertical,
+                                    )
+                                    if _unt_repair_issues:
+                                        repaired_lint_issues = (
+                                            list(repaired_lint_issues)
+                                            + _unt_repair_issues
+                                        )
+                                        repaired_lint_ok = False
                                 repaired_hygiene = scene_hygiene_warnings(repaired_code)
                                 repaired_overlaps = [
                                     issue for issue in repaired_hygiene
@@ -769,10 +854,10 @@ class ManimRuntime:
                     diagnostics.append(f"Scene succeeded on retry {attempt}.")
                 est = estimate_duration(code)
                 if not fallback_reason and _estimate_misses_target(
-                    est, duration_target_s
+                    est, duration_target_s, duration_tolerance
                 ):
-                    lower = duration_target_s * 0.8
-                    upper = duration_target_s * 1.2
+                    lower = duration_target_s * (1.0 - duration_tolerance)
+                    upper = duration_target_s * (1.0 + duration_tolerance)
                     duration_failure_reason = (
                         f"AI scene estimate {est.total_seconds:.1f}s was outside the "
                         f"{lower:.1f}-{upper:.1f}s target window after {attempt + 1} "
@@ -1158,10 +1243,38 @@ class ManimRuntime:
         """
         from aetherlab.services.code_safety import validate_code_safety
         from aetherlab.services.scene_validation import (
+            check_unt_gates,
             estimate_duration,
             scene_hygiene_warnings,
             validate_scene,
         )
+
+        try:
+            from aetherlab.core.render_profile import (
+                CINEMATIC_DURATION_TOLERANCE,
+                UNT_DURATION_TOLERANCE,
+                get_effective_profile,
+                resolve_unt_mode,
+            )
+
+            tournament_unt, _ = resolve_unt_mode(settings)
+            tournament_tolerance = (
+                UNT_DURATION_TOLERANCE
+                if tournament_unt
+                else CINEMATIC_DURATION_TOLERANCE
+            )
+            try:
+                _tournament_preset = get_effective_profile(settings).preset
+            except Exception:  # noqa: BLE001 - preset resolve never blocks tournament
+                _tournament_preset = ""
+            tournament_vertical = (
+                str(_tournament_preset or "").strip().lower() == "unt_vertical"
+            )
+        except Exception:  # noqa: BLE001 - UNT resolve never blocks tournament
+            tournament_unt = False
+            tournament_tolerance = 0.20
+            tournament_vertical = False
+        tournament_is_task = str(aspect or "full").strip().lower() == "full"
 
         cap = effective_candidate_cap(settings)
         n = cap if count is None else max(0, int(count))
@@ -1178,6 +1291,7 @@ class ManimRuntime:
                     rag,
                     temperature=min(1.1, 0.85 + 0.06 * i),
                     variation_seed=seed,
+                    unt_mode=tournament_unt,
                 )
                 if board is None:
                     continue
@@ -1210,11 +1324,34 @@ class ManimRuntime:
                 lint_ok, lint_issues = validate_scene(
                     code, require_motion=True, timeline=board.get("timeline")
                 )
+                if tournament_unt:
+                    _unt_candidate_issues = check_unt_gates(
+                        code,
+                        is_task_segment=tournament_is_task,
+                        is_vertical=tournament_vertical,
+                    )
+                    if _unt_candidate_issues:
+                        lint_issues = list(lint_issues) + _unt_candidate_issues
+                        lint_ok = False
                 if not lint_ok:
-                    log.info("Candidate %d rejected by scene lint: %s", i + 1, lint_issues[:3])
-                    continue
+                    _blocking = [
+                        issue for issue in lint_issues
+                        if not _is_advisory_issue(issue)
+                    ]
+                    if _blocking or not tournament_unt:
+                        log.info(
+                            "Candidate %d rejected by scene lint: %s",
+                            i + 1, lint_issues[:3],
+                        )
+                        continue
+                    scene.diagnostics.append(
+                        "Tournament candidate advisory UNT layout: "
+                        + "; ".join(lint_issues[:2])
+                    )
                 est = estimate_duration(code)
-                if _estimate_misses_target(est, request.duration_target_s):
+                if _estimate_misses_target(
+                    est, request.duration_target_s, tournament_tolerance
+                ):
                     log.info(
                         "Tournament candidate %d rejected: estimate %.1fs misses %.1fs target.",
                         i + 1, est.total_seconds, request.duration_target_s,
@@ -1233,7 +1370,9 @@ class ManimRuntime:
                         scene=scene,
                         storyboard=board,
                         duration_delta=_duration_contract_delta(
-                            est.total_seconds, request.duration_target_s
+                            est.total_seconds,
+                            request.duration_target_s,
+                            tournament_tolerance,
                         ),
                     )
                 )
@@ -1430,7 +1569,7 @@ class ManimRuntime:
         # downgrades).
         profile, _fallback_notice = resolve_manim_profile(s, quality, scene_bundle.code)
         quality = str(getattr(profile, "quality", quality) or quality)
-        base_timeout = {"l": 240, "m": 420, "h": 600, "k": 900}.get(quality, 240)
+        base_timeout = {"l": 240, "m": 420, "h": 600, "p": 750, "k": 900}.get(quality, 240)
         cost = _estimate_render_cost(scene_bundle.code)
         try:
             _timeout_scale = float(getattr(getattr(profile, "resource_limits", None), "render_timeout_scale", 1.0) or 1.0)
@@ -1548,6 +1687,8 @@ class ManimRuntime:
             scene_bundle.video_path = str(video_path)
             scene_bundle.status = "rendered"
             scene_bundle.failure_kind = ""
+            from aetherlab.core.render_cache import record_scene_profile
+            record_scene_profile(scene_bundle, s, quality)
             log.info("Video rendered: %s (%.1f MB)", video_path, video_path.stat().st_size / 1e6)
         else:
             scene_bundle.diagnostics.append("Render succeeded but video file not found.")
@@ -1586,6 +1727,23 @@ class ManimRuntime:
         nothing.
         """
         s = settings or self._settings
+        try:
+            from aetherlab.core.render_profile import (
+                get_effective_profile,
+                resolve_unt_mode,
+            )
+
+            repair_unt, _ = resolve_unt_mode(s)
+            try:
+                _repair_preset = get_effective_profile(s).preset
+            except Exception:  # noqa: BLE001 - preset resolve never blocks repair
+                _repair_preset = ""
+            repair_vertical = (
+                str(_repair_preset or "").strip().lower() == "unt_vertical"
+            )
+        except Exception:  # noqa: BLE001 - UNT resolve never blocks repair
+            repair_unt = False
+            repair_vertical = False
         timeline = (
             scene_bundle.storyboard.get("timeline")
             if isinstance(scene_bundle.storyboard, dict)
@@ -1607,11 +1765,13 @@ class ManimRuntime:
                 kwargs["cache_lineage"] = cache_lineage
             if partial_animation_range is not None:
                 kwargs["partial_animation_range"] = partial_animation_range
-            return await self._render_once(
+            rendered = await self._render_once(
                 bundle, s, render_quality, progress,
                 variant=render_variant if variant is None else variant,
                 **kwargs
             )
+            from aetherlab.core.render_cache import record_scene_profile
+            return record_scene_profile(rendered, s, render_quality)
 
         cache_lineage = None
         cache_mode = os.getenv("AETHERLAB_MANIM_REPAIR_CACHE", "").strip().lower()
@@ -1629,12 +1789,17 @@ class ManimRuntime:
         # wasted render on every tournament solve — and every lesson chapter —
         # once the tournament defaulted on (F177). A fresh compiled scene has no
         # video_path and renders normally.
+        from aetherlab.core.render_cache import invalidate_rendered_media, scene_profile_matches
         already_drafted = bool(
             scene_bundle.status == "rendered"
             and scene_bundle.video_path
             and Path(scene_bundle.video_path).exists()
+            and (scene_profile_matches(scene_bundle, s, draft_quality)
+                 or scene_profile_matches(scene_bundle, s, quality))
         )
         if not already_drafted:
+            if scene_bundle.status == "rendered":
+                invalidate_rendered_media(scene_bundle)
             # Preflight: run the scene's code in seconds (dry run, 2 fps) and fix
             # runtime crashes / off-screen geometry before paying for a render.
             scene_bundle = await self._preflight_and_repair(scene_bundle, s, timeline)
@@ -1712,7 +1877,9 @@ class ManimRuntime:
                     f"Render repair {repairs} rejected by safety gate: " + "; ".join(issues[:4])
                 )
                 break
-            lint_ok, lint_issues = _blocking_scene_issues(fixed, timeline)
+            lint_ok, lint_issues = _blocking_scene_issues(
+                fixed, timeline, repair_unt, True, repair_vertical
+            )
             admission_issues = _cloud_render_admission_issues(
                 fixed, s, duration_target_s, timeline
             )
@@ -1740,8 +1907,8 @@ class ManimRuntime:
         # ── Promote the working code to the requested quality (Bug 4) ──
         # The draft rendered; render the final at the target quality. If that
         # fails/times out, keep the draft (partial success) rather than nothing.
-        final_quality = draft_quality
-        if scene_bundle.status == "rendered" and quality != draft_quality:
+        final_quality = quality if scene_profile_matches(scene_bundle, s, quality) else draft_quality
+        if scene_bundle.status == "rendered" and quality != final_quality:
             hq = SceneBundle(
                 class_name=scene_bundle.class_name,
                 code=scene_bundle.code,
@@ -1881,7 +2048,9 @@ class ManimRuntime:
                     static_issues.append(f"compile: {exc}")
                 if not static_issues:
                     safe, safety_issues = validate_code_safety(revised)
-                    lint_ok, lint_issues = _blocking_scene_issues(revised, timeline)
+                    lint_ok, lint_issues = _blocking_scene_issues(
+                        revised, timeline, repair_unt, True, repair_vertical
+                    )
                     if not safe:
                         static_issues.extend(safety_issues)
                     if not lint_ok:
@@ -1906,7 +2075,9 @@ class ManimRuntime:
                         )
                         compile(revised, "<aetherlab-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(revised)
-                        lint_ok, lint_issues = _blocking_scene_issues(revised, timeline)
+                        lint_ok, lint_issues = _blocking_scene_issues(
+                            revised, timeline, repair_unt, True, repair_vertical
+                        )
                         admission_issues = _cloud_render_admission_issues(
                             revised, s, duration_target_s, timeline
                         )
@@ -1972,7 +2143,9 @@ class ManimRuntime:
                         )
                         compile(repaired, "<aetherlab-render-repaired-visual-revision>", "exec")
                         safe, safety_issues = validate_code_safety(repaired)
-                        lint_ok, lint_issues = _blocking_scene_issues(repaired, timeline)
+                        lint_ok, lint_issues = _blocking_scene_issues(
+                            repaired, timeline, repair_unt, True, repair_vertical
+                        )
                         admission_issues = _cloud_render_admission_issues(
                             repaired, s, duration_target_s, timeline
                         )
@@ -2051,14 +2224,10 @@ class ManimRuntime:
 
         if s is not None and scene_bundle.code:
             try:
-                from aetherlab.services.render_backend import cloud_job_id, render_fps_for
+                from aetherlab.services.render_backend import cloud_job_id_for_profile
                 from aetherlab.services.render_ledger import RenderJobLedger
 
-                job_id = cloud_job_id(
-                    scene_bundle,
-                    quality=quality,
-                    fps=render_fps_for(scene_bundle.code, quality, s),
-                )
+                job_id = cloud_job_id_for_profile(scene_bundle, quality, s)
                 RenderJobLedger(s.data_dir / "render_ledger.json").metrics(job_id, {
                     "quality_score": scene_bundle.quality_score,
                     "retry_count": sum(
@@ -2157,6 +2326,23 @@ class ManimRuntime:
         from aetherlab.services.scene_generator import SceneGenerator
 
         generator = SceneGenerator(s)
+        try:
+            from aetherlab.core.render_profile import (
+                get_effective_profile,
+                resolve_unt_mode,
+            )
+
+            preflight_unt, _ = resolve_unt_mode(s)
+            try:
+                _preflight_preset = get_effective_profile(s).preset
+            except Exception:  # noqa: BLE001 - preset resolve never blocks preflight
+                _preflight_preset = ""
+            preflight_vertical = (
+                str(_preflight_preset or "").strip().lower() == "unt_vertical"
+            )
+        except Exception:  # noqa: BLE001 - UNT resolve never blocks preflight
+            preflight_unt = False
+            preflight_vertical = False
 
         async def try_repair(instruction: str, full_scene: bool):
             try:
@@ -2166,7 +2352,9 @@ class ManimRuntime:
             except Exception as exc:  # noqa: BLE001 - repair is bounded and fail-soft
                 return None, f"repair failed: {type(exc).__name__}: {str(exc)[:160]}"
             safe, issues = validate_code_safety(fixed)
-            lint_ok, lint_issues = _blocking_scene_issues(fixed, timeline)
+            lint_ok, lint_issues = _blocking_scene_issues(
+                fixed, timeline, preflight_unt, True, preflight_vertical
+            )
             if not safe or not lint_ok:
                 return None, "repair failed the static gates: " + "; ".join((issues + lint_issues)[:3])
             checked = await asyncio.to_thread(preflight_scene, fixed, bundle.class_name)
@@ -2325,24 +2513,18 @@ class ManimRuntime:
         cancel_kwargs = (
             {"cancel_check": cancel_check} if cancel_check is not None else {}
         )
-        from aetherlab.services.render_backend import cloud_job_id, render_fps_for
+        from aetherlab.services.render_backend import cloud_job_id_for_profile, render_fps_for
         from aetherlab.services.render_ledger import RenderJobLedger
 
         if backend.name == "local":
-            jid = cloud_job_id(
-                scene_bundle, quality=quality,
-                fps=render_fps_for(scene_bundle.code, quality, s), variant=variant,
-            )
+            jid = cloud_job_id_for_profile(scene_bundle, quality, s, variant)
             ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
             ledger.start(
                 job_id=jid, scene_class=scene_bundle.class_name, quality=quality,
                 fps=render_fps_for(scene_bundle.code, quality, s), backend="local",
             )
         else:
-            jid = cloud_job_id(
-                scene_bundle, quality=quality,
-                fps=render_fps_for(scene_bundle.code, quality, s), variant=variant,
-            )
+            jid = cloud_job_id_for_profile(scene_bundle, quality, s, variant)
             ledger = RenderJobLedger(s.data_dir / "render_ledger.json")
 
         def record_render_metrics(result: SceneBundle, backend_name: str, wall: float) -> None:
@@ -2404,6 +2586,8 @@ class ManimRuntime:
             **cancel_kwargs,
         )
         if rendered.status != CLOUD_UNAVAILABLE:
+            from aetherlab.core.render_cache import record_scene_profile
+            record_scene_profile(rendered, s, quality)
             if backend.name == "local":
                 record_render_metrics(rendered, "local", time.monotonic() - local_started)
                 if rendered.status == "rendered":
@@ -2446,6 +2630,8 @@ class ManimRuntime:
             **cancel_kwargs,
         )
         if local.status == "rendered":
+            from aetherlab.core.render_cache import record_scene_profile
+            record_scene_profile(local, s, quality)
             local.diagnostics.append("Cloud render unavailable; rendered locally.")
         # Ledger: record the local fallback against the same cloud job id so the
         # dashboard shows the whole story (cloud attempt -> local fallback).
@@ -2734,6 +2920,14 @@ def _manim_render_command(
     if selected_renderer == "opengl":
         # The OpenGL renderer only encodes a file when this explicit flag is set.
         command.append("--write_to_movie")
+    # Overlap x264 encoding with frame rendering (Manim default is 1, fully
+    # serial). 4 is Manim's own recommendation for typical hardware; the env
+    # override accepts 1..8 so weak machines can opt back to serial.
+    try:
+        inflight = int(str(os.getenv("AETHERLAB_MAX_INFLIGHT_ENCODERS", "4")).strip())
+    except (TypeError, ValueError):
+        inflight = 4
+    command.extend(["--max-inflight-encoders", str(max(1, min(8, inflight)))])
     if not cache_enabled:
         # Isolated per-render directories plus disabled caching keep stale
         # partial movies out of ordinary renders. Only a UUID repair lineage
@@ -2932,7 +3126,7 @@ def _estimate_render_cost(code: str) -> float:
 BEAT_DRIFT_TOLERANCE_S = 0.5
 
 _LAYOUT_BLOCKERS = ("[HYGIENE:OVERLAP]", "[HYGIENE:REDRAW_POSITION]")
-_ADVISORY_ISSUE_PREFIXES = ("[TIMING:", "[HYGIENE:", "[PERF:", "[MANIM:UPDATER_ANIMATE]")
+_ADVISORY_ISSUE_PREFIXES = ("[TIMING:", "[HYGIENE:", "[PERF:", "[MANIM:UPDATER_ANIMATE]", "[UNT:LAYOUT:")
 
 
 # Cloud render budget findings stay blocking: an over-budget scene in Cloud
@@ -3006,31 +3200,54 @@ def _cloud_render_admission_issues(
     return issues
 
 
-def _blocking_scene_issues(code: str, timeline: object) -> tuple[bool, list[str]]:
+def _blocking_scene_issues(
+    code: str,
+    timeline: object,
+    unt_mode: bool = False,
+    is_task_segment: bool = True,
+    is_vertical: bool = False,
+) -> tuple[bool, list[str]]:
     """validate_scene for a repair/revision of an already-accepted scene.
 
     Only render-crash findings block. Advisory timing/layout findings were
     already tolerated on the original, so rejecting a crash fix for them turned
     a repairable LaTeX error into a failed render (live, 2026-09-30).
+    UNT exam gates ride along when ``unt_mode`` is True; the portrait-layout
+    finding stays advisory via ``_ADVISORY_ISSUE_PREFIXES``.
     """
-    from aetherlab.services.scene_validation import validate_scene
+    from aetherlab.services.scene_validation import check_unt_gates, validate_scene
 
     _ok, issues = validate_scene(code, require_motion=True, timeline=timeline)
+    issues = list(issues)
+    if unt_mode:
+        try:
+            issues.extend(
+                check_unt_gates(
+                    code,
+                    is_task_segment=is_task_segment,
+                    is_vertical=is_vertical,
+                )
+            )
+        except Exception:  # noqa: BLE001 - UNT gates must remain fail-soft here
+            pass
     blocking = [issue for issue in issues if not _is_advisory_issue(issue)]
     return not blocking, blocking
 
 
-def _estimate_misses_target(estimate: object, target_seconds: float) -> bool:
+def _estimate_misses_target(
+    estimate: object, target_seconds: float, tolerance: float = 0.2
+) -> bool:
     """True when a static duration estimate *provably* misses the target window.
 
     An estimate carrying notes (loops, non-literal timing, LaggedStart/
     AnimationGroup without run_time) is an approximation; rejecting a scene on
     it discarded correctly timed AI scenes, so those estimates stay advisory.
+    ``tolerance`` is 0.20 cinematic, 0.10 UNT (resolve-once per generation).
     """
     if not getattr(estimate, "exact", True):
         return False
     return _duration_contract_delta(
-        getattr(estimate, "total_seconds", 0.0), target_seconds
+        getattr(estimate, "total_seconds", 0.0), target_seconds, tolerance
     ) > 0
 
 

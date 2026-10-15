@@ -45,7 +45,10 @@ from aetherlab.core.models import (
     SolverResult,
 )
 from aetherlab.core.proc import ProcessCancelledError
-from aetherlab.services.ent_lesson_catalog import curated_ent_lesson
+from aetherlab.services.ent_lesson_catalog import (
+    ACCELERATED_MOTION_5MIN_VERSION,
+    curated_ent_lesson,
+)
 from aetherlab.services.lesson_planner import _prepare_lesson_plan, plan_lesson
 from aetherlab.services.manim_runtime import ManimRuntime
 
@@ -113,6 +116,12 @@ class LessonPipeline:
         # an older free-form plan cached under the same topic name.
         plan = curated_ent_lesson(topic, language)
         is_curated = plan is not None
+        if is_curated and plan.model_name == ACCELERATED_MOTION_5MIN_VERSION:
+            # Stage O: the 5-minute lesson ships prebuilt (cloud finals + SRT +
+            # PDF). Never local-render or LLM-plan it; a missing artifact is an
+            # honest error bundle, not a reason to improvise other content.
+            report("Using the prebuilt 5-minute lesson package", 0, 1)
+            return _prebuilt_5min_bundle(plan)
         if not is_curated:
             plan = None if regenerate else plan_cache.get(topic, audience, language)
         if is_curated:
@@ -449,6 +458,81 @@ _AUDIENCE_LABELS = {
     "ap": "AP / honors level",
     "undergrad": "Undergraduate level",
 }
+
+
+def _stage_output_root() -> Path:
+    """Repo ``output/`` dir holding the Stage M finals and Stage N PDFs."""
+    return Path(__file__).resolve().parents[2] / "output"
+
+
+def prebuilt_5min_media(language: str) -> dict:
+    """Resolve the prebuilt 5-minute lesson artifacts for ``language``.
+
+    Returns video/srt/pdf paths ("" when the file is absent), the 8 measured
+    chapter offsets, the review record, and a ``missing`` list naming every
+    gap. Never raises: an unreadable manifest becomes a missing "offsets".
+    """
+    from aetherlab.services.ent_lesson_catalog import ACCELERATED_MOTION_5MIN_REVIEW
+
+    lang = normalize_language(language, "ru")
+    root = _stage_output_root()
+    video = root / "stage_m_final" / lang / f"lesson_{lang}.mp4"
+    srt = root / "stage_m_final" / lang / f"lesson_{lang}.srt"
+    pdf = root / "stage_n_pdf" / f"lesson_{lang}.pdf"
+    manifest = root / "stage_m_final" / lang / f"assembly_manifest_{lang}.json"
+    media: dict = {
+        "video": str(video) if video.is_file() else "",
+        "srt": str(srt) if srt.is_file() else "",
+        "pdf": str(pdf) if pdf.is_file() else "",
+        "offsets": [],
+        "review_status": dict(ACCELERATED_MOTION_5MIN_REVIEW),
+        "missing": [
+            name
+            for name, path in (("video", video), ("srt", srt), ("pdf", pdf))
+            if not path.is_file()
+        ],
+    }
+    try:
+        blocks = json.loads(manifest.read_text(encoding="utf-8"))["blocks"]
+        starts = [float(blocks[f"BlockB{i}"]["start_s"]) for i in range(8)]
+    except Exception:  # noqa: BLE001 — a broken manifest is a content gap
+        starts = []
+    if len(starts) == 8 and all(b >= a for a, b in zip(starts, starts[1:])):
+        media["offsets"] = starts
+    else:
+        media["missing"].append("offsets")
+    return media
+
+
+def _prebuilt_5min_bundle(plan: LessonPlan) -> LessonBundle:
+    """Assemble a LessonBundle around the prebuilt artifacts (no rendering).
+
+    Missing artifacts yield status "error" with the plan intact, so the UI can
+    still show the outline/transcript/questions while flagging the gap.
+    """
+    media = prebuilt_5min_media(plan.language)
+    if media["missing"]:
+        log.warning(
+            "Prebuilt 5-minute lesson incomplete (%s): %s",
+            plan.language, ", ".join(media["missing"]),
+        )
+        return LessonBundle(
+            plan=plan,
+            status="error",
+            srt_path=media["srt"],
+            pdf_path=media["pdf"],
+            review_status=media["review_status"],
+        )
+    return LessonBundle(
+        plan=plan,
+        video_path=media["video"],
+        status="assembled",
+        chapter_offsets=list(media["offsets"]),
+        rendered_chapter_indexes=list(range(len(plan.chapters))),
+        srt_path=media["srt"],
+        pdf_path=media["pdf"],
+        review_status=media["review_status"],
+    )
 
 
 def _audience_label(audience: str) -> str:

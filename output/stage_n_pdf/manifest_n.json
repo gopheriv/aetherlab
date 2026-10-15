@@ -1,0 +1,21 @@
+{
+  "content_version": 2,
+  "canonical_sha256": "7d85de57a9d59d861f718d05e784be520efeb4fca82c7c2faa4af8ca9bc42c84",
+  "langs": {
+    "ru": {
+      "tex": "lesson_ru.tex",
+      "pdf": "lesson_ru.pdf",
+      "tex_sha256": "af9ac93f36c5a6762c598afc0f54822839db939115ad4bfa6fdce530c42f75b8"
+    },
+    "kk": {
+      "tex": "lesson_kk.tex",
+      "pdf": "lesson_kk.pdf",
+      "tex_sha256": "719dc0e5e43f0fd85fbe45b346921fff6c5f1dcea34f995430de3f22a065261e"
+    },
+    "en": {
+      "tex": "lesson_en.tex",
+      "pdf": "lesson_en.pdf",
+      "tex_sha256": "614d2d704e586e86ad5aed11a3ec8ac7bbc3f31a83f50bd31793f701aefac21d"
+    }
+  }
+}

@@ -196,7 +196,7 @@ def test_invalid_artifact_has_validation_kind_not_encoder_kind(tmp_path, monkeyp
     client.conclusion, client.artifact = "success", {"id": 321}
     settings = _settings(tmp_path, "cloud")
     backend = render_backend.CloudRenderBackend(settings, client)
-    monkeypatch.setattr(backend, "_download_artifact", lambda *args: (None, "video has no decodable frame"))
+    monkeypatch.setattr(backend, "_download_artifact", lambda *args, **kwargs: (None, "video has no decodable frame"))
     result = asyncio.run(backend.render(_bundle(), quality="m", settings=settings, timeout=60))
     assert result.status == "render-error" and not result.video_path
     assert result.failure_kind == "artifact_invalid"

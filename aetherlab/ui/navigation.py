@@ -61,18 +61,24 @@ class SidebarNav(QtWidgets.QWidget):
         ("library", "Library", "Textbooks and references"),
         ("history", "History", "Past physics runs"),
         ("clapperboard", "Lab", "Physics simulations and video lessons"),
+        ("spider", "Spider", "See the workbench and repair visible bugs"),
     ]
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._expanded = False
         self._dense = False
+        self._tight = False
         self._full_labels = [item[1] for item in self._ITEMS]
         self._compact_labels = self._full_labels[:]
         self.setObjectName("NavRail")
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground)
         self.setFixedWidth(92)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Ignored)
         layout = QtWidgets.QVBoxLayout(self)
+        # Let resizeEvent reduce density before old tall button minima can
+        # force the parent window back to its previous height.
+        layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetNoConstraint)
         self._layout = layout
         layout.setContentsMargins(10, 16, 10, 12)
         layout.setSpacing(5)
@@ -82,7 +88,9 @@ class SidebarNav(QtWidgets.QWidget):
         mark.setFixedSize(40, 40)
         mark.setStyleSheet("background:#486A91; color:#FFFFFF; border-radius:14px; font-size:21px; font-weight:800;")
         layout.addWidget(mark, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(14)
+        self._brand_gap = QtWidgets.QSpacerItem(0, 14, QtWidgets.QSizePolicy.Policy.Minimum,
+                                               QtWidgets.QSizePolicy.Policy.Fixed)
+        layout.addSpacerItem(self._brand_gap)
         # These labels retain the translated accessible descriptions.
         self._brand_descriptor = QtWidgets.QLabel(self)
         self._section_label = QtWidgets.QLabel(self)
@@ -108,6 +116,7 @@ class SidebarNav(QtWidgets.QWidget):
 
         if self._buttons:
             self._buttons[0].setChecked(True)
+        self._apply_density()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -115,14 +124,24 @@ class SidebarNav(QtWidgets.QWidget):
 
     def _apply_density(self) -> None:
         dense = self.height() < 650
-        if dense == self._dense:
+        tight = self.height() < 520
+        if (dense, tight) == (self._dense, self._tight):
             return
         self._dense = dense
+        self._tight = tight
         self._layout.setContentsMargins(10, 8 if dense else 16, 10, 8 if dense else 12)
         self._layout.setSpacing(2 if dense else 5)
         self._mark.setFixedSize(32 if dense else 40, 32 if dense else 40)
+        self._brand_gap.changeSize(0, 6 if tight else 14, QtWidgets.QSizePolicy.Policy.Minimum,
+                                   QtWidgets.QSizePolicy.Policy.Fixed)
         for button in self._buttons:
-            button.setFixedHeight((42 if dense else 48) if self._expanded else (44 if dense else 58))
+            button.setFixedHeight(self._item_height())
+        self._layout.invalidate()
+
+    def _item_height(self) -> int:
+        if self._tight:
+            return 40
+        return (42 if self._dense else 48) if self._expanded else (44 if self._dense else 58)
 
     def set_result_available(self, available: bool) -> None:
         """The lab view is available before and after the first run."""
@@ -130,20 +149,20 @@ class SidebarNav(QtWidgets.QWidget):
 
     def set_language(self, language: str) -> None:
         compact_labels = {
-            "kk": ["Бет", "Тақырып", "ҰБТ", "Ұпай", "AI", "Кітап", "Тарих", "Зертхана"],
-            "ru": ["Главная", "Темы", "ЕНТ", "Баллы", "AI", "Книги", "История", "Лаба"],
-            "en": ["Home", "Topics", "Practice", "Stats", "AI", "Library", "History", "Lab"],
+            "kk": ["Бет", "Тақырып", "ҰБТ", "Ұпай", "AI", "Кітап", "Тарих", "Зертхана", "Өрмекші"],
+            "ru": ["Главная", "Темы", "ЕНТ", "Баллы", "AI", "Книги", "История", "Лаба", "Паук"],
+            "en": ["Home", "Topics", "Practice", "Stats", "AI", "Library", "History", "Lab", "Spider"],
         }.get(language, [item[1] for item in self._ITEMS])
         self._compact_labels = compact_labels
         self._full_labels = {
-            "kk": ["Басты бет", "Тақырыптар", "Жаттығу", "Прогресс", "AI көмекші", "Кітапхана", "Тарих", "Зертхана"],
-            "ru": ["Главная", "Темы", "Практика", "Прогресс", "AI-помощник", "Библиотека", "История", "Лаборатория"],
-            "en": ["Home", "Topics", "Practice", "Progress", "AI tutor", "Library", "History", "Laboratory"],
+            "kk": ["Басты бет", "Тақырыптар", "Жаттығу", "Прогресс", "AI көмекші", "Кітапхана", "Тарих", "Зертхана", "Өрмекші"],
+            "ru": ["Главная", "Темы", "Практика", "Прогресс", "AI-помощник", "Библиотека", "История", "Лаборатория", "Паук"],
+            "en": ["Home", "Topics", "Practice", "Progress", "AI tutor", "Library", "History", "Laboratory", "Spider"],
         }.get(language, [item[1] for item in self._ITEMS])
         hints = {
-            "kk": ["Оқушының басты беті", "ҰБТ физика тақырыптары", "ҰБТ жаттығуы және сынақ нұсқасы", "Ұпайлар мен қайталау тақырыптары", "Физика сұрағын қой немесе сабақ жаса", "Оқулықтар мен дереккөздер", "Алдыңғы физика жұмыстары", "Физикалық симуляциялар"],
-            "ru": ["План подготовки к ЕНТ", "Темы физики для ЕНТ", "Тренировка и пробный вариант", "Баллы и темы для повторения", "Задай вопрос или создай урок", "Учебники и материалы", "История занятий", "Физические симуляции"],
-            "en": ["Student study plan", "Physics topics for UNT", "Practice and full mock", "Scores and topics to revisit", "Ask or learn physics", "Textbooks and references", "Past learning runs", "Physics simulations"],
+            "kk": ["Оқушының басты беті", "ҰБТ физика тақырыптары", "ҰБТ жаттығуы және сынақ нұсқасы", "Ұпайлар мен қайталау тақырыптары", "Физика сұрағын қой немесе сабақ жаса", "Оқулықтар мен дереккөздер", "Алдыңғы физика жұмыстары", "Физикалық симуляциялар", "Экраннан ақау тауып, түзету"],
+            "ru": ["План подготовки к ЕНТ", "Темы физики для ЕНТ", "Тренировка и пробный вариант", "Баллы и темы для повторения", "Задай вопрос или создай урок", "Учебники и материалы", "История занятий", "Физические симуляции", "Найти и исправить ошибки на экране"],
+            "en": ["Student study plan", "Physics topics for UNT", "Practice and full mock", "Scores and topics to revisit", "Ask or learn physics", "Textbooks and references", "Past learning runs", "Physics simulations", "Scan the screen and repair bugs"],
         }.get(language, [item[2] for item in self._ITEMS])
         self._brand_descriptor.setText(
             {"kk": "ҰБТ · Физика", "ru": "ЕНТ · Физика", "en": "UNT · Physics"}.get(language, "UNT · Physics")
@@ -177,7 +196,7 @@ class SidebarNav(QtWidgets.QWidget):
                 QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
                 if expanded else QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon
             )
-            button.setFixedHeight((42 if self._dense else 48) if expanded else (44 if self._dense else 58))
+            button.setFixedHeight(self._item_height())
             button.setText(
                 self._full_labels[index] if expanded else self._compact_labels[index]
             )
@@ -246,6 +265,7 @@ class PipelineStepper(QtWidgets.QWidget):
         "active": "#486A91",
         "complete": "#26725C",
         "error": "#AC4055",
+        "cancelled": "#65758A",
     }
     _NODE_R = 15  # node radius
     _LABEL_FONT = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Weight.DemiBold)
@@ -266,6 +286,7 @@ class PipelineStepper(QtWidgets.QWidget):
         self._language = "kk"
         self._stage_labels = ["Шешу", "Іздеу", "Сахна", "Рендер"]
         self._cancel_label = "Тоқтату"
+        self._cancelled_label = "Тоқтатылды"
         self._cancel_rect: QtCore.QRectF | None = None
         self._cancellable = False
 
@@ -275,12 +296,12 @@ class PipelineStepper(QtWidgets.QWidget):
 
     def set_language(self, language: str) -> None:
         copy = {
-            "kk": (["Шешу", "Іздеу", "Сахна", "Рендер"], "Тоқтату"),
-            "ru": (["Решение", "Поиск", "Сцена", "Рендер"], "Отмена"),
-            "en": (["Solve", "RAG", "Scene", "Render"], "Cancel"),
+            "kk": (["Шешу", "Іздеу", "Сахна", "Рендер"], "Тоқтату", "Тоқтатылды"),
+            "ru": (["Решение", "Поиск", "Сцена", "Рендер"], "Отмена", "Отменено"),
+            "en": (["Solve", "RAG", "Scene", "Render"], "Cancel", "Cancelled"),
         }
         self._language = language if language in copy else "kk"
-        self._stage_labels, self._cancel_label = copy[self._language]
+        self._stage_labels, self._cancel_label, self._cancelled_label = copy[self._language]
         self.update()
 
     # \u2500\u2500 public API (kept compatible with the previous stepper) \u2500\u2500
@@ -290,7 +311,7 @@ class PipelineStepper(QtWidgets.QWidget):
         self.update()
 
     def set_stage(self, stage: int, status: str = "active") -> None:
-        """Update pipeline stage. status: 'active', 'complete', 'error'."""
+        """Update pipeline stage, including a terminal neutral cancellation."""
         import time
 
         self._current_stage = stage
@@ -305,7 +326,7 @@ class PipelineStepper(QtWidgets.QWidget):
             old = self._statuses[i]
             if new == "active" and old != "active":
                 self._started[i] = time.monotonic()
-            elif old == "active" and new in ("complete", "error"):
+            elif old == "active" and new in ("complete", "error", "cancelled"):
                 if i in self._started:
                     self._elapsed[i] = time.monotonic() - self._started[i]
             elif new == "complete" and i not in self._elapsed and i in self._started:
@@ -397,6 +418,9 @@ class PipelineStepper(QtWidgets.QWidget):
                     QtCore.QPointF(cx - 8, cy - 8),
                     icons.icon_pixmap("x", 16, self._COLORS["error"]),
                 )
+            elif status == "cancelled":
+                painter.setPen(QtGui.QPen(QtGui.QColor("#F4F7FB"), 2))
+                painter.drawLine(QtCore.QPointF(cx - 5, cy), QtCore.QPointF(cx + 5, cy))
             elif status == "active":
                 # Rotating arc spinner
                 pen = QtGui.QPen(color, 2)
@@ -430,6 +454,12 @@ class PipelineStepper(QtWidgets.QWidget):
                 self._cancel_rect = QtCore.QRectF(cx - 24, cy + r + 18, 48, 18)
             else:
                 elapsed = self._elapsed.get(i)
+                if status == "cancelled":
+                    painter.setFont(self._CANCEL_FONT)
+                    painter.setPen(QtGui.QColor("#65758A"))
+                    text = self._cancelled_label + (f" · {elapsed:.1f}s" if elapsed is not None else "")
+                    painter.drawText(sub_rect, QtCore.Qt.AlignmentFlag.AlignHCenter, text)
+                    continue
                 if elapsed is None and status == "active" and i in self._started:
                     elapsed = time.monotonic() - self._started[i]
                 if elapsed is not None:

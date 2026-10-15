@@ -12,6 +12,28 @@ from index_reference_library import _database_path
 from aetherlab.core.console import configure_utf8_stdio
 from aetherlab.services.ent_physics_bank import EXERCISES
 
+_MANAGED_IDS_KEY = "ent_practice_managed_ids"
+_BANK_ID = re.compile(r"topic-[a-z][a-z0-9_]*-[0-9]{3,6}\Z")
+
+
+def _managed_ids(db: sqlite3.Connection) -> set[str]:
+    row = db.execute("SELECT value FROM metadata WHERE key=?", (_MANAGED_IDS_KEY,)).fetchone()
+    if row is None:
+        return set()
+    try:
+        ids = json.loads(row[0])
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError("Invalid managed-question manifest; sync cancelled") from exc
+    if (not isinstance(ids, list) or any(not isinstance(value, str) or not _BANK_ID.fullmatch(value) for value in ids)
+            or len(ids) != len(set(ids))):
+        raise ValueError("Invalid managed-question manifest; sync cancelled")
+    return set(ids)
+
+
+def _is_bank_record(row: tuple | None) -> bool:
+    return bool(row and row[0] in {"PhysLab", "AetherLab"}
+                and row[1] == "original_aetherlab_item" and row[2] in {"practice", "retired_practice"})
+
 _CATEGORY = {
     "kinematics":"Механика", "dynamics":"Механика", "statics":"Механика",
     "fluids":"Механика", "conservation":"Механика",
@@ -38,16 +60,19 @@ def _reference_pages(db: sqlite3.Connection) -> dict[str, list[dict]]:
     citations for each generated numeric variation.
     """
     result = {}
+    # A fresh question database need not have an indexed textbook corpus yet.
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='physics_pages' AND type IN ('table','view')").fetchone() is None:
+        return {topic: [] for topic in _CATEGORY}
     for topic, category in _CATEGORY.items():
         rows = db.execute(
             """SELECT filename,source_path,unit_number,label,confidence
                FROM physics_pages WHERE topic=? AND filename LIKE 'Физика Закирова%'
-               ORDER BY filename,unit_number""", (category,),
+               ORDER BY filename,source_path,unit_number""", (category,),
         ).fetchall()
         pages = []
         seen = set()
         for filename, source_path, number, label, confidence in rows:
-            key = (filename, number)
+            key = (source_path, filename, number)
             if key in seen:
                 continue
             seen.add(key)
@@ -103,6 +128,18 @@ def main() -> int:
             if column not in columns:
                 db.execute(f"ALTER TABLE ent_practice_questions ADD COLUMN {column} {declaration}")
         db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        previous_ids = _managed_ids(db)
+        ids = [question.id for question in EXERCISES]
+        if not ids or len(ids) != len(set(ids)) or any(not _BANK_ID.fullmatch(value) for value in ids):
+            raise ValueError("Invalid versioned question IDs; sync cancelled")
+        current_ids = set(ids)
+        for question_id in ids:
+            existing = db.execute(
+                "SELECT author,reuse_status,bank_kind FROM ent_practice_questions WHERE question_id=?",
+                (question_id,),
+            ).fetchone()
+            if existing is not None and not _is_bank_record(existing):
+                raise ValueError(f"Refusing to overwrite a non-bank question: {question_id}")
         references = _reference_pages(db)
         rows = []
         for question in EXERCISES:
@@ -134,38 +171,44 @@ def main() -> int:
                 json.dumps(ref_pages, ensure_ascii=False),
                 "practice",
             ))
+        columns = ("question_id", "topic", "difficulty", "kind", "prompt_json", "choices_json",
+                   "correct_indices_json", "explanation_json", "kazakh_term", "context_json",
+                   "matching_left_json", "source_note", "reuse_status", "author", "reviewer",
+                   "language_review_status", "answer_verification_status", "synced_at",
+                   "solution_latex_json", "source_pages_json", "bank_kind")
+        updates = ",".join(f"{column}=excluded.{column}" for column in columns if column != "question_id")
         db.executemany(
-            """INSERT OR REPLACE INTO ent_practice_questions (
-                question_id,topic,difficulty,kind,prompt_json,choices_json,
-                correct_indices_json,explanation_json,kazakh_term,context_json,
-                matching_left_json,source_note,reuse_status,author,reviewer,
-                language_review_status,answer_verification_status,synced_at,
-                solution_latex_json,source_pages_json,bank_kind
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            rows,
-        )
-        ids = [question.id for question in EXERCISES]
-        placeholders = ",".join("?" for _ in ids)
+            f"INSERT INTO ent_practice_questions ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) "
+            f"ON CONFLICT(question_id) DO UPDATE SET {updates}", rows)
+        # Retire only IDs recorded by a prior successful sync. Never infer
+        # ownership of legacy/custom rows, and keep annotations/foreign keys.
+        for question_id in previous_ids - current_ids:
+            existing = db.execute(
+                "SELECT author,reuse_status,bank_kind FROM ent_practice_questions WHERE question_id=?",
+                (question_id,),
+            ).fetchone()
+            if _is_bank_record(existing):
+                db.execute("UPDATE ent_practice_questions SET bank_kind='retired_practice' WHERE question_id=?",
+                           (question_id,))
         db.execute(
-            f"DELETE FROM ent_practice_questions WHERE question_id NOT IN ({placeholders})",
-            ids,
-        )
-        db.execute(
-            "INSERT OR REPLACE INTO metadata(key,value) VALUES('ent_practice_bank_count',?)",
+            "INSERT INTO metadata(key,value) VALUES('ent_practice_bank_count',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(len(EXERCISES)),),
         )
         db.execute(
-            "INSERT OR REPLACE INTO metadata(key,value) VALUES('ent_practice_bank_synced_at',?)",
+            "INSERT INTO metadata(key,value) VALUES('ent_practice_bank_synced_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (now,),
         )
         db.execute(
-            "INSERT OR REPLACE INTO metadata(key,value) VALUES('ent_practice_topics',?)",
+            "INSERT INTO metadata(key,value) VALUES('ent_practice_topics',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             ("25 topics x 100 practice questions",),
         )
+        db.execute("INSERT INTO metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                   (_MANAGED_IDS_KEY, json.dumps(sorted(current_ids))),)
         db.commit()
         total = db.execute("SELECT COUNT(*) FROM ent_practice_questions").fetchone()[0]
         print(f"Database: {db_path}")
-        print(f"Synchronized {total} questions across kk/ru/en with fixed answer keys.")
+        print(f"Synchronized {len(ids)} bank questions across kk/ru/en; preserved {total - len(ids)} other records.")
+        print(f"Unreviewed textbook-page candidates: {sum(bool(pages) for pages in references.values())}/25 topics.")
         return 0
     except Exception:
         db.rollback()

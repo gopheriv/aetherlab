@@ -31,6 +31,44 @@ Cloud mode reports a remote failure without starting a local render.
    - Manual alternative: copy `.github/workflows/render.yml` from this project
      into the repository yourself.
 
+## Render profile transport (worker v8)
+
+The current worker contract accepts explicit even `width`/`height` as well as
+`quality` and `fps`. The application resolves saved/environment overrides before
+dispatch. Canvas bounds are 320–3840 by 240–2160; odd dimensions normalize to
+even values with a profile-provenance entry for YUV420p encoding. The worker
+rejects invalid explicit dimensions before starting Manim.
+
+The cloud job identity includes the resolved canvas and FPS. Download/cache
+checks require those dimensions/FPS, a video stream, positive duration and a
+decoded frame. A new file is validated in staging before replacing a previous
+video. The cloud worker renders with Cairo; a requested OpenGL renderer is
+reported as a Cairo fallback without starting a local render in Cloud mode.
+
+Cinematic inherits a non-adaptive 60 FPS policy unless a valid explicit adaptive
+override enables fallback. Invalid adaptive strings do not enable it. A fallback
+message names the actual original FPS, including explicit rates such as 48.
+
+These changes are locally verified with an owned client, the actual workflow
+canvas preamble and encoded media fixtures. On 15 October 2026 a real v8 job
+rendered an isolated two-second moving-dot scene in Cloud mode: the downloaded
+MP4 decoded all 48 frames at 960×540 and 24 FPS, with the dot moving across the
+canvas. A second request returned identical bytes from cache with one total
+dispatch. HEAD and captured sources stayed unchanged during that probe.
+Evidence: `tmp/live-profile-v8-8f293f4adc/evidence.json`.
+
+This verifies that technical scene's real dispatch, delivery, profile and cache.
+It does not establish narration quality, a five-minute educational lesson,
+native player interaction or complete acceptance of the cloud user story.
+
+The later shipped/bundled quality-choice mismatch was corrected to
+`l/m/h/p/k` (BUG-252). A separate real quality-`p` job then passed at
+2560×1440/30 FPS: every one of its 60 frames decoded with measured object
+motion, and a repeated request returned identical cached bytes with one total
+dispatch. Its HEAD/sources stayed unchanged. Evidence:
+`tmp/live-1440p-5a7471e093/evidence.json`. This remains a silent technical
+scene, not educational-content, narration or native-player acceptance.
+
 ## Token Permissions
 
 For a fine-grained token, restrict it to the render repository and grant:

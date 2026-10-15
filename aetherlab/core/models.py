@@ -189,6 +189,9 @@ class SceneBundle:
     narration_text: str = ""
     subtitle_path: str = ""
     narration_sync: JsonDict = field(default_factory=dict)
+    # Requested profile at the successful render boundary. Legacy rows are
+    # deliberately unverified and retain reusable code, not reusable media.
+    render_profile_key: str = ""
 
     def to_json(self) -> JsonDict:
         data = asdict(self)
@@ -222,6 +225,7 @@ class SceneBundle:
             subtitle_path=str(payload.get("subtitle_path", "")),
             narration_sync=payload.get("narration_sync")
             if isinstance(payload.get("narration_sync"), dict) else {},
+            render_profile_key=str(payload.get("render_profile_key", "") or ""),
             critique_issues=[str(i) for i in payload.get("critique_issues", [])]
             if isinstance(payload.get("critique_issues"), list) else [],
             critique_breakdown={
@@ -498,6 +502,12 @@ class LessonBundle:
     # render leaves a gap in plan.chapters; this keeps surviving clips mapped to
     # their original titles/narration/UI outline rows. Empty for old caches.
     rendered_chapter_indexes: list[int] = field(default_factory=list)
+    # Optional media links. Prebuilt lessons (Stage O) ship an assembled video
+    # with matching subtitles + a study PDF; review_status flags content that
+    # still needs teacher review. Empty/absent for locally rendered lessons.
+    srt_path: str = ""
+    pdf_path: str = ""
+    review_status: dict = field(default_factory=dict)
 
     def to_json(self) -> JsonDict:
         return {
@@ -508,6 +518,9 @@ class LessonBundle:
             "cached": self.cached,
             "chapter_offsets": list(self.chapter_offsets),
             "rendered_chapter_indexes": list(self.rendered_chapter_indexes),
+            "srt_path": self.srt_path,
+            "pdf_path": self.pdf_path,
+            "review_status": dict(self.review_status),
         }
 
     @classmethod
@@ -533,4 +546,11 @@ class LessonBundle:
                 for x in data.get("rendered_chapter_indexes", [])
                 if isinstance(x, int)
             ],
+            srt_path=str(data.get("srt_path", "")),
+            pdf_path=str(data.get("pdf_path", "")),
+            review_status=(
+                {str(k): v for k, v in data["review_status"].items()}
+                if isinstance(data.get("review_status"), dict)
+                else {}
+            ),
         )

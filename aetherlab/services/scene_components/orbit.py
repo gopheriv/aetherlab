@@ -163,6 +163,11 @@ class {class_name}(Scene):
                              color=YELLOW, fill_color=YELLOW, fill_opacity=0.35, stroke_width=1)
         sector_peri.set_z_index(2)
         sector_apo.set_z_index(2)
+        # Deliberate curated composition: both sectors emanate from the star,
+        # so their overlap with it is the exhibit, not clutter (preflight
+        # honors this flag instead of flagging the apex contact).
+        sector_peri._aetherlab_allow_overlap = True
+        sector_apo._aetherlab_allow_overlap = True
         law = Text("equal areas in equal times", color=GOLD).scale(0.32).to_edge(DOWN)
         law.set_z_index(5)
 

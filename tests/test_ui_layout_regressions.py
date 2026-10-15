@@ -98,6 +98,32 @@ def test_compact_sidebar_fits_short_window_without_overlapping_items() -> None:
     sidebar.close()
 
 
+def test_nine_sidebar_destinations_reflow_after_growing_and_shrinking() -> None:
+    from aetherlab.ui.navigation import SidebarNav
+    app = _app()
+    sidebar = SidebarNav()
+    selected = []
+    sidebar.item_selected.connect(selected.append)
+    try:
+        for language in ("kk", "ru", "en"):
+            sidebar.set_language(language)
+            for expanded in (False, True):
+                sidebar.set_expanded(expanded)
+                for height in (900, 460, 640, 460):
+                    sidebar.resize(sidebar.width(), height)
+                    sidebar.show()
+                    app.processEvents()
+                    assert sidebar.height() == height
+                    assert sidebar._dense == (height < 650)
+                    assert all(a.geometry().bottom() < b.geometry().top()
+                               for a, b in zip(sidebar._buttons, sidebar._buttons[1:]))
+                    assert sidebar._buttons[-1].geometry().bottom() < sidebar.height()
+                sidebar._buttons[-1].click()
+                assert selected[-1] == 8
+    finally:
+        sidebar.close()
+
+
 def test_main_student_shell_reflows_across_laptop_and_desktop_sizes(tmp_path) -> None:
     from dataclasses import replace
 
@@ -121,6 +147,94 @@ def test_main_student_shell_reflows_across_laptop_and_desktop_sizes(tmp_path) ->
             assert not window.student_dashboard.companion_panel.isWindow()
             assert window.sidebar._buttons[-1].geometry().bottom() < window.sidebar.height()
     window.close()
+
+
+def test_startup_and_spider_status_follow_selected_language(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from aetherlab.core.settings import load_settings
+    from aetherlab.ui.main_window import MainWindow, _main_status_copy
+
+    app = _app()
+    for language in ("kk", "ru", "en"):
+        data_dir = tmp_path / language
+        data_dir.mkdir()
+        monkeypatch.setenv("AETHERLAB_DATA_DIR", str(data_dir))
+        monkeypatch.setenv("AETHERLAB_LIBRARY_DIR", str(data_dir / "library"))
+        monkeypatch.setenv("AETHERLAB_CHROMA_PATH", str(data_dir / "chroma"))
+        monkeypatch.setenv("AETHERLAB_CACHE_PATH", str(data_dir / "cache.sqlite3"))
+        monkeypatch.setenv("AETHERLAB_REFERENCE_SOURCES", str(data_dir / "no-references"))
+        monkeypatch.setenv("AETHERLAB_DISABLE_LEGACY_ENV", "1")
+        monkeypatch.setenv("AETHERLAB_QWEN_AUTOLOAD", "0")
+        monkeypatch.setenv("AETHERLAB_WEB_REFS", "0")
+        monkeypatch.setenv("AETHERLAB_SPIDER_CRAWL", "1")
+        for name in (
+            "AETHERLAB_PROVIDER",
+            "AETHERLAB_LLM_MODEL",
+            "MANIM_MODEL",
+            "GPT_MODEL",
+            "CHAT_MODEL",
+            "AETHERLAB_OPENAI_API_KEY",
+            "OPENAI_API_KEY",
+            "GPT_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "AETHERLAB_OPENAI_BASE_URL",
+            "OPENAI_BASE_URL",
+            "GPT_BASE_URL",
+            "LLM_BASE_URL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        settings = replace(load_settings(), data_dir=data_dir, openai_api_key="")
+        window = MainWindow(settings)
+        try:
+            assert window.spider_dock.isHidden()
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                "kk",
+                "ready",
+                provider=_main_status_copy("kk", "no_api"),
+            )
+
+            window.command_bar.set_language(language)
+            app.processEvents()
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                language,
+                "ready",
+                provider=_main_status_copy(language, "no_api"),
+            )
+
+            window._on_ollama_found(["qwen-local"])
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                language, "ollama_detected", count=1
+            )
+            toast_messages = []
+            monkeypatch.setattr(
+                window.toast,
+                "show_message",
+                lambda *args: toast_messages.append(args),
+            )
+            window._enable_ollama()
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                language, "local_ready", model="qwen-local"
+            )
+            assert toast_messages[-1] == (
+                "success",
+                _main_status_copy(language, "ollama_enabled", model="qwen-local"),
+            )
+            window._show_provider_status(
+                "settings_saved", model="gpt-test", provider_available=True
+            )
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                language, "settings_saved", provider="gpt-test"
+            )
+
+            window._on_sidebar_select(8)
+            assert not window.spider_dock.isHidden()
+            assert window.statusBar().currentMessage() == _main_status_copy(
+                language, "spider_ready"
+            )
+        finally:
+            window.close()
+            app.processEvents()
 
 
 def test_empty_progress_hides_mock_history_and_disables_review(tmp_path) -> None:
@@ -156,7 +270,7 @@ def test_topic_search_filter_and_lesson_route_work_together(tmp_path) -> None:
     view.learn_topic_requested.connect(destinations.append)
     card = view.rows.itemAt(0).widget()
     next(button for button in card.findChildren(QtWidgets.QPushButton) if button.text() == "Study").click()
-    assert destinations == ["constant_acceleration"]
+    assert destinations == ["constant_acceleration_5min"]
     view.filter.setCurrentIndex(view.filter.findData("new"))
     assert view.rows.count() == 0
     view.search.clear()
@@ -399,18 +513,28 @@ def test_review_action_opens_mistakes_and_disposes_dialogs(tmp_path, monkeypatch
                    question_results={question.id: False}, score=0, possible_points=1)
     window.sidebar.select(3)
     opened = []
+    attempt_ids = []
+    resume_actions = []
 
     def close_review(dialog):
         opened.append((dialog._mode, [item["id"] for item in dialog._questions]))
+        attempt_ids.append(dialog._attempt_id)
         dialog.reject()
         return QtWidgets.QDialog.DialogCode.Rejected
 
+    def resume_review(dialog, action):
+        resume_actions.append(action)
+        return QtWidgets.QMessageBox.StandardButton.Yes
+
     monkeypatch.setattr(ExamPracticeDialog, "exec", close_review)
+    monkeypatch.setattr(ExamPracticeDialog, "_confirm_exam_action", resume_review)
     for _ in range(2):
         window.progress_overview.review_button.click()
         QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
         assert not window.findChildren(ExamPracticeDialog)
     assert opened == [("mistake_review", [question.id])] * 2
+    assert resume_actions == ["resume"]
+    assert attempt_ids[0] == attempt_ids[1]
     window.close()
     app.processEvents()
 

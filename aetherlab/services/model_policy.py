@@ -12,9 +12,9 @@ therefore either starves the slow models or leaves the fast ones hanging.
 ``resolve_pathway()`` maps a model id to a :class:`ModelPathway` describing how
 to drive that family: the minimum wall-clock budget one call needs, whether a
 timeout is worth retrying, and whether thinking should be switched off.
-``effective_llm_timeout()`` then *raises* a too-small configured timeout to the
-pathway's floor, so pointing AetherLab at a reasoning model works out of the
-box instead of silently timing out into the fallback template.
+``effective_llm_timeout()`` clamps an explicit timeout to the supported bounds
+without raising it to a model-specific floor. Model pathways supply defaults at
+settings load time; ``timeout_shortfall()`` explains an insufficient budget.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from aetherlab.core.settings import AppSettings
@@ -331,14 +332,26 @@ def model_codegen_warning(model: str | None, timeout: float = 60.0) -> str:
 
 
 def active_provider_name(settings: "AppSettings") -> str:
-    base = str(settings.openai_base_url or "").lower()
-    model = _model_id(settings.llm_model)
+    """Describe the resolved endpoint; a preset/model is not endpoint evidence."""
     if not settings.openai_api_key:
         return "Offline"
-    if getattr(settings, "provider_source", "") == "ollama-local" or "11434" in base:
-        return "Ollama"
-    if "dashscope" in base or "aliyun" in base or "alibabacloud" in base or model.startswith("qwen"):
-        return "Qwen / DashScope"
-    if "api.openai.com" in base or (not base and model.startswith(("gpt-", "o1", "o3", "o4"))):
+    base = str(settings.openai_base_url or "").strip()
+    if not base:
+        # load_settings already resolves environment aliases. With no resolved
+        # override, AsyncOpenAI uses its normal OpenAI endpoint.
         return "OpenAI"
+    try:
+        endpoint = urlsplit(base)
+        host = (endpoint.hostname or "").lower().rstrip(".")
+        port = endpoint.port
+    except ValueError:
+        return "OpenAI-compatible endpoint"
+    if endpoint.scheme.lower() not in {"http", "https"} or not host:
+        return "OpenAI-compatible endpoint"
+    if host == "api.openai.com":
+        return "OpenAI"
+    if host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"}:
+        return "Qwen / DashScope"
+    if port == 11434:
+        return "Ollama"
     return "OpenAI-compatible endpoint"

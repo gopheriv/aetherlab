@@ -619,9 +619,10 @@ def test_request_parameter_flows_from_remote_solver_to_scene_canvas_and_research
     captured = {}
     generator = SceneGenerator(SimpleNamespace(
         openai_api_key="test-key", llm_model="test-model", llm_timeout_seconds=60,
+        data_dir=tmp_path / "scene_data",
     ))
 
-    async def fake_generate_remote(req, normalized, references, class_name):
+    async def fake_generate_remote(req, normalized, references, class_name, **_kwargs):
         captured["mass"] = normalized.variables["mass"]
         captured["spec"] = build_scene_spec(req, normalized, references)
         return f"class {class_name}: pass"

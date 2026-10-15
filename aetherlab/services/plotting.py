@@ -104,11 +104,16 @@ class _IntToFloat(ast.NodeTransformer):
 
     def visit_Constant(self, node: ast.Constant) -> ast.Constant:  # noqa: N802
         if isinstance(node.value, int) and not isinstance(node.value, bool):
-            return ast.copy_location(ast.Constant(float(node.value)), node)
+            try:
+                value = float(node.value)
+            except OverflowError as exc:
+                raise ExprError("Numeric literal exceeds the supported float range.") from exc
+            return ast.copy_location(ast.Constant(value), node)
         return node
 
 
 def _validate(tree: ast.Expression, allowed_names: set[str]) -> None:
+    called_names = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     count = 0
     for node in ast.walk(tree):
         count += 1
@@ -133,10 +138,16 @@ def _validate(tree: ast.Expression, allowed_names: set[str]) -> None:
             if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCTIONS:
                 name = getattr(node.func, "id", type(node.func).__name__)
                 raise ExprError(f"Function {name!r} is not allowed.")
+            # NumPy accepts a second positional `out` array. A mathematical
+            # expression must never acquire that write capability.
+            if len(node.args) != 1:
+                raise ExprError(f"Function {node.func.id!r} requires exactly one argument.")
             continue
         if isinstance(node, ast.Name):
             if not isinstance(node.ctx, ast.Load):
                 raise ExprError("Assignment inside expressions is not allowed.")
+            if node.id in _FUNCTIONS and id(node) not in called_names:
+                raise ExprError(f"Function {node.id!r} must be called with one argument.")
             if (
                 node.id not in allowed_names
                 and node.id not in _FUNCTIONS
@@ -177,6 +188,9 @@ def compile_expression(
 
     allowed = {"t"} | set(param_names)
     _validate(tree, allowed)
+    used_parameters = frozenset(node.id for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id in param_names
+        and node.id not in _FUNCTIONS and node.id != "t")
 
     tree = ast.fix_missing_locations(_IntToFloat().visit(tree))
     code = compile(tree, "<aetherlab-plot-expr>", "eval")
@@ -184,7 +198,13 @@ def compile_expression(
     def fn(t: np.ndarray, params: dict[str, float]) -> np.ndarray:
         namespace: dict[str, Any] = dict(_FUNCTIONS)
         namespace.update(_CONSTANTS)
-        namespace.update({k: float(v) for k, v in params.items()})
+        # Bind only declared parameters actually used by this expression.
+        # Extraneous fields cannot replace math functions or constants.
+        for name in used_parameters:
+            try:
+                namespace[name] = float(params[name])
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise ExprError(f"Missing or invalid numeric parameter {name!r}.") from exc
         namespace["t"] = t
         try:
             with np.errstate(all="ignore"):
@@ -195,6 +215,10 @@ def compile_expression(
             result = math.inf
         except ZeroDivisionError:
             result = math.nan
+        except (TypeError, ValueError, NameError) as exc:
+            raise ExprError("Expression cannot be evaluated as real numeric math.") from exc
+        if np.iscomplexobj(result):
+            raise ExprError("Plot expressions must produce real values, not complex numbers.")
         # Broadcast constants (e.g. "2*pi") to the sample grid's shape.
         return np.broadcast_to(np.asarray(result, dtype=float), np.shape(t)).copy()
 
@@ -208,7 +232,10 @@ def _pair(value: Any, what: str) -> tuple[float, float]:
         or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
     ):
         raise ExprError(f"{what} must be a [lo, hi] number pair.")
-    lo, hi = float(value[0]), float(value[1])
+    try:
+        lo, hi = float(value[0]), float(value[1])
+    except OverflowError as exc:
+        raise ExprError(f"{what} must be a finite [lo, hi] number pair.") from exc
     if not (math.isfinite(lo) and math.isfinite(hi)) or lo >= hi:
         raise ExprError(f"{what} must be finite with lo < hi.")
     return lo, hi
@@ -225,7 +252,7 @@ def _compile_curve_entry(
     if kind == "explicit":
         x_fn = compile_expression("t", params)
     else:
-        x_fn = compile_expression(entry.get("x") or "t", params)
+        x_fn = compile_expression(_parametric_x(entry), params)
 
     style = entry.get("style", "solid")
     if style not in _ALLOWED_STYLES:
@@ -255,15 +282,28 @@ def _compile_points(
         if not isinstance(entry, dict):
             raise ExprError(f"points[{i}] must be an object.")
         t = entry.get("t")
-        if not isinstance(t, (int, float)) or isinstance(t, bool) or not math.isfinite(t):
+        if not isinstance(t, (int, float)) or isinstance(t, bool):
             raise ExprError(f"points[{i}].t must be a finite number.")
-        if not (t0 <= float(t) <= t1):
+        try:
+            t = float(t)
+        except OverflowError as exc:
+            raise ExprError(f"points[{i}].t must be a finite number.") from exc
+        if not math.isfinite(t):
+            raise ExprError(f"points[{i}].t must be a finite number.")
+        if not (t0 <= t <= t1):
             continue  # silently drop out-of-range markers
         label = entry.get("label", "")
         if not isinstance(label, str):
             raise ExprError(f"points[{i}].label must be a string.")
         out.append((float(t), label[:MAX_LABEL_CHARS]))
     return tuple(out)
+
+
+def _parametric_x(payload: dict) -> Any:
+    value = payload.get("x")
+    # Preserve legacy missing/empty-string defaults, but never silently turn a
+    # malformed numeric zero, False, list or object into the diagonal x=t.
+    return "t" if value is None or (isinstance(value, str) and value == "") else value
 
 
 def compile_plot(payload: Any, variables: dict[str, float]) -> CompiledPlot:
@@ -284,6 +324,8 @@ def compile_plot(payload: Any, variables: dict[str, float]) -> CompiledPlot:
     t0, t1 = _pair(payload.get("t_range"), "t_range")
     if t1 - t0 > MAX_T_SPAN:
         t1 = t0 + MAX_T_SPAN
+        if not math.isfinite(t1) or t1 <= t0:
+            raise ExprError("t_range cannot represent an increasing interval within the supported span.")
 
     params = set(variables.keys())
 
@@ -303,7 +345,7 @@ def compile_plot(payload: Any, variables: dict[str, float]) -> CompiledPlot:
         if kind == "explicit":
             x_fn = compile_expression("t", params)
         else:
-            x_fn = compile_expression(payload.get("x") or "t", params)
+            x_fn = compile_expression(_parametric_x(payload), params)
         curves = (
             CompiledCurve(
                 name=str(payload.get("y_label") or "y")[:MAX_LABEL_CHARS],

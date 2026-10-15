@@ -263,6 +263,99 @@ stock Manim Community mobjects. The variables you are given become on-screen
 live numbers — work at least one into the staging."""
 
 
+# UNT exam mode: fixed five-act weights (seconds at the 278 s reference lesson;
+# schedule_storyboard_timeline scales them to any duration target).
+UNT_ACT_WEIGHTS: dict[str, float] = {
+    "HOOK": 8.0,
+    "THEORY": 60.0,
+    "WORKED": 90.0,
+    "OFFICIAL_TASK": 90.0,
+    "RECAP": 30.0,
+}
+
+UNT_STORYBOARD_SYSTEM_PROMPT = """You are the AetherLab UNT exam director. Design — do NOT code — a detailed
+exam-paced treatment for the physics problem you are given. Think like a
+KZ UNT coach: exam practice structure, units on everything, one clear answer.
+Treat the supplied problem as unverified practice. Do not invent official
+provenance, question numbers, pages, numeric conditions, results or answer keys.
+OFFICIAL_TASK is a legacy internal act name; it does not establish official
+status. Visible labels must say practice. Preserve the supplied solution and
+show an answer letter only when supplied with the task's choices and key.
+
+Return STRICT JSON only (no markdown, no commentary) with exactly these keys:
+{
+  "concept": "one-sentence exam concept — the task type and the law it tests",
+  "staging": "the apparatus/graph stage (objects, layout, safe areas)",
+  "palette": {"primary": "<manim color name>", "secondary": "<manim color name>",
+               "accent": "<manim color name>"},
+  "acts": [
+    {"name": "HOOK", "duration_s": 8, "beats": [
+      {"detail": "one visible change", "duration_s": <number>,
+       "kind": "demo | prediction | motion | comparison | equation | conclusion",
+       "narration_cue": "short matching phrase", "anchor_cell": "C3",
+       "target_object": "the focal Manim object", "target_equation": "LaTeX or empty"}
+    ]},
+    {"name": "THEORY", "duration_s": 60, "beats": [...]},
+    {"name": "WORKED", "duration_s": 90, "beats": [...]},
+    {"name": "OFFICIAL_TASK", "duration_s": 90, "beats": [...]},
+    {"name": "RECAP", "duration_s": 30, "beats": [...]}
+  ],
+  "hero_frame": "the single climactic composition: solved supplied task + numerical result",
+  "idle_loop": "the subtle living animation for the final ~2 seconds",
+  "narration": ["one short spoken line per act, matching its beats"]
+}
+
+Rules: the user brief gives the total duration target; allocate act durations
+that sum to it within 5%, starting from the HOOK 8 / THEORY 60 / WORKED 90 /
+OFFICIAL_TASK 90 / RECAP 30 weights scaled to the target. Give every act 1-3
+implementable beats; each beat is one visual detail, not a list of simultaneous
+objects. For every beat provide its duration_s, one short narration_cue, one
+anchor_cell from a 6-by-6 grid, the focal target_object, and target_equation
+when that beat shows an equation (A1-F6, columns left-to-right, rows
+top-to-bottom). Beat durations must sum to their act duration. Give text-heavy
+details more time than a simple motion beat.
+WORKED and OFFICIAL_TASK acts must follow the exam blocks Given (Berildi/Dano/
+Given) -> Find -> Solution -> Answer + units. Show an answer letter only when supplied
+with the task's choices and key. Put units on
+every quantity, label every graph axis with units (v, m/s; t, s), shade
+area-under-graph segments only where they carry the actual supplied solution,
+and show the supplied result at the hero frame and again in RECAP. Include a live
+numerical readout for a changing quantity. Give every beat a pedagogical kind
+from demo | prediction | motion | comparison | equation | conclusion: at least
+one motion beat where the physics visibly evolves, at least one equation beat
+where the governing law lands, and at least one conclusion beat with the boxed
+answer. Structure every beat as entrance -> readable hold -> exit/transform
+(never leave a completed detail on screen when the next unrelated beat starts).
+Keep each narration cue short enough to speak naturally inside its beat at about
+2 words per second. Keep at most three focal elements visible at once and
+specify a transition that clears unrelated content between acts. Keep plots to
+at most two data series. Use stock Manim Community mobjects. The variables you
+are given become on-screen live numbers — work at least one into the staging.
+Reserve the bottom subtitle zone (no hero text there) and keep all mobjects
+inside the frame with portrait-safe .to_edge()/.arrange() composition."""
+
+UNT_CODEGEN_APPENDIX = """
+## UNT exam-mode appendix (overrides tolerances above)
+UNT OVERRIDE: match the requested total duration within ±10% (not ±20%).
+Every act must visibly MOVE via .animate, Transform/MoveAlongPath, or an
+updater; end with a living idle loop via ValueTracker + always_redraw so the
+final three sampled frames differ, never a frozen last frame.
+Required elements per task chapter: Given → Find → Solution → Answer blocks,
+units on every quantity, graph axis labels with units, shaded area segments
+where they carry the supplied solution, and its numerical result in recap.
+Treat generated material as unverified practice. Do not invent official status,
+citations, numerical conditions, results or keys. Show an answer letter only when supplied
+with the task's choices and key; otherwise show the numerical result with units.
+Typography minimums at 1080p: titles 36-44, formulas 32+, axis labels
+24+, answer letter 40+. Short labels only; narration carries sentences.
+Safe areas: reserve the bottom ~180 px for subtitles/player in landscape
+(no hero text there); in portrait reserve bottom ~300 px + top ~200 px for
+platform chrome. Portrait layout via .to_edge(), .arrange(), and
+scale_to_fit_width() only; never write config.frame_width/pixel_width.
+Staging: max 3 focal objects; ReplacementTransform/TransformMatchingTex for
+idea continuity; fast reveals 0.6-1.0 s, climax 2.5-4 s."""
+
+
 SCENE_CODEGEN_SYSTEM_PROMPT = """You are the AetherLab Manim implementation engineer. You are given a locked
 storyboard designed by the creative director. Implement it EXACTLY — every act,
 every beat, the hero frame, and the idle loop — as ONE Manim Community scene.
@@ -691,6 +784,76 @@ def schedule_storyboard_timeline(storyboard: dict, duration_target_s: float) -> 
     return timed
 
 
+def build_unt_storyboard(duration_target_s: float, concept: str = "UNT exam task") -> dict:
+    """Deterministic UNT storyboard: five exam acts scaled to the target.
+
+    Uses :data:`UNT_ACT_WEIGHTS` as act weights; :func:`schedule_storyboard_timeline`
+    scales them to any duration, so the same builder serves a 30 s task chapter
+    and the 278 s reference lesson. Eight beats keep a short task readable;
+    the LLM directing pass adds more beats for long-form targets.
+    """
+    board = {
+        "concept": str(concept or "UNT exam task"),
+        "source_status": "practice_scaffold_unverified",
+        "staging": "Practice stage: Given/Find panel left, relevant physical diagram centre, supplied answer right; subtitle zone clear.",
+        "palette": {"primary": "BLUE", "secondary": "TEAL", "accent": "YELLOW"},
+        "acts": [
+            {"name": "HOOK", "duration_s": UNT_ACT_WEIGHTS["HOOK"], "beats": [
+                {"detail": "Hook: task question with a live number", "duration_s": 8.0,
+                 "kind": "demo", "narration_cue": "What must we find?",
+                 "anchor_cell": "C3", "target_object": "question label",
+                 "target_equation": ""},
+            ]},
+            {"name": "THEORY", "duration_s": UNT_ACT_WEIGHTS["THEORY"], "beats": [
+                {"detail": "Governing law with units", "duration_s": 30.0,
+                 "kind": "equation", "narration_cue": "Law with units.",
+                 "anchor_cell": "D3", "target_object": "equation",
+                 "target_equation": ""},
+                {"detail": "Live readout evolves", "duration_s": 30.0,
+                 "kind": "motion", "narration_cue": "Watch the quantity change.",
+                 "anchor_cell": "C4", "target_object": "live readout",
+                 "target_equation": ""},
+            ]},
+            {"name": "WORKED", "duration_s": UNT_ACT_WEIGHTS["WORKED"], "beats": [
+                {"detail": "Given and Find blocks with units", "duration_s": 45.0,
+                 "kind": "demo", "narration_cue": "Given and find.",
+                 "anchor_cell": "D4", "target_object": "Given panel",
+                 "target_equation": ""},
+                {"detail": "Solution steps to boxed answer", "duration_s": 45.0,
+                 "kind": "conclusion", "narration_cue": "Solution to answer.",
+                 "anchor_cell": "B3", "target_object": "answer box",
+                 "target_equation": ""},
+            ]},
+            {"name": "OFFICIAL_TASK", "duration_s": UNT_ACT_WEIGHTS["OFFICIAL_TASK"], "beats": [
+                {"detail": "Practice task Given Find with source-derived visuals", "duration_s": 45.0,
+                 "kind": "prediction", "narration_cue": "Supplied practice task setup.",
+                 "anchor_cell": "E3", "target_object": "task graph",
+                 "target_equation": ""},
+                {"detail": "Show the supplied solution using an appropriate physical diagram", "duration_s": 45.0,
+                 "kind": "motion", "narration_cue": "Use the supplied quantities and law.",
+                 "anchor_cell": "B4", "target_object": "solution diagram",
+                 "target_equation": ""},
+            ]},
+            {"name": "RECAP", "duration_s": UNT_ACT_WEIGHTS["RECAP"], "beats": [
+                {"detail": "Supplied numerical result with units and a solving tactic", "duration_s": 30.0,
+                 "kind": "conclusion", "narration_cue": "Review the supplied result and tactic.",
+                 "anchor_cell": "E4", "target_object": "supplied answer",
+                 "target_equation": ""},
+            ]},
+        ],
+        "hero_frame": "Supplied solution diagram and boxed numerical result with units",
+        "idle_loop": "Live supplied quantity changes subtly without changing the solution",
+        "narration": [
+            "Hook question.",
+            "Theory with units.",
+            "Worked example.",
+            "Practice task.",
+            "Recap and tactic.",
+        ],
+    }
+    return schedule_storyboard_timeline(board, duration_target_s)
+
+
 SPEECH_TAIL_S = 0.35     # breath after each line, inside its own beat
 SILENT_BEAT_MIN_S = 0.8  # a beat without a line still needs time to read
 
@@ -804,6 +967,7 @@ class SceneGenerator:
         class_name: str = "AetherLabScene",
         *,
         locked_storyboard: dict | None = None,
+        unt_mode: bool | None = None,
     ) -> str:
         """Generate Manim scene code using the LLM.
 
@@ -842,11 +1006,14 @@ class SceneGenerator:
         for attempt in range(2):
             try:
                 if locked_storyboard is None:
-                    code = await self._generate_remote(request, solver, rag, class_name)
+                    code = await self._generate_remote(
+                        request, solver, rag, class_name, unt_mode=unt_mode
+                    )
                 else:
                     code = await self._generate_remote(
                         request, solver, rag, class_name,
                         locked_storyboard=locked_storyboard,
+                        unt_mode=unt_mode,
                     )
                 self._last_fallback_reason = ""
                 return code
@@ -1040,6 +1207,7 @@ class SceneGenerator:
         *,
         temperature: float = 0.9,
         variation_seed: str = "",
+        unt_mode: bool | None = None,
     ) -> dict | None:
         """Directing pass: a high-temperature creative treatment as strict JSON.
 
@@ -1047,27 +1215,38 @@ class SceneGenerator:
         single-call cinematic generation, so storyboarding can only ever add
         quality, never subtract reliability.
         """
+        from aetherlab.core.render_profile import resolve_unt_mode
         from aetherlab.services.model_json import load_model_json
 
+        unt, _ = resolve_unt_mode(self.settings, unt_mode)
         vars_text = "\n".join(
             f"  {name} = {value}" for name, value in sorted(solver.variables.items())
         ) or "  (no variables)"
         duration_target_s = float(request.duration_target_s)
         beat_min = max(6, int(duration_target_s / 5.0 + 0.999))
         beat_max = max(beat_min, int(duration_target_s / 3.75 + 0.999))
-        storyboard_system = STORYBOARD_SYSTEM_PROMPT
-        if beat_max > 8:
-            storyboard_system = storyboard_system.replace(
-                "Give every act 1-2 implementable beats; each beat is",
-                "Give every act enough implementable beats to meet the requested "
-                "global beat count; each beat is",
-            ).replace(
-                "For a 30-second scene,\nuse 6-8 beats total (never more than 8) so each timed detail has room to read\n"
-                "and the Cloud render stays within budget.",
-                "For a long-form scene, follow the duration-scaled global beat count "
-                "in the user brief. Those beats will be rendered in separate bounded "
-                "scenes; do not compress the explanation to the 30-second beat count.",
-            )
+        if unt:
+            storyboard_system = UNT_STORYBOARD_SYSTEM_PROMPT
+            if beat_max > 8:
+                storyboard_system = storyboard_system.replace(
+                    "Give every act 1-3\nimplementable beats; each beat is",
+                    "Give every act enough implementable beats to meet the requested "
+                    "global beat count; each beat is",
+                )
+        else:
+            storyboard_system = STORYBOARD_SYSTEM_PROMPT
+            if beat_max > 8:
+                storyboard_system = storyboard_system.replace(
+                    "Give every act 1-2 implementable beats; each beat is",
+                    "Give every act enough implementable beats to meet the requested "
+                    "global beat count; each beat is",
+                ).replace(
+                    "For a 30-second scene,\nuse 6-8 beats total (never more than 8) so each timed detail has room to read\n"
+                    "and the Cloud render stays within budget.",
+                    "For a long-form scene, follow the duration-scaled global beat count "
+                    "in the user brief. Those beats will be rendered in separate bounded "
+                    "scenes; do not compress the explanation to the 30-second beat count.",
+                )
         user = (
             f"## Problem\n{request.prompt}\n\n"
             f"## Analytical summary\n{solver.summary}\n\n"
@@ -1080,6 +1259,14 @@ class SceneGenerator:
             "steps, assumptions, and units from the analytical summary.\n\n"
             "Design the storyboard JSON now."
         )
+        if unt:
+            user += (
+                "\n\nFollow the UNT exam acts HOOK/THEORY/WORKED/OFFICIAL_TASK/RECAP "
+                "with Given → Find → Solution → Answer blocks, units on every "
+                "quantity and labelled graph axes where relevant. Preserve the "
+                "supplied result; show a letter only when supplied with task choices "
+                "and key. Do not label generated practice as an official task."
+            )
         if variation_seed:
             user += (
                 "\n\n## Variation seed\n"
@@ -1142,6 +1329,10 @@ class SceneGenerator:
                 board = load_model_json(content)
                 if not isinstance(board, dict) or not isinstance(board.get("acts"), list):
                     raise ValueError("storyboard JSON must contain an acts array")
+                if unt:
+                    # The directing response cannot certify its own provenance.
+                    # This API receives no verified official-question record.
+                    board["source_status"] = "practice_scaffold_unverified"
                 if not board["acts"] or any(
                     not isinstance(act, dict)
                     or not isinstance(act.get("beats"), list)
@@ -1179,7 +1370,12 @@ class SceneGenerator:
         rag: RagResult,
         class_name: str,
         locked_storyboard: dict | None = None,
+        unt_mode: bool | None = None,
     ) -> str:
+        from aetherlab.core.render_profile import resolve_unt_mode
+
+        unt, _ = resolve_unt_mode(self.settings, unt_mode)
+        duration_pct = "10%" if unt else "20%"
         self._ensure_client()
 
         steps_text = "\n".join(
@@ -1217,7 +1413,11 @@ class SceneGenerator:
         # Storyboard failure degrades to the proven single-call cinematic path.
         import json as _json
 
-        board = locked_storyboard if locked_storyboard is not None else await self.storyboard(request, solver, rag)
+        board = (
+            locked_storyboard
+            if locked_storyboard is not None
+            else await self.storyboard(request, solver, rag, unt_mode=unt)
+        )
         if board is not None:
             if not is_speech_timed(board):
                 # Speech-timed windows are final: re-weighting them by word
@@ -1243,6 +1443,8 @@ class SceneGenerator:
                 "citations, timed beats, narration, and visual bindings. Implement its "
                 "timeline without changing those facts or their order."
             )
+            if unt:
+                system += UNT_CODEGEN_APPENDIX
             try:
                 is_segmented = int(board.get("segment_count", 1) or 1) > 1
             except (TypeError, ValueError):
@@ -1312,7 +1514,7 @@ class SceneGenerator:
                     f"{_json.dumps(board, indent=2)}\n\n"
                     f"## Problem\n{request.prompt}\n\n"
                     f"## Total scene duration target\n{duration_target_s:g} seconds. "
-                    "The complete animation should stay within 20% of this duration.\n\n"
+                    f"The complete animation should stay within {duration_pct} of this duration.\n\n"
                     f"{marker_contract}"
                     f"## Analytical summary\n{solver.summary}\n\n"
                     f"## Derivation steps\n{steps_text}\n\n"
@@ -1323,6 +1525,8 @@ class SceneGenerator:
             temperature = 0.15  # implementation runs cold — precision over flair
         else:
             system = SCENE_GENERATION_SYSTEM_PROMPT.replace("{class_name}", class_name)
+            if unt:
+                system += UNT_CODEGEN_APPENDIX
             system_additions = preventive_pitfalls_block(_aesthetic)
             try:
                 from aetherlab.services.scene_specification import (
@@ -1365,7 +1569,7 @@ class SceneGenerator:
                     self._last_scene_spec = None
             user += (
                 f"\n\n## Total scene duration target\n{duration_target_s:g} seconds. "
-                "The complete animation should stay within 20% of this duration."
+                f"The complete animation should stay within {duration_pct} of this duration."
             )
             temperature = 0.4
 
@@ -1453,10 +1657,12 @@ class SceneGenerator:
         rag: RagResult,
         class_name: str,
         storyboard: dict,
+        unt_mode: bool | None = None,
     ) -> str:
         """Implement a pre-selected storyboard with the normal cold codegen pass."""
         return await self._generate_remote(
-            request, solver, rag, class_name, locked_storyboard=storyboard
+            request, solver, rag, class_name,
+            locked_storyboard=storyboard, unt_mode=unt_mode,
         )
 
     async def repair(

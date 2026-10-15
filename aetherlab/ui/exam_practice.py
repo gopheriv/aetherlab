@@ -415,6 +415,7 @@ _STORAGE_TEXT = {
         "goals_error": "Жоспар сақталмады. Енгізілген мәндер қалды. Файлға қолжетімділікті қалпына келтіріп, қайта сақтаңыз.",
         "session_error": "Жауаптарды файлға сақтау мүмкін болмады. Олар осы терезеде сақталған. Қолжетімділікті қалпына келтіріп, қайта сақтаңыз; терезені жабу үшін сақтау қажет.",
         "resume_error": "Сақталған жаттығуды оқу мүмкін болмады. Файл өзгертілмеді. Қолжетімділікті қалпына келтіріп, қайта бастаңыз.",
+        "restart_error": "Сақталған әрекеттің жойылғанын растау мүмкін болмады. Жаңа әрекет басталған жоқ. Файлға қолжетімділікті тексеріп, қайталаңыз.",
         "result_error": "Нәтиже сақталмады. Жауаптар осы терезеде сақталған және өзгертілмейді. Қолжетімділікті қалпына келтіріп, нәтижені қайта сақтаңыз.",
         "retry_result": "Нәтижені қайта сақтау",
     },
@@ -422,6 +423,7 @@ _STORAGE_TEXT = {
         "goals_error": "План не сохранён. Введённые значения остались. Восстановите доступ к файлу и сохраните ещё раз.",
         "session_error": "Не удалось сохранить ответы в файл. Они остались в этом окне. Восстановите доступ и повторите сохранение; для закрытия окна нужно сохранить ответы.",
         "resume_error": "Не удалось прочитать сохранённую попытку. Файл не изменён. Восстановите доступ и повторите запуск.",
+        "restart_error": "Не удалось подтвердить удаление сохранённой попытки. Новая попытка не начата. Проверьте доступ к файлу и повторите.",
         "result_error": "Результат не сохранён. Ответы остались в этом окне и больше не меняются. Восстановите доступ и повторите сохранение результата.",
         "retry_result": "Повторить сохранение результата",
     },
@@ -429,6 +431,7 @@ _STORAGE_TEXT = {
         "goals_error": "The plan was not saved. Your entered values remain. Restore file access and save again.",
         "session_error": "Answers could not be saved to the file. They remain in this window. Restore access and retry saving; answers must be saved before closing.",
         "resume_error": "The saved attempt could not be read. Its file was not changed. Restore access and try starting again.",
+        "restart_error": "The saved attempt could not be confirmed as removed. A new attempt was not started. Check file access and try again.",
         "result_error": "The result was not saved. Answers remain in this window and cannot be changed. Restore access and retry saving the result.",
         "retry_result": "Retry saving result",
     },
@@ -1008,6 +1011,8 @@ class ExamPracticeDialog(QtWidgets.QDialog):
             self._topic_hint.setText(self._t["no_mistakes"])
             self._update_topic_hint()
             return
+        if not self._resolve_saved_attempt():
+            return
         self._full_mock = False
         self._begin_session(questions, "mistake_review")
 
@@ -1243,27 +1248,37 @@ class ExamPracticeDialog(QtWidgets.QDialog):
         self._exam_date.setDate(state["date"])
         self._update_topic_hint()
 
-    def _start(self) -> None:
+    def _resolve_saved_attempt(self) -> bool:
+        """Allow replacement only after the learner resolves an existing attempt."""
         try:
             saved_session = load_active_session(self._progress_path)
         except (OSError, UnicodeError):
             self._storage_status("resume_error")
-            return
+            return False
         self._storage_status(None)
         if saved_session:
             choice = self._confirm_exam_action("resume")
             if choice == QtWidgets.QMessageBox.StandardButton.Yes:
-                if self._resume_active_session(saved_session):
-                    return
-                self._storage_status("resume_error")
-                return
+                if not self._resume_active_session(saved_session):
+                    self._storage_status("resume_error")
+                return False
             if choice != QtWidgets.QMessageBox.StandardButton.No:
-                return
+                return False
             try:
                 clear_active_session(self._progress_path)
-            except OSError:
-                self._storage_status("resume_error")
-                return
+                # Cleanup intentionally tolerates a failed unlink after result
+                # commit. Replacement requires confirmed removal instead.
+                if load_active_session(self._progress_path) is not None:
+                    self._storage_status("restart_error")
+                    return False
+            except (OSError, UnicodeError):
+                self._storage_status("restart_error")
+                return False
+        return True
+
+    def _start(self) -> None:
+        if not self._resolve_saved_attempt():
+            return
         self._language = normalize_language(self._language_combo.currentData(), "kk")
         self._mode = str(self._mode_combo.currentData() or "practice")
         topic_filter = str(self._topic_combo.currentData() or "")
@@ -1387,10 +1402,7 @@ class ExamPracticeDialog(QtWidgets.QDialog):
     def _persist_active_session(self) -> bool:
         if not self._questions or self._session_finished:
             return True
-        if not self._completion_pending and hasattr(self, "_answer_widgets") and self._index not in self._checked:
-            selected = self._read_answer()
-            if selected is not None:
-                self._answers[self._index] = selected
+        self._capture_current_answer()
         if self._mode == "timed" and self._deadline_monotonic is not None:
             self._seconds_left = max(0, int(self._deadline_monotonic - time.monotonic() + 0.999))
         try:
@@ -1593,6 +1605,13 @@ class ExamPracticeDialog(QtWidgets.QDialog):
     def _is_complete(answer: tuple[int, ...] | None) -> bool:
         return answer is not None and bool(answer) and all(index >= 0 for index in answer)
 
+    def _capture_current_answer(self) -> None:
+        """Replace an editable response, including a deliberately cleared one."""
+        if (not self._questions or self._session_finished or self._completion_pending
+                or self._index in self._checked or not hasattr(self, "_answer_widgets")):
+            return
+        self._answers[self._index] = self._read_answer()
+
     @staticmethod
     def _is_correct(answer: tuple[int, ...] | None, question: dict) -> bool:
         return answer is not None and answer == tuple(question["correct_indices"])
@@ -1611,8 +1630,9 @@ class ExamPracticeDialog(QtWidgets.QDialog):
         return ", ".join(selected) if selected else self._t["not_answered"]
 
     def _check_answer(self) -> None:
-        if self._completion_pending or self._session_finished:
+        if self._completion_pending or self._session_finished or self._index in self._checked:
             return
+        self._capture_current_answer()
         selected = self._read_answer()
         if not self._is_complete(selected):
             self._feedback.setText(self._t["choose"])
@@ -1683,9 +1703,7 @@ class ExamPracticeDialog(QtWidgets.QDialog):
     def _previous(self) -> None:
         if self._completion_pending:
             return
-        selected = self._read_answer()
-        if selected is not None and self._index not in self._checked:
-            self._answers[self._index] = selected
+        self._capture_current_answer()
         if self._index > 0:
             self._index -= 1
             self._render_question()
@@ -1693,9 +1711,7 @@ class ExamPracticeDialog(QtWidgets.QDialog):
     def _next_question(self) -> None:
         if self._completion_pending:
             return
-        selected = self._read_answer()
-        if selected is not None:
-            self._answers[self._index] = selected
+        self._capture_current_answer()
         if self._index < len(self._questions) - 1:
             self._index += 1
             self._render_question()
@@ -1739,10 +1755,7 @@ class ExamPracticeDialog(QtWidgets.QDialog):
     def _finish_session(self) -> None:
         if self._session_finished:
             return
-        if not self._completion_pending:
-            selected = self._read_answer()
-            if selected is not None:
-                self._answers[self._index] = selected
+        self._capture_current_answer()
         self._timer.stop()
         self._stop_camera_monitor()
         self._show_results()

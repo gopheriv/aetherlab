@@ -1,9 +1,974 @@
-# PhysLab feature audit — 12 October 2026
+# PhysLab feature audit — 15 October 2026
 
 The active objective remains: inventory every feature, derive user stories and
 expected behaviour from code, maintain one canonical spreadsheet, test all
 stories, document errors, fix logistical/UX defects, and retest the behaviours.
 The full objective is not yet proven complete.
+
+## Current 260-story checkpoint (15 October 2026)
+
+The canonical workbook contains **260 stories**, **114 FIXED / 146 PASS
+recorded software results**, **14 complete / 246 partial** source-bound story
+acceptances, and **255 unique issue IDs**. The audit remains active.
+
+The 14 complete acceptance matrices are F03–F09, F11, F27–F29, F232, F253 and
+F254. The refreshed startup, settings, plot and bank evidence is in
+`tmp/acceptance-refresh-stable-20261015/`; F04 was refreshed through its
+source-stable story replay under `tmp/feature-acceptance/`. F11 and F253 remain
+valid. No reviewed acceptance matrix is stale. These contracts have
+explicit limits: F232's teacher/curriculum review is pending, and the numeric
+plot contracts do not certify native canvas rendering. The other **246** story
+acceptances remain partial: **8** have evidence still to gather and **238** have
+no reviewed complete matrix yet.
+
+Tracker integrity now passes for **260 features, results and tests**, with
+**114 defect-linked features** and both bug-link directions checked. The
+surface audit covers **107/107** detected UI/config/CLI surfaces. The canonical
+XLSX has Features/Summary sheets, 260 feature rows, freeze pane D2 and updated
+acceptance counts; the CSV is its generated mirror. Its Summary shows
+**114 FIXED / 146 PASS** software results and **14 PASS / 246 PARTIAL** story
+acceptances. The 260 result rows are recorded checks; the integrity audit
+checks catalog parity, not source freshness for every feature. Only the 14
+source-bound matrices above count as complete acceptance.
+
+BUG-296 removed the hidden `AETHERLAB_SPIDER_CRAWL` launch hook. Spider stays
+closed at startup and opens through its navigation action. The focused
+launcher suite passed **19/19** offscreen; F259 covers five feedback/cancellation
+checks and two startup/dock checks. A prior isolated native launch showed one
+Kazakh dashboard, no Spider dock or scan controls, and the old English status
+“PhysLab ready · No API key”: `tmp/native-spider-startup-20261015/ui-observation.json`.
+BUG-297 localizes provider, settings, Ollama and explicit Spider-ready status
+messages in kk/ru/en. F230's current source-stable replay passed, including the
+status interaction; the focused Qt test passed **1/1**. That replay is offscreen,
+so a fresh native launch has not yet verified the visual status change. The
+user's existing app (PID 9224) was not restarted; the change will take effect
+on its next launch.
+
+BUG-298 records and fixes a test-isolation error found during that replay: the
+test inherited the workstation's MiniMax provider variables while expecting
+its synthetic Ollama model. The test now clears provider/model/endpoint
+aliases only in its isolated profiles. F215's source-stable gate replay also
+passes; it verifies that a red test makes the process and tracker gate fail.
+Evidence: `tmp/dashboard-status-localization-final-20261015-evidence.json` and
+`tmp/tracker-gate-stable-final-20261015-evidence.json`; the focused Qt test
+passed **1/1**.
+
+Current offscreen story probes also pass for F12, F14, F17, F19, F20 and F84:
+submission, quality selection, stepper timing/error, duplicate-run protection,
+worker cleanup and failure recovery. They were merged only after source-stable
+runs. The first F13 and F15 attempts detected concurrent edits to lesson files
+and were not merged; source-stable reruns now pass and are merged too. Evidence
+is in `tmp/command-input-current-20261015-evidence.json`,
+`tmp/command-examples-stable-final-20261015-evidence.json`,
+`tmp/command-quality-current-20261015-evidence.json`,
+`tmp/command-cancel-stable-final-20261015-evidence.json`,
+`tmp/stepper-timeline-current-20261015-evidence.json`,
+`tmp/worker-duplicate-current-20261015-evidence.json`,
+`tmp/worker-cleanup-current-20261015-evidence.json` and
+`tmp/stepper-error-current-20261015-evidence.json`. These eight offscreen
+checks do not complete the native Windows UI acceptance.
+
+An earlier controlled full regression passed **1727 tests** with one upstream
+ChromaDB deprecation warning in 577.05 seconds:
+`tmp/all-app-regression-current-20261015.log`. That run predates the latest
+status/localization and lesson-source edits, so it is not a full-suite claim
+for the current tree. The earlier catalog replay and F255/F259 retest remain
+preserved at `tmp/all-story-catalog-current-20261015/evidence.json` and
+`tmp/instance-guard-retest-current-20261015-evidence.json`.
+
+A later direct full-catalog invocation was stopped before writing results when
+its isolated process grew to about 2 GiB and left 0.4 GiB free. The pre-run and
+live `feature_test_results.json` hashes match; that partial run is not counted.
+Focused story replays and bounded acceptance matrices were run serially after
+memory recovered.
+
+Remaining work includes native UI navigation/layout and file-dialog journeys,
+provider/cloud lesson delivery, student practice and exam journeys, camera and
+school workflows, storage recovery, and teacher/language review. Spider still
+needs native capture/Watch privacy, active Git-command interruption, shutdown
+recovery, concurrent edits, and real Ruff failure acceptance. Full user-story
+acceptance remains open for **246 stories**.
+
+## Earlier 256-story checkpoint (superseded by the section above)
+
+Fresh serial verification on the current source tree completed on 2026-10-15:
+the full regression suite passed **1509/1509** in 371.85 s with offscreen Qt,
+thread caps, one worker and isolated pytest temp
+(`tmp/pytest-current-x8-20261015.log`). The post-fix code-derived feature
+harness passed **256/256**, with no live provider credentials or cloud dispatch
+and isolated data/reference stores (`tmp/feature-harness-postfix-final-20261015.log`).
+Its explicit post-fix phase passed all 25 newer rows; five legacy acceptance
+matrices were rerun against current source hashes
+(`tmp/feature-legacy-acceptance-refresh-20261015.log`). The one warning remains
+Chroma telemetry's deprecated `asyncio.iscoroutinefunction`; it did not affect
+the result. The regression runs exposed stale test adapters: one remote-
+generator fake/data fixture (BUG-267) and two scene-lint stubs (BUG-268). Their
+focused tests and the final complete regression suite pass. A catalog audit
+also found that a legacy row with no phase-4 field was incorrectly rejected as
+PARTIAL even with passing current tests and fully verified acceptance evidence
+(BUG-272). The verifier now preserves only truly absent legacy fields and
+still rejects explicit `None`, `PENDING`, or failed phases; 123 acceptance-
+policy tests pass. BUG-273 records the explicit-null guard, and BUG-274/275
+record repaired timeout documentation and endpoint-based provider labels.
+The regenerated workbook has **8 complete / 248 partial** story acceptances.
+Tracker integrity reports **256 stories, 256 results, 256 tests and 104 defect-
+linked features**; all **105/105** detected surfaces map to a row. This proves
+current software-check coverage, not full student-facing acceptance.
+
+The canonical workbook now contains **256** code-derived stories, **104 FIXED /
+152 PASS** recorded software checks and **8 complete / 248 partial** acceptances.
+All **232** registered issues are linked; all **105/105** detected surfaces map
+to rows. F254 inventories the existing SQLite bank-sync command; F255 covers
+the new single-profile GUI launch guard. The shared tree's incoming UNT
+landscape/portrait presets and unt_mode resolver are recorded in F251 without
+claiming a complete exam-video workflow. F256 separately inventories the incoming
+UNT directing/scaffold, codegen and textual gate policy, beyond the F251 presets.
+BUG-266/267 remove fabricated scaffold values/official status and mandatory
+unsupplied answer letters. The wider current UNT/segmentation/preflight/upgrade
+group passed **95/95**, unchanged HEAD/sources:
+`tmp/unt-policy-current-regression-20261015-evidence.json`. These tests do not
+certify a model's actual final video or official-source authenticity.
+
+BUG-259/260 repair displayed-condition answer keys (107 failures in AC,
+electrostatics and relativity); BUG-261..264 repair SQLite ownership,
+annotations/foreign keys, fresh databases and source-page identity; BUG-265
+prevents duplicate guarded launches. The bank/policy/launch group passed
+**116/116**, and startup/launch passed **60/60**. The reviewed generator/API
+matrix executes 40 cases for all 2500 records in kk/ru/en; SQLite executes 29
+cases including actual CLI, read-only retry and process-crash recovery.
+
+Ten affected acceptance/startup/launch/policy stories passed again with unchanged
+HEAD/sources and merged results:
+`tmp/unt-bank-launch-contracts-final-20261015-evidence.json`. Earlier wider probes
+were not merged because settings/render-profile or scene-generator sources
+changed concurrently; their diagnostics remain preserved. An incoming renderer
+edit invalidated F253's acceptance; the final serial execution renewed it with
+four actual tiny CLI renders. Complete acceptance remains separate from narrow
+software checks. F256 citation review also caught/fixed the existing BUG-250
+field-attribution pattern; **29/29** reference/CLI/UNT cases pass with stable
+sources (`tmp/unt-citation-final-20261015-evidence.json`).
+
+Concurrent registry edits reused issue IDs and omitted a link. The colliding
+fixture records now have unique BUG-269/270 IDs, BUG-268 is linked, and BUG-271
+makes audit reject duplicate table definitions/literal mapping keys. All records
+were preserved. The current registry/reference/voice/bugcheck group passed
+**94/94**, unchanged HEAD/sources (`tmp/registry-adapters-final-20261015-evidence.json`);
+four affected F106/F131/F187/F256 stories passed with stable inputs/merged results
+in `tmp/registry-story-adapters-final-20261015-evidence.json`. Artifact publication
+is refreshed after these new results. Earlier 224-ID counts precede reconciliation.
+
+The configured live SQLite bank was updated only after verifying its exact
+known legacy generator and making a SQLite-consistent backup. All **2500**
+payloads match current source, all unrelated table hashes/schema/row identities
+are unchanged and integrity/FK checks pass:
+`tmp/live-bank-repair-20261015-11a9fe45/evidence.json`. The pending teacher,
+language and source-candidate review labels were preserved.
+
+Seventeen launch checks cover real lock ownership, duplicate actual CLI exit
+before window import, independent/Unicode profiles, corrupt-lock/storage errors,
+a release race, normal release and actual-process crash recovery. No existing user GUI was stopped,
+restarted or focused. The logon task remains unchanged; existing unguarded
+windows cannot retroactively adopt the new lock. Future launches use it.
+
+Earlier simultaneous full regression/catalog replays exhausted Windows commit
+resources (1450 / MemoryError / pagefile-too-small DLL load) and did not finish
+successfully; their mixed-source results were not merged. The resource
+transport group recorded 219 pass / 4 process-creation failures. Subsequent
+sequential executions passed **165/165** bank/policy/startup/launch cases, then
+**58/58** profile/transport cases, including failed render/worker paths, with
+unchanged sources/HEAD (`tmp/bank-launch-serial-final-20261015-evidence.json`
+and `tmp/render-profile-serial-retry-20261015-evidence.json`). Those older
+partial runs have now been superseded by the fresh 1508-test and 256-feature
+passes above.
+The fresh controlled sequence is now running with one stage at a time and
+numerical-library thread counts of one:
+`tmp/bank-launch-serial-sequence-20261015.json`. Its full pytest stage started
+at 09:43:37 UTC with captured HEAD/source hashes, offscreen Qt and native
+acceptance disabled (`tmp/bank-launch-full-serial-20261015-started.json`).
+Only a completed stable full run permits the subsequent all-story catalog and
+artifact publication stages. A separate shared-project pytest printed 1508
+passes/one upstream warning; it was observed headless but is not substituted
+for this sequence's before/after source-bound proof.
+The canonical workbook uses typed dates,
+Features/Summary, filtering and freeze pane D2; the new stories/scope cells
+were rendered and reviewed without opening app windows.
+
+## Previous 253-story checkpoint
+
+The single canonical workbook is AetherLab_Feature_Tracker.xlsx: **253**
+code-derived stories, **100 FIXED / 153 PASS** last recorded software results,
+and independently **6 complete / 247 partial** story acceptances. F253 covers
+the incoming local encoder-budget setting; F251 includes 1440p quality `p`.
+All **215** registered issue IDs are linked. The standalone integrity audit
+passes, and all 104/104 identified surfaces map to tracker rows.
+
+BUG-248/249 fix adaptive cache identity and general session/worker/runtime
+profile provenance; BUG-250 fixes unrelated global-symbol citations; BUG-251
+isolates the full candidate-render boundary in the catalog. The expanded
+current cache/profile/critic/PDF/reference/encoder/isolation group passed
+**220/220** with unchanged sources/HEAD in
+`tmp/attribution-expanded-current-20261015-evidence.json`. After final reporting
+refinements, **17** attribution/isolation/cache-compatibility cases passed in
+`tmp/attribution-contract-final-20261015.log`.
+
+Thirteen affected/startup stories passed and merged with unchanged sources in
+`tmp/attribution-final-preartifact-20261015-evidence.json`. The final F165 check
+also passed with unchanged sources and merged results:
+`tmp/attribution-publication-final-20261015-evidence.json`. It checks artifact
+alignment, four reference regressions and the network/preflight guard. Workbook
+summaries, cache entry-point references and new encoder/profile rows were
+rendered and reviewed; no native app windows were opened. An intermediate
+artifact retest caught a subsecond timestamp mismatch created by the audit
+metadata writer; the writer now uses the column's seconds precision and the
+regenerated workbook passes.
+
+The next full diagnostic replay exposed BUG-252: the bundled worker supported
+quality `p`, while the shipped workflow choices did not. It finished **1061
+passed / 1 failed**, with only the pre-repair parity failure and source changes
+in the workflow/tracker map (`tmp/audit-final-full-20261015-evidence.json`). Its
+catalog finished **252/253**, with artifact drift at F165, and was not merged.
+The shipped choices are now l/m/h/p/k; the repaired worker/quality/reference
+group passed **12/12**. F249/F251 passed with unchanged sources and merged
+results (`tmp/worker-choice-current-20261015-evidence.json`); F165 also passed
+with unchanged sources/merged results in
+`tmp/worker-parity-artifact-20261015-evidence.json`. Final artifact integrity
+passes in `tmp/worker-parity-publication-audit-20261015.json`.
+
+A real quality-p cloud job then produced **2560×1440/30 FPS**, with all **60**
+frames decoded and measured object motion. Its repeated request returned
+identical cached bytes with one total dispatch. The captured HEAD/sources stayed
+unchanged (`tmp/live-1440p-5a7471e093/evidence.json`). This silent technical
+probe does not certify educational content, narration or native playback.
+
+The earlier complete replay recorded **1038 passed**, but seven source files
+changed during it; the corresponding 252-story replay recorded **249/252**,
+with outdated controlled render fixtures and artifact drift. Those mixed-source
+results were not used to certify the current tree. The affected F108/F160
+fixtures now supply successful render provenance and pass their original
+assertions. Two later obsolete test processes were deliberately stopped after
+final source-reference QA, not counted as completed checks; see
+`tmp/attribution-current-cancelled-20261015.json`.
+
+Those full post-repair replays completed successfully: **1062 pytest checks**
+and **253/253 catalog checks**, exit 0 with unchanged HEAD/sources, and catalog
+results merged. Evidence: `tmp/worker-parity-full-20261015-evidence.json` and
+`tmp/catalog-worker-parity-final-20261015/evidence.json`.
+
+## Encoder story acceptance extension
+
+The subsequent tool extension gives F253 a reviewed 18-scenario matrix.
+Eleven input classes and profile/cache/renderer arguments are checked, then
+four real installed-Manim CLI renders observe effective encoder limits
+1/4/8/fallback-4, drained queues and identical complete 27-frame videos.
+Acceptance binds the generated scene, queue trace, process log, video bytes,
+installed runtime versions/critical files and the current story/implementation.
+Verification re-decodes every saved frame; file changes, queue violations,
+changed runtimes, preview commands and incomplete records are refused.
+
+Visual story review caught BUG-253: a generic Render template had added AI and
+UI-retry requirements that `_manim_render_command()` does not implement. The
+explicit F253 contract now describes its CLI prerequisites, integer fallback/
+clamping and preserved arguments; rendering UI contracts remain on their own
+stories. The corrected contract was fully executed again, with unchanged
+sources and merged results (`tmp/encoder-code-contract-final-20261015-evidence.json`).
+The schema/contract regression group passed **149/149** in
+`tmp/encoder-contract-policy-final-20261015.log`. The final artifact/story
+check passed with unchanged sources and merged results in
+`tmp/encoder-code-publication-resume-20261015-evidence.json`; independent
+artifact integrity passes in `tmp/encoder-contract-publication-audit-20261015.json`.
+Summary and changed F253 story/scope cells were rendered and reviewed.
+
+One earlier repeated artifact-check command was not executed because automatic
+approval review could not complete after a service usage-limit error. It was
+not counted as a test result. After the environment changed, the named resume
+check above actually ran and passed.
+
+The full runs after this acceptance-tool extension completed with **1087 pytest
+checks** and **253/253 catalog checks**, exit 0 and unchanged HEAD/sources:
+`tmp/encoder-contract-full-20261015-evidence.json` and
+`tmp/catalog-encoder-contract-final-20261015/evidence.json`. Catalog results
+were merged. The later answer-clear reproduction below exposes a missing
+scenario in that passing suite, so those results do not certify that behaviour.
+All runs use isolated data, Qt offscreen and explicitly disabled visible
+acceptance. The full objective remains open: **247** acceptances are partial.
+
+## Student answer capture and scoring
+
+BUG-254 retained a previous multi/matching tuple after the learner cleared all
+controls. Navigation, saving, closing and finishing skipped `None`, allowing
+the visibly unanswered item to be restored or graded. The pre-repair matrix
+failed **60/60** (`tmp/practice-clear-negative-20261015.log`). One capture
+method now replaces editable responses with their actual value, including
+`None`, while preserving checked, pending and finished results. Check also
+retains a deliberately blank response when displaying the choose-answer hint.
+
+The extended post-repair group passed **272/272**. It includes **183** actual
+offscreen control/storage/scoring cases across kk/ru/en, two question kinds,
+practice/timed/mistake-review routes, partial credit, reopened attempts and
+pending-result retry. Six full 40-question/90-minute mock runs produce 48/50
+after clearing one two-point response. Six actual Windows read-only active
+files preserve their bytes on failure and accept the cleared answer after
+permissions are restored. Evidence: `tmp/answer-capture-extended-20261015.log`.
+Practice-mode multi/matching cases exercise the generic component directly;
+the current generated topic exercises are single-choice, while mock items are
+reachable through timed mode and mistake review.
+
+F226/F233/F238 passed their updated catalog adapters, which execute every
+parametrized case through pytest/JUnit and check that none failed or skipped
+on Windows. Sources/HEAD remained unchanged and results were merged:
+`tmp/answer-capture-stories-20261015-evidence.json`. Startup and encoder
+acceptance were refreshed against current sources in
+`tmp/answer-capture-startup-20261015-evidence.json`. Native layout, actual math
+typesetting, camera and cloud behaviour are outside this answer-capture matrix.
+The canonical workbook retains **6 complete / 247 partial** acceptances.
+
+The full current-tree replay **answer-capture-full-20261015** completed with
+**1270 passed**, one upstream ChromaDB deprecation warning, exit 0 and unchanged
+HEAD/sources. Evidence: `tmp/answer-capture-full-20261015-evidence.json`.
+
+An additional unchanged-app probe passed **6/6** timed expiry/PDF journeys:
+`tmp/answer-expiry-pdf-20261015.log`. The real timer callback completes cleared
+responses at 0/3, stops the timer and clears the active snapshot. Actual export
+through `_save_pdf` produces parseable A4 reports with the same 0/3 and localized
+unanswered labels in kk/ru/en. All six contain equation images. Only the file
+picker and message dialogs are controlled; actual math rendering and PDF
+generation run. The Kazakh multi-choice first page was visually inspected.
+This is additional scoring/export coverage, not native file-picker or complete
+PDF pagination acceptance. The catalog replay
+**catalog-answer-capture-final-20261015** completed **253/253**, exit 0, with
+unchanged HEAD/sources and merged results. Its terminal evidence is
+`tmp/catalog-answer-capture-final-20261015/evidence.json`.
+The six report byte hashes and executed-probe/log hashes are recorded in
+`tmp/answer-expiry-pdf-20261015-evidence.json`; relevant app sources match the
+unchanged full-regression snapshot.
+
+Final publication was verified against the same unchanged sources in
+`tmp/answer-capture-publication-20261015-evidence.json` and regenerated after
+the check timestamp changed. The standalone gate passes in
+`tmp/answer-capture-final-artifact-audit-20261015.json`: 253 rows/stories/results/
+checks, all 211 issue IDs linked and no integrity errors. The heuristic surface
+audit remains 104/104. Changed expectation/story/error/scope ranges and the
+summary were rendered and inspected; the formula-error scan found no entries.
+The workbook retains 100 FIXED / 153 PASS software results and, separately,
+6 complete / 247 partial acceptances. This is a post-fix checkpoint, not overall
+objective completion. No native app windows were launched or closed.
+
+## Guarded setup actions and failed replacement
+
+BUG-255 allowed Review mistakes to bypass the saved-attempt prompt and replace
+an interrupted practice/mock/review session. Its baseline failed **27/27** in
+`tmp/review-resume-negative-20261015.log`. Both Start and Review mistakes now
+use `_resolve_saved_attempt()`. Resume restores saved mode/language/identity;
+Cancel preserves bytes; explicit Start again proceeds to the requested new
+activity only after the interrupted snapshot is confirmed absent.
+
+BUG-256 was independently reproduced in **6** actual Windows read-only cases:
+`clear_active_session()` swallows failed unlinks for post-result cleanup, so
+Start again previously entered a new session while the old snapshot remained.
+Evidence: `tmp/snapshot-restart-negative-20261015.log`. A replacement now
+requires verification, with separate localized restart_error feedback and
+retry on unlink or verification-read failure. Best-effort completed-result
+cleanup and retained-history deduplication are preserved.
+
+The permanent matrix has **255** executed cases: 189 answer/scoring/export
+cases and 66 setup-decision cases. It includes both setup controls, all three
+languages, saved practice/timed/review modes, Cancel/Resume/Start again,
+unavailable/empty mistakes, invalid-bank snapshots, Windows read-only failure
+and retry, verification-read interruption, saved-language resume and pending
+result completion once. The six actual expiry/PDF cases are now collected by
+normal pytest and the F226/F227/F228/F233/F238 catalog adapters.
+
+Eleven targeted story/startup/encoder checks passed with unchanged sources and
+merged results (`tmp/session-guard-stories-20261015-evidence.json`). A prior
+diagnostic group's six failures were an optional-key fixture error, corrected
+to use `attempt.get`, not a product defect. One focused run was cancelled at
+an old disposal test that did not answer the new second-open confirmation:
+`tmp/session-guard-focused-cancellation-20261015.json`. The fixture now chooses
+Resume, asserts one prompt and the same attempt identity, and keeps both
+original disposal assertions. Its rerun with the full 66-case setup matrix
+passed **83/83** in `tmp/session-guard-disposal-20261015.log`.
+
+F226/F227/F238 now have explicit code-derived story steps, prerequisites and
+failure expectations. The canonical workbook and CSV pass integrity in
+`tmp/session-guard-artifact-audit-20261015.json`; all **213** registered issues
+are linked. The three changed story/contract ranges and error cells were
+rendered and inspected. Software status remains 100 FIXED / 153 PASS, separate
+from 6 complete / 247 partial acceptances. Ruff F/I checks pass, including the
+two previously deferred import-order fixes. The full source-frozen run
+**session-guard-full-20261015** completed **1342 passed**, one upstream warning,
+exit 0 and unchanged sources/HEAD; evidence is
+`tmp/session-guard-full-20261015-evidence.json`. Its catalog run completed
+**253/253**, exit 0, unchanged sources/HEAD and merged results:
+`tmp/catalog-session-guard-final-20261015/evidence.json`. No visible/native app windows are
+launched or closed; this matrix does not certify camera or cloud journeys.
+
+A separate content probe exposed a further coverage gap while those runs were
+frozen. It reports **3 failed / 9 passed** in
+`tmp/topic-notation-expanded-negative-20261015.log`: f-string interpolation
+removed braces from negative exponents in magnetic/photon substitutions, and
+nanometre worked steps used the constant 1 nm as the unknown quantity. Actual
+equation rendering succeeds even for the malformed exponent, so successful
+typesetting alone cannot prove mathematical correctness. These content defects
+are repaired below; the earlier passing suite/catalog did not cover them.
+
+## Generated solution notation and independent numeric checks
+
+BUG-257 escaped the literal negative-power braces in magnetic-force and photon
+f-strings. BUG-258 gives nanometre conversion a length variable `l` instead of
+reusing the constant 1 nm as the unknown. Exactly three source lines changed;
+original newlines are preserved. The canonical JSON digest of every generated
+field except explanation/solution_latex remains identical for all **2500**
+records. Evidence: `tmp/topic-notation-preservation-20261015.json`. Prompts,
+choices, correct indices, language data, IDs and pending source/review metadata
+are unchanged.
+
+The first repaired group passed **12/12**. The final permanent module has 13
+checks, adding a scan of all 2500 worked sets for ungrouped negative exponents.
+It independently recomputes 100 magnetic-force, 100 photon-energy and 100
+nanometre-conversion answers from the supplied numbers using Decimal, checks
+four-significant-digit values and units in kk/ru/en, then typesets 18 first/last
+equations. Corrected magnetic and nanometre images were inspected. The expanded
+notation/explanation/result/bank group passed **50/50** in
+`tmp/topic-notation-final-20261015.log`.
+
+The generator catalog executes seven non-rendering cases, preserving its pure
+data API; the worked-solution catalog executes all 13. A fresh-process run with
+both Qt bindings forbidden passed the seven generator/key checks and imported
+neither binding (`tmp/topic-generator-no-qt-20261015.json`). Twelve targeted
+story/startup/encoder checks passed with unchanged HEAD/sources and merged
+results (`tmp/topic-notation-stories-20261015-evidence.json`). Shared practice
+case signatures now include ent_topic_bank.py so changed generated material
+cannot reuse an old in-process matrix result.
+
+Canonical artifact integrity passes in
+`tmp/topic-notation-artifact-audit-20261015.json`; all **215** registered issues
+are linked. The workbook retains 253 stories and 100 FIXED / 153 PASS software
+results, separately 6 complete / 247 partial acceptances. The source-frozen
+**topic-notation-full-20261015** run completed **1355 passed**, exit 0, one
+upstream ChromaDB warning and unchanged HEAD/sources; evidence is
+`tmp/topic-notation-full-20261015-evidence.json`. The catalog run
+**catalog-topic-notation-final-20261015** completed **253/253**, exit 0, unchanged
+HEAD/sources and merged results; evidence is
+`tmp/catalog-topic-notation-final-20261015/evidence.json`.
+Mathematical checks here cover
+the named three topics plus the all-bank syntax invariant; teacher/language
+review and complete all-topic physical validation are not claimed.
+
+### Final correction of non-video story boundaries
+
+Visual review exposed the existing BUG-253 template defect on four more rows:
+F190 research PDF fallback, F220 study PDF, F233 equation review and F247 language
+changes described a missing/corrupt-video failure. The source-derived contract
+probe failed **4/4** in `tmp/feature-failure-story-negative-20261015.log`.
+These now have explicit prerequisites, steps and actual fallback expectations:
+matplotlib/tex-only, deterministic document authoring/healing, readable math and
+per-attempt images, and unknown-locale/source-label behaviour respectively.
+The two permanent contract tests plus existing encoder/reference checks passed
+**7/7** in `tmp/boundary-story-fixed-20261015.log`.
+
+This correction changes only build_feature_tracker.py, test_features.py's F165
+adapter and the new contract-test module. All application, watchdog and worker
+sources match the completed 1355-pass snapshot byte for byte. The exact delta
+is verified in `tmp/boundary-only-delta-20261015.json`. The new two metadata
+tests are separately executed; no new 1357-case full run is claimed. The scoped
+replay of the four affected stories and six startup/encoder contracts passed
+with unchanged sources and merged results in
+`tmp/boundary-stories-final-20261015-evidence.json`. F165 then passed its updated
+artifact/reference/isolation and both new metadata contract checks, with stable
+sources and merged results (`tmp/boundary-publication-final-20261015-evidence.json`).
+
+The final regenerated XLSX/CSV pass independent integrity in
+`tmp/boundary-publication-final-audit-20261015.json`. All 253 stories/results/
+catalog IDs align, all 215 registered issue IDs are linked, the heuristic
+surface audit is 104/104, the Artifact Tool formula-error scan has no entries,
+and the date column remains typed datetime. Changed contract/error ranges and
+all four final boundary stories were rendered and inspected. Metadata-only
+timestamp refreshes used the existing builder without re-rendering unchanged
+summary/layouts. Ruff F/I and CRLF-aware whitespace checks passed.
+
+The complete-behaviour gate still refuses completion for **247** stories in
+`tmp/boundary-completion-gate-20261015.json`. The workbook retains **6 complete /
+247 partial** acceptances and **100 FIXED / 153 PASS** scoped software results.
+No visible application window was opened, restarted or closed. The objective
+remains active; camera/native layout, wider learner journeys and complete
+cloud educational/audio/playback acceptance still require work.
+
+## Earlier profile and cloud evidence
+
+Saved render settings and worker v8 now transport custom dimensions/FPS,
+inherit adaptive policy correctly, normalize odd YUV420p canvas sizes and
+validate downloaded files before replacing prior video. BUG-244–247 are
+documented with negative baselines and focused successful replays.
+
+The complete pytest replay finished with **987 passed**, one upstream warning,
+exit 0. Its source snapshot changed in
+`aetherlab/services/scene_components/projectile.py` during execution, so this
+is a mixed-source regression result, not proof for an unchanged current tree.
+Evidence: `tmp/profile-v8-full-20261015-evidence.json`.
+The corresponding full catalog finished **252/252**, exit 0, but changes in
+the projectile component and its tests also made that run mixed-source. Its
+results were correctly not merged (`merged_into_tracker: false`):
+`tmp/catalog-profile-v8-final-20261015/evidence.json`.
+
+A separate real cloud v8 probe passed with unchanged sources/HEAD: one
+dispatch, a 960×540/24 FPS MP4 with all 48 frames decoded and measured object
+motion, then an identical-byte cache hit. Evidence:
+`tmp/live-profile-v8-8f293f4adc/evidence.json`. This is silent technical-scene
+evidence; it does not certify native playback, educational content or audio.
+Visible UI acceptance remains disabled after BUG-240.
+
+At the preceding checkpoint the canonical workbook had 252 stories, 100 FIXED / 152 PASS software
+results, and independently 5 complete / 247 partial user-story acceptances.
+BUG-248 and BUG-249 now cover adaptive cache identity and general session/
+worker/runtime profile provenance. Their focused replay passed **36/36**;
+the expanded cache/profile/segment/critic/PDF group passed **209/209**, exit 0,
+unchanged sources/HEAD (`tmp/cache-expanded-final-20261015-evidence.json`).
+Eleven startup/cache/render/cloud stories passed and merged with unchanged
+sources in `tmp/cache-profile-focus-20261015-evidence.json`. All **206**
+documented issue IDs are linked; the integrity audit and 104/104 surface audit
+pass. Workbook summaries and affected profile/cloud rows were rendered and
+reviewed without opening the native app.
+
+Those complete pytest and 252-story catalog replays subsequently finished as
+`cache-provenance-full-20261015` and
+`catalog-cache-provenance-final-20261015` with the mixed-source results
+qualified above. The separate live SQLite/pipeline
+cache probe passed: initial 960×540/24 FPS render (48 decoded frames), same-
+profile reuse, changed 1280×720/30 FPS render (60 decoded frames), then repeat
+reuse. Exactly two renders/dispatches, distinct output paths, retained prior
+file and cached solver/RAG/code are verified, with unchanged HEAD/sources.
+Evidence: `tmp/live-session-cache-758685d699/evidence.json`. Its planner,
+analytical result and references are controlled fixtures, preflight disabled;
+it certifies actual cache/render routing and Cloud delivery, not AI generation,
+audio, native UI or educational content. Twelve additional compatibility cases
+passed in `tmp/cache-compatibility-acceptance-20261015.log` without opening UI.
+These technical cloud probes retain their captured implementation scope.
+The full objective remains incomplete.
+
+## Historical lesson software checkpoint (before profile v8 changes)
+
+The earlier working tree on HEAD `99e14bb` passed **932 pytest checks** and
+**252/252 catalog checks**, both terminal exit 0 with unchanged HEAD/source
+snapshots. The catalog evidence was merged into feature_test_results.json:
+
+- `tmp/lesson-ui-retry-final-full-20261014-evidence.json`
+- `tmp/catalog-lesson-ui-retry-final-20261014/evidence.json`
+
+The canonical workbook remains the single status artifact, with **252**
+stories, **99 FIXED / 153 PASS** software results and independently
+**5 complete / 247 partial** story acceptances. The two new documented issues
+are BUG-242 (lesson busy/cancellation cleanup) and BUG-243 (completion copy,
+media ownership, exact retry topic and material-first navigation). All
+**200** documented issue IDs are linked to their affected stories.
+
+The 932-test run has one upstream ChromaDB deprecation warning. No visible
+native UI test windows were opened. Controlled-player/owned offscreen visual
+checks and the real no-key Kazakh/Russian worker probe support their recorded
+scope; complete provider/cloud delivery, video/audio review, exports and the
+remaining story journeys are still required. This is not overall goal
+completion. Earlier checkpoints below retain their original scope/results.
+
+## Current lesson completion checkpoint
+
+The current worktree is based on HEAD `99e14bb`. BUG-242 retains busy controls
+through real lesson-thread cleanup and prevents repeated/terminal Cancel.
+Its negative baseline was **30 failed / 42 passed**; repaired module **72/72**.
+The combined command-bar/Learn/policy pass was **280/280** before the media
+follow-up. BUG-243 fixes misleading success notices and previous-media reuse;
+its first baseline failed **35/35**, and the expanded media/result pass passed
+**40/40**, including actual QMediaPlayer source clearing.
+
+Further completion checks found missing retry topics and an empty default
+Video tab for incomplete results: **28 failed / 19 passed** after strengthening
+the matrix. The repaired completion suite passed **47/47**, including exact
+draft recovery, newer-draft preservation, material-first navigation and refusal
+of video paths on nonassembled bundles. Complete lesson generation, physical
+playback/audio and exports remain separate acceptance requirements.
+
+Thirteen affected/startup/profile/speech stories passed with unchanged inputs
+and merged results in `tmp/lesson-ui-current-complete-focus-20261014-evidence.json`.
+The subsequent broad freeze passed **925** tests, one upstream warning, exit 0
+and stable HEAD/sources (`tmp/lesson-ui-latest-full-20261014-evidence.json`).
+Both precede the final retry/Text-tab follow-up; renewed full regression and
+the entire 252-story catalog follow their actual terminal results. Visible
+native test windows remain disabled. Issue history contains **200** IDs.
+
+The final retry/media/navigation implementation passed **932** tests,
+one upstream ChromaDB deprecation warning, terminal exit 0 and unchanged
+HEAD/source snapshots in
+`tmp/lesson-ui-retry-final-full-20261014-evidence.json`. The later full catalog
+passed **252/252** with unchanged sources and merged evidence. The real no-key
+Kazakh/Russian worker probe also passed with unchanged
+sources (`tmp/actual-offline-lesson-20261014/evidence.json`). It does not certify
+English template rendering, a configured AI provider, cloud delivery or audio.
+
+## Previous published checkpoint
+
+The canonical workbook has **252** stories: **99 FIXED / 153 PASS** software
+checks and **5 complete / 247 partial** story acceptances. Structural audit
+and code-surface reconciliation pass; the surface guard covers **104/104**.
+Issue history contains **198** distinct documented IDs, each linked to a story.
+
+The current source-bound focus passed F03/F04/F05/F09/F11/F13/F55/F251/F252,
+exit 0, with no source changes and merged evidence:
+`tmp/tier-profile-current-focus-20261014-evidence.json`. It includes **29**
+profile checks, **34** speech/routing checks and two actual runtime tier cases.
+The final profile/menu/visible-test guard group separately passed **39** cases
+in `tmp/tier-final-20261014.log`. Native UI tests remain opt-in and were not run.
+
+The earlier broad freeze passed **856** tests with one upstream warning.
+The later full catalog checked all 252 entries but returned **251/252**, with
+F55 still expecting the retired hardware-tier contract. Its snapshot changed
+externally in `manim_runtime.py`, `render_backend.py`, `scene_preflight.py` and
+`voiceover.py`, so that run was not merged. BUG-241 corrects F55's inventory and
+checks while preserving application code; the current focused renewal passes.
+The 856-test result predates those later rendering edits and is not presented
+as a complete regression of the newest worktree. A new stable broad pass,
+complete remaining story journeys, native layout/focus and cloud/media review
+are still required. No completion claim is made for the overall objective.
+
+## Visible test windows stopped
+
+The user reported repeatedly opening PhysLab windows. The owned catalog process
+13380 and its native pytest child 25528 were confirmed by their exact command
+lines and stopped together with their child process. A subsequent process check
+found no matching catalog/native-test process. These windows came from the UI
+acceptance runner, which forced Windows Qt during ordinary catalog checks.
+Successive native runs also had different source hashes (`settings.py`, then
+`models.py`), so the source-bound cache could not reuse the initial result.
+
+Ordinary catalog checks now leave visible Windows UI acceptance pending. Both
+the catalog entry and native runner require the explicit environment flag
+`PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE=1` before launching visible test windows.
+No further native UI tests were launched after the user's report. Seven
+process-free guard cases now pass, including explicit opt-in routing with a
+controlled runner. The interrupted catalog run is
+partial and must not be reported as a completed retest or merged as one.
+
+## Localized school examples checkpoint
+
+BUG-239 replaces the ten English/university/mathematics examples with ten
+authored school-physics prompts in kk/ru/en. Every menu open reads the current
+language; the three versions preserve physical conditions and numerical data.
+They are example questions, with no official UNT provenance claim. F13's user
+story and reviewed acceptance matrix now require this content/language scope.
+
+The old content failed all three new locale cases. The final focused group
+passed **10/10** offscreen: three actual menu/action checks plus seven visible
+test opt-in guards (`tmp/examples-localization-fixed2-20261014.log`). A prior
+retry had three temp-directory fixture setup errors, retained in its log.
+The current code still requires broader post-fix regression and catalog
+renewal. Native visual/layout acceptance remains pending; no visible test
+windows will be opened by an ordinary catalog run. Issue history: **197** IDs.
+
+## Current inventory and broader replay
+
+The canonical workbook now contains **252** stories. Added F251 for validated
+render profiles/presets/overrides and F252 for formula speech normalization,
+language/voice/cache routing and localized narration diagnostics. Their
+executed focus passed **27** render-profile checks and **34** speech/routing
+checks; F13's expanded menu story also passed with unchanged source hashes in
+`tmp/examples-profile-speech-focus-20261014-evidence.json`. Surface discovery
+now accounts for **104/104** settings, labels, CLI and localized-copy surfaces.
+This word/source mapping guards inventory coverage; it is not runtime proof.
+
+The first broad run finished **852 passed / 4 failed**. Three source files
+changed externally during it, so its recorded snapshot invalidates a single-
+revision acceptance claim. All four failure cases passed on replay with
+installed compiler access (`tmp/latex-owned-probe-20261014.log`). A segmented-
+cache fixture now matches solver/config model metadata and forbids provider
+access; its focused group passed **133** checks. Historical failures and the
+environment/source distinctions remain in ERRORS_FOUND.md.
+
+At that checkpoint reconciliation passed with **98 FIXED**
+and **154 PASS** software checks. Five complete headless startup/settings
+contracts (F03/F04/F05/F09/F11) were renewed with unchanged inputs, exit 0 and
+merged evidence in `tmp/startup-headless-renewal-20261014-evidence.json`.
+The workbook therefore shows **5 complete / 247 partial** behaviours. Former
+native proofs are stale after source changes. The final broad regression
+passed **856** checks, one upstream ChromaDB deprecation warning, exit 0 and
+unchanged source/HEAD snapshots in
+`tmp/examples-headless-final-full-20261014-evidence.json`. No visible Qt
+windows were launched. The subsequent 252-story catalog result and current
+F55 correction are recorded in the latest published checkpoint above.
+
+Independent arithmetic also checked the ten authored example conditions and
+the exact numerical data across translations:
+`tmp/example-physics-arithmetic-20261014.json`. Expected results include
+10 m/s and 25 m for acceleration, 6 N, 100 J, 2 m/s after the inelastic
+collision, 400 Pa, 16800 J, 2 A, 6 ohms/2 A, 10 m/s for the wave and a real
+image 60 cm from the lens. This verifies the authored inputs/derivations,
+not future generated AI responses or official exam provenance.
+
+## Latest Learn checkpoint
+
+The command-bar layout follow-up completed **719 pytest cases**, one upstream
+warning, exit 0 with unchanged sources:
+`tmp/commandbar-acceptance-final-full-20261014-evidence.json`. Its native Qt
+matrix passed **86** cases, including styled label fit. The full 250-story
+catalog completed as 170 saved passes plus 80 resumed passes after PID 19332
+was confirmed absent. Aggregate evidence retains `phase1_exit_code: null` in
+`tmp/catalog-ui-acceptance-final-20261014/evidence.json`. It does not claim a
+known successful exit for the interrupted original process.
+
+The next negative UI pass found BUG-235/236. Baseline: **12 failed / 12 passed**;
+first repaired Learn group: **24 passed**. Exact lesson topics now survive quota
+storage refusal, failure and cancellation without restoring an older Solve draft
+or overwriting newer input. Empty cancellation preserves a previous lesson or
+returns to Empty; partial-video cancellation keeps its route. The current
+expanded group also covers duplicate rejection/allowance and deleted Solve
+wrappers. F145/F150 still need their complete lesson behaviour acceptance.
+
+These new application/runner changes invalidate the earlier eight native UI
+acceptances until renewed. The native runner now includes the Learn module and
+binds actual Learn failure/draft cases to F84 as well as Solve failures. The
+719/86/250 checkpoint is historical for those later changes. Issue history now
+contains **193** distinct IDs. Final renewed runs and canonical counts follow
+after their actual terminal results.
+
+The related signal/overlap pass added BUG-237/238. Its baseline failed all
+**15** cases: late/cancelled/queued old-lesson events, a deleted lesson wrapper,
+and Solve overlapping lesson cleanup. The repaired Learn module passed **45**
+cases; combined with the acceptance-policy guards it passed **167**. Native
+F84 acceptance now covers actual Learn failure and late data as well as Solve;
+F19 additionally covers Solve refusing unfinished lesson cleanup. Current issue
+history has **195** distinct IDs. The final source freeze follows these fixes.
+
+## Command-bar lifecycle checkpoint
+
+### Reviewed native acceptance and layout follow-up
+
+The earlier shared-host popup problem is resolved by running the actual owned
+QMenu scenario in a fresh Qt process. Its complete broad regression finished
+with **617 passed**, one upstream warning, exit 0 and unchanged source hashes:
+`tmp/commandbar-final3-full-20261014-evidence.json`. The final published nine-story
+focus also passed. These runs precede the acceptance/layout follow-up below.
+
+Eight reviewed matrices now exist for F12/F13/F14/F15/F17/F19/F20/F84. They bind
+the current story contract, implementation/runner hashes, native Windows Qt
+platform and actual JUnit report. The first **83-case native matrix passed** in
+`tmp/feature-acceptance/commandbar-f2e016f5ef/pytest.log`; fourteen catalog stories,
+including renewal of the five startup matrices, passed with unchanged inputs in
+`tmp/commandbar-acceptance-focus-20261014-evidence.json`. The acceptance-policy
+group passed **122** synthetic guard tests. Synthetic policy fixtures never
+become application acceptance evidence.
+
+This strengthens all ten menu selections/dismissal/focus, saved l/m/h quality
+on a new window, all known/unknown failure contexts in three languages, actual
+Details/retry paths with and without an existing result, frozen terminal elapsed
+time, localized running stages, three-language duplicate quota/progress guards,
+independent signal disconnection and real QThread cleanup. UI fixtures have no
+API key and stub only background Ollama discovery and pipeline data; actual
+widgets and the cancellation QThread execute. No solver/provider/cloud result
+is inferred.
+
+Visual inspection then found **BUG-234**, clipped quality captions. Native
+measurements showed 61 logical pixels of text inside a 60-pixel edit field;
+offscreen label-fit tests failed two of three locale cases. AdjustToContents
+alone still failed; the final minimum width 120 with content adjustment passed
+all three cases. The stronger native matrix now includes those three cases and
+explicit error-banner content assertions. Prior eight-story acceptance is
+automatically invalidated by the changed source/contract until renewed.
+
+The full current runs are `commandbar-acceptance-final-full-20261014` and
+`catalog-ui-acceptance-final-20261014`. Their terminal results must be recorded
+before the renewed eight stories can be published as accepted. The workbook
+currently retains five complete startup stories and 245 open behaviours while
+that renewal executes. Current issue history contains **191** distinct IDs.
+
+The 250-story catalog before this follow-up completed as 248 saved successful
+checks plus an owned F249/F250 continuation after the original PID was confirmed
+absent. Its aggregate evidence preserves `phase1_exit_code: null`; it is not
+claimed as one uninterrupted process with exit 0.
+
+### Earlier lifecycle investigation
+
+The next batch exercises F12–F20 and F84 through real Qt controls and worker
+connections. Actual baseline: 9 failed / 14 passed. BUG-229 preserves the exact
+question on quota storage refusal/cancellation/failure; BUG-230 freezes cancelled
+timeline state and rejects late worker data; BUG-231 repairs partial disconnect
+and deleted-QThread restart. BUG-232 corrects inventory expectations for quality
+fallback and cancellation cleanup. Native observation also exposed BUG-233:
+English failure context in Russian/Kazakh UI. Its separate baseline failed 8 of
+9 cases before localization; original technical diagnostics remain unchanged.
+
+The expanded command-bar matrix now has 48 cases: Return/Run/Ctrl+Return and
+quality handoff in kk/ru/en; real QThread cleanup through Cancel, Escape and the
+stepper hit target; error/draft recovery; timeline reset; duplicate quota guard;
+signal ownership; actual popup selection/dismissal; localized failure context.
+The combined legacy batch and command-bar group passed **85**, one upstream
+warning, in `tmp/commandbar-shared-stable-20261014.log` (exit 0).
+
+Failed repeats are retained. The first broad run was **1 failed / 599 passed**:
+a popup observation failed under the shared QApplication. The test now targets
+its owned QMenu and keeps the test QApplication alive across window closes,
+retaining the actual nested menu event loop and keyboard actions. A long-TEMP
+helper render failed separately; compact-TEMP repeated the unchanged render test
+successfully. Neither helper failure is presented as an application fix.
+
+Final runs are tracked as `commandbar-final2-full-20261014`,
+`catalog-commandbar-final-20261014` and `commandbar-native-final-proof-20261014`.
+Their actual terminal results will be recorded below after completion. During
+publication, acceptance is re-evaluated against current sources; the earlier
+569/250 checkpoint does not certify these UI changes. Current documented issue
+history contains **190** distinct IDs. No complete user-story acceptance is
+inferred from controlled pipeline output or screenshots alone.
+
+## Latest startup checkpoint
+
+Current worktree: HEAD c4ffb34 plus the preserved changes below. BUG-227 fixes
+the misleading diagnosis for a broken Qt runtime. BUG-228 rejects invalid Qwen
+roots/field types rather than inventing string model/URL values. Baseline:
+6 failed / 25 passed. Expanded startup matrix: 46 passed. The startup, settings,
+watchdog, fixture, CLI and acceptance-policy group passed **144**.
+
+Eleven related catalog checks then passed with unchanged recorded inputs in
+`tmp/startup-contract-final-focus-20261014-evidence.json`. Five stories now have
+reviewed complete matrices: F03 prompt routing, F04 watchdog control, F05 optional
+Qt diagnostics, F09 Qwen opt-in and F11 default paths. The remaining **245**
+stories are still open. F03 uses actual CLI/main/smoke request construction with
+controlled pipeline results; this is not solver or cloud acceptance. F05 executes
+the actual module entry point with missing/broken Qt imports. Qwen uses owned
+configuration and credentials in 33 fresh processes.
+
+The current canonical publication has 250 stories, 92 software FIXED and 158
+PASS, with five full behaviours and 245 PARTIAL. Its pre-run integrity check
+passed. The full post-fix regression and catalog are recorded separately as
+`tmp/startup-contracts-full-20261014` and
+`tmp/catalog-startup-contracts-20261014/`. The historical checkpoints below keep
+their original counts; they do not certify these later changes.
+
+The first broad startup runs are terminal: **569 pytest cases passed** (one
+upstream ChromaDB deprecation warning, 241.96 seconds) and **250/250 catalog
+checks passed**. Both returned exit 0 with unchanged HEAD/source hashes; the
+catalog merged its actual results. Current error history has **185** distinct
+IDs. These software results do not close the remaining 245 user behaviours.
+
+Subsequent negative-case review strengthened the Qwen policy: malformed explicit
+model/URL types reject the complete provider tuple, rather than retaining a key
+with fallback settings. Four stricter cases failed against the intermediate
+per-field repair (**4 failed / 42 passed**) before correction. The repaired
+combined group passed **144**; eleven focused stories passed again with unchanged
+inputs. Debug-level and file logs are checked for owned credential sentinels.
+Final broad validation for this stricter policy uses the separate
+`startup-provider-final-full-20261014` and
+`catalog-startup-provider-final-20261014` run names; the earlier 569 checkpoint
+does not certify that later change.
+
+The final stricter-policy runs are now terminal: **569 pytest cases passed**
+(one upstream warning, 237.31 seconds), and **250/250 catalog checks passed**.
+Both returned exit 0 with unchanged HEAD/source hashes. Evidence:
+`tmp/startup-provider-final-full-20261014-evidence.json` and
+`tmp/catalog-startup-provider-final-20261014/evidence.json`. Current complete
+acceptance remains F03/F04/F05/F09/F11; 245 stories remain open.
+
+Next inspection target: command-bar and worker control, F12–F20. In particular,
+F15's text still says cancellation resets idle immediately, while current
+`_cancel_pipeline()` deliberately keeps busy until `_on_worker_finished()`.
+F14's failure text also needs to distinguish an unselected combo (Draft fallback)
+from an unknown programmatic flag (preserves the selection). These are pending
+inventory corrections and their UI paths still require complete acceptance.
+Initial source-bound probes confirmed both conflicts in
+`tmp/commandbar-inventory-probe-20261014.json`: the actual combo preserves High
+for unknown text/flags and returns Draft only when unselected; actual cancel/
+finished methods keep busy until completion. The latter uses owned control/
+worker interfaces, not real QThread termination or native UI acceptance. A
+first scratch helper incorrectly discarded PATH before importing Qt; its fixed
+owned repeat passed. This is helper history, not an application failure.
+
+## Current revision: c4ffb34
+
+An external checkout/merge replaced the previous worktree during the audit.
+The authoritative branch is `codex/stabilize-current-branch`, HEAD `c4ffb34`.
+Its catalog contains 250 stories; earlier 252-story and 633-test evidence belongs
+to the prior revision and cannot certify this one. Current user changes and
+artifacts are preserved; deleted lesson features have not been silently restored.
+
+BUG-220–223 address corrupt-encoding startup failures, unsafe read/modify/write
+of unreadable settings, lost Settings drafts/unhandled save errors, and unstable
+default paths. The current branch's baseline failed 4 data cases and 12 UI cases.
+The repaired group passed **44**; 7 related catalog checks passed without changes
+during the run. The source-bound result is
+`tmp/current-settings-catalog-20261014/evidence.json`.
+
+Full behaviour acceptance can now be represented explicitly. F11 uses twelve
+fresh-process cases against the actual default/settings functions, with a
+bound story contract, scenario/requirement coverage, implementation and runner
+hashes. A changed source, missing/failed case, changed evidence or unfinished
+catalog retest invalidates acceptance. Policy tests exercise these refusals.
+F04 now has ten executed watchdog cases, including real owned child processes
+and the actual batch entry point from a foreign Unicode/spaced directory.
+Logging refusals, spawn failure, backoff growth/cap/reset and both interrupt
+locations are covered. Its evidence binds the watchdog, batch file, console
+helper, test implementation and catalog runner. This closes F04 and F11 only;
+it does not certify the native application's GUI or crash safety. No other
+story is promoted by inference.
+
+`tools/tracker_integrity_audit.py --complete-behaviours` adds the full-goal gate:
+it rejects incomplete story acceptance even when scoped software checks pass.
+The canonical workbook remains the single status view; JSON files are supporting
+evidence and the CSV is its generated mirror.
+
+Current complete regression/catalog runs will be recorded separately as
+`tmp/stabilize-settings-full-20261014.log` and
+`tmp/catalog-stabilize-settings-20261014/`. They use isolated provider/data
+environments and bind both HEAD and source hashes. A catalog whose inputs change
+is retained as history and is not merged into the current tracker.
+
+The first such runs are now terminal: pytest **470 passed / 1 failed**, catalog
+**248/250**, both with unchanged source snapshots. The batch test depended on
+cached video; its replacement actually renders and decodes its own MP4. The
+teacher-review failure came from long reused fixture paths, now compact and
+fresh. Both original scenarios pass targeted reruns. Tracker F165 read during
+publication; final catalog execution will begin only after publication/parity
+checks finish. A direct-CLI import issue introduced by the evidence integration
+was repaired and tested from a foreign working directory.
+
+The next permitted full run passed **476** with unchanged inputs. Its catalog
+finished **248/250**: F230/F233 used a third fixture adapter still embedding
+long function names. An expanded path regression reproduced the missed case;
+all three adapters now have compact fresh paths. Original F230/F233 assertions
+pass after that fix. These broad results precede the subsequent watchdog and
+acceptance changes and are not final-current-source certification.
+
+Watchdog baseline: **3 failed / 7 passed**, preserving the original log. The
+fixes address import-time logging failures and Ctrl+C during backoff. The
+watchdog/path/CLI/acceptance-policy group passed **53**. Focused F04/F133/F215/
+F230/F233 all passed. F04/F11/F133/F215 were then rerun with unchanged inputs in
+`tmp/watchdog-defaults-proof-20261014-evidence.json`.
+
+Current defect history has **183 distinct IDs**. The canonical table remains
+250 stories; F04 and F11 have complete acceptance, with **248** still open.
+Neither scoped software success nor these two closed contracts complete the
+overall goal. Broad post-fix runs are tracked separately under the final4 names.
+
+The final4 full regression has now completed **499 passed**, one upstream
+ChromaDB deprecation warning, exit 0, in 226.39 seconds. Its evidence includes
+the root watchdog and batch file as well as the application/tests/tools;
+HEAD and all recorded source hashes were unchanged. The separate final4 catalog
+also completed **250/250**, exit 0, with no failed IDs and unchanged source
+hashes; it merged its actual results into the canonical result data. Evidence:
+`tmp/catalog-stabilize-settings-final4-20261014/evidence.json`. This is a scoped
+software/catalog pass, not acceptance of the remaining 248 complete stories.
+
+Initial acceptance candidates were F03/F05. Eight fresh-process CLI probes passed
+in `tmp/cli-stories-initial-20261014.json`: default/Unicode parsing, exact
+dispatch of default/Unicode/empty prompts, normal invalid-flag exit, and the
+actual module entry point with PyQt imports blocked. Dispatch deliberately
+uses a controlled async callback and does not certify the smoke pipeline.
+These probes are not yet registered as complete acceptance and do not promote
+either story in the workbook.
+
+Final publication parity passed with no issues: 250 rows/stories/results/tests,
+91 software FIXED and 159 PASS, two complete behaviours and 248 PARTIAL. The
+full-goal gate intentionally exits 1 for those 248 open stories. The current
+surface check covers 90/90 detected surfaces, including 19 locale maps; it is
+an inventory check, not proof of all user behaviour. The canonical workbook
+retains its Features/Summary sheets, native Features table A1:U251, D2 frozen
+panes and typed UTC check dates. Changed status/acceptance ranges were rendered
+and visually inspected. Final reports: `tmp/integrity-final4-20261014.json`,
+`tmp/complete-behaviours-final4-20261014.json` and
+`tmp/surfaces-final4-20261014.json`.
 
 ## Canonical tracking
 

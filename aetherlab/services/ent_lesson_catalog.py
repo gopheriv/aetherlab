@@ -15,6 +15,18 @@ from aetherlab.core.models import LessonChapter, LessonPlan, LessonQuestion
 ACCELERATED_MOTION_ID = "constant_acceleration"
 ACCELERATED_MOTION_VERSION = "physlab-ent-constant-acceleration-v1"
 
+# Stage O: the v2 5-minute lesson (8 prebuilt cloud-rendered blocks B0–B7 +
+# 45-cue subtitles + study PDF + H1–H5 practice). A distinct topic id keeps its
+# course-progress key separate from the v1 route, so existing answers are
+# never re-attributed to the new question list.
+ACCELERATED_MOTION_5MIN_ID = "constant_acceleration_5min"
+ACCELERATED_MOTION_5MIN_VERSION = "physlab-ent-constant-acceleration-5min-v2"
+ACCELERATED_MOTION_5MIN_REVIEW = {
+    "content_version": "v2",
+    "physics_calculation": "checked_by_deterministic_calculation",
+    "teacher_translation_review": "pending",
+}
+
 BOOK_CITATION = (
     "Н.А. Закирова, «Физика», 10 класс, ЖМ направление, §3, PDF с. 15–18; "
     "задачи: PDF с. 20."
@@ -545,11 +557,21 @@ def accelerated_motion_plan(language: str = "ru") -> LessonPlan:
 
 
 def curated_ent_lesson(topic: str, language: str = "ru") -> LessonPlan | None:
-    """Resolve an explicit accelerated-motion topic alias to the curated route."""
-    normalized = str(topic or "").strip().casefold().replace("-", " ").replace("_", " ")
-    if normalized != ACCELERATED_MOTION_ID and not _is_accelerated_motion_topic(topic):
+    """Resolve an explicit accelerated-motion topic alias to the curated route.
+
+    Every free-text alias resolves to the v2 5-minute lesson; only the exact
+    legacy id still resolves to v1, so existing records and saved progress
+    keep working.
+    """
+    raw = str(topic or "").strip().casefold()
+    normalized = raw.replace("-", " ").replace("_", " ")
+    if raw == ACCELERATED_MOTION_5MIN_ID or normalized == "constant acceleration 5min":
+        return accelerated_motion_5min_plan(language)
+    if raw == ACCELERATED_MOTION_ID:
+        return accelerated_motion_plan(language)
+    if not _is_accelerated_motion_topic(topic):
         return None
-    return accelerated_motion_plan(language)
+    return accelerated_motion_5min_plan(language)
 
 
 def route_content(language: str = "ru") -> dict:
@@ -634,3 +656,509 @@ def route_content(language: str = "ru") -> dict:
             ],
         }[lang],
     }
+
+
+# Stage O: trilingual cards for the v2 5-minute lesson. Chapter narrations are
+# the canonical Stage F voiceovers verbatim (output/stage_f_content/canonical.json
+# v2); block titles for kk/en are new translations, teacher review pending.
+# Practice mirrors output/stage_h_practice/practice.json exactly — no NCT anchor
+# question here (the v2 lesson checks v=14/s=32, not the NCT graph task).
+_TEXT_5MIN = {
+    "kk": {
+        "title": "Тұрақты үдеумен қозғалыс — 5 минуттық сабақ",
+        "topic": ACCELERATED_MOTION_5MIN_ID,
+        "prerequisites": [
+            "Жылдамдық қашықтықтың уақытқа қатынасы екенін білу.",
+            "Секунд пен метр/секунд бірліктерін тану.",
+        ],
+        "objectives": [
+            "Үдеуді жылдамдықтың әр секундтағы өзгерісі арқылы түсіндіру.",
+            "Тұрақты үдеу формуласымен жылдамдық пен орын ауыстыруды есептеу.",
+            "Жылдамдық–уақыт графигінен жүрілген жолды табу.",
+        ],
+        "misconception": (
+            "Үдеу жылдамдықтың өзіне тең емес. Үдеу жылдамдықтың уақыт өткенде "
+            "қалай өзгеретінін көрсетеді."
+        ),
+        "chapters": [
+            {
+                "id": "B0", "title": "Ілмек және мақсат",
+                "goal": "Сабақ сұрағын қою: машина 4 с-та қанша метр жүреді?",
+                "beats": [
+                    "Машина 2 м/с-тан 14 м/с-қа дейін 4 с-та үдейді.",
+                    "Сабақ соңында жауапты екі тәсілмен табасың.",
+                ],
+                "narration": "Мәшине секундына екі метр жылдамдықпен келе жатыр және бірқалыпты үдейді. Төрт секундтан кейін жылдамдық он төрт метр секундқа жетеді. Ол қанша метр жүрді? Сабақ соңында жауапты екі тәсілмен табасың.",
+                "key_equations": [], "key_symbols": [],
+                "citation_query": "§3, PDF с. 15–18", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B1", "title": "«Теңүдемелі» деген не",
+                "goal": "«Теңүдемелі» ұғымын енгізу: әр секундтағы өсім бірдей.",
+                "beats": [
+                    "Бірқалыпты қозғалыс: v = s / t.",
+                    "Бізде әр секундта +3 м/с — бұл a = 3 м/с².",
+                    "Ox осін қозғалыс бағытымен бағыттаймыз.",
+                ],
+                "narration": "Егер жылдамдық өзгермесе — қозғалыс бірқалыпты: v тең s бөлінген t. Бізде жылдамдық өседі — бірақ әр секундта бірдей шамаға өседі. Әр секундта жылдамдық секундына үш метрге артады — бұл үдеудің үшке тең екенін білдіреді. Мұндай қозғалыс теңүдемелі деп аталады. Жылдамдықтың өсу шапшаңдығын үдеу көрсетеді: a тең жылдамдық өзгерісін уақытқа бөлгенге. Өлшем бірлігі — метр секундына квадрат. Икс осін қозғалыс бағытымен бағыттаймыз: алға бағытталғанның бәрі плюс таңбасымен.",
+                "key_equations": [r"a = \Delta v / \Delta t"],
+                "key_symbols": ["a = 3 м/с²", "[a] = м/с²"],
+                "citation_query": "§3, PDF с. 15–16: үдеу", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B2", "title": "Жылдамдық v = v0 + at",
+                "goal": "v = v0 + at формуласын қолданып 14 м/с-ты алу.",
+                "beats": [
+                    "Жылдамдық = бастапқы + өсімше (a·t).",
+                    "2 + 3·4 = 14 м/с.",
+                    "Бірліктерді тексер: м/с² · с = м/с.",
+                ],
+                "narration": "Кез келген сәттегі жылдамдық — бастапқы жылдамдық пен өсімшенің қосындысы. Өсімше — үдеу мен уақыттың көбейтіндісі: v тең v нөл плюс a t. Сандарды қоямыз: екі плюс үш көбейту төрт — секундына он төрт метр. Бірліктерді тексер: метр секундына квадратты секундқа көбейткенде метр секунд шығады. Бәрі сәйкес.",
+                "key_equations": [r"v = v_0 + at", r"v = 2 + 3\cdot 4 = 14"],
+                "key_symbols": ["v₀ = 2 м/с", "a = 3 м/с²", "t = 4 с", "v = 14 м/с"],
+                "citation_query": "§3, PDF с. 16: жылдамдық", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B3", "title": "Орын ауыстыру s = v0t + at²/2",
+                "goal": "s = v0t + at²/2 формуласымен 32 м-ді есептеу.",
+                "beats": [
+                    "Орын ауыстыру — старттан ығысу.",
+                    "s = v0t + at²/2: 8 + 24 = 32 м.",
+                    "Бірінші мүше — үдемей жүрген жол, екіншісі — үдеу үлесі.",
+                ],
+                "narration": "Орын ауыстыру — дененің старттан қанша ығысқаны. Бағыт өзгермесе, ол жүрілген жолға тең. Формула: s тең v нөл t плюс a t квадраттың жартысы. Бірінші қосылғыш — үдемей жүрген жол, екіншісі — үдеуден қосылғаны. Есептейміз: екі көбейту төрт — сегіз, плюс үш көбейту он алтының жартысы — жиырма төрт. Барлығы отыз екі метр.",
+                "key_equations": [r"s = v_0t + at^2/2", r"s = 2\cdot 4 + (3\cdot 4^2)/2 = 32"],
+                "key_symbols": ["v₀ = 2 м/с", "a = 3 м/с²", "t = 4 с", "s = 32 м"],
+                "citation_query": "§3, PDF с. 16–18: орын ауыстыру", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B4", "title": "v(t) графигі",
+                "goal": "Көрсету: v(t) графигінің көлбеуі үдеуге тең.",
+                "beats": [
+                    "v = 2 + 3t — түзу: (0 с; 2 м/с) → (4 с; 14 м/с).",
+                    "Көлбеу неғұрлым тік — a соғұрлым үлкен.",
+                    "v(t) көлбеуі = a.",
+                ],
+                "narration": "Жылдамдықтың уақытқа тәуелділік графигін саламыз: v тең екі плюс үш t. Бұл түзу: нөлде — екі, төрт секундтан кейін — он төрт. Түзудің көлбеуі — бұл үдеу: неғұрлым тік болса, a соғұрлым үлкен. Есте сақта: v-ның t-ға тәуелділік графигінің көлбеуі үдеуге тең.",
+                "key_equations": [r"v = 2 + 3t", r"a = \Delta v / \Delta t"],
+                "key_symbols": ["көлбеу = a", "a = 3 м/с²"],
+                "citation_query": "§3, PDF с. 16–18: v(t) графигі", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B5", "title": "Ауданмен тексеру",
+                "goal": "Ауданмен тексеру: трапеция 32 м береді.",
+                "beats": [
+                    "График астындағы аудан = орын ауыстыру.",
+                    "(2 + 14)/2 · 4 = 32 м.",
+                    "Екі тәсіл — бір жауап.",
+                ],
+                "narration": "Енді тексереміз. Жылдамдық графигі астындағы аудан сан жағынан орын ауыстыруға тең. Бізде табандары екі мен он төрт, биіктігі төрт трапеция: табандардың жарты қосындысын биіктікке көбейтеміз — сегіз көбейту төрт — отыз екі метр. Формуламен сәйкес келді. Екі тәсіл — бір жауап.",
+                "key_equations": [r"s = ((2+14)/2)\cdot 4 = 32"],
+                "key_symbols": ["s = 32 м"],
+                "citation_query": "§3, PDF с. 16–18: ауданмен тексеру", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B6", "title": "Кідіртіп шығаратын есеп",
+                "goal": "Өздік есеп: v0 = 0, a = 2 м/с², t = 5 с → 25 м.",
+                "beats": [
+                    "Видеоны кідірт те, өзің шығар.",
+                    "s = 0·5 + 2·25/2 = 25 м.",
+                ],
+                "narration": "Енді өзің. Мәшине орнынан секундына квадрат екі метр үдеумен қозғалды. Бес секундта қанша жол жүреді? Видеоны кідірте тұр да, өзің шығар. Жауабы: нөл көбейту бес плюс екі көбейту жиырма бестің жартысы — жиырма бес метр.",
+                "key_equations": [r"s = 0\cdot 5 + (2\cdot 5^2)/2 = 25"],
+                "key_symbols": ["v₀ = 0 м/с", "a = 2 м/с²", "t = 5 с", "s = 25 м"],
+                "citation_query": "§3, PDF с. 20: есептер", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B7", "title": "Қақпандар және қорытынды",
+                "goal": "Екі қақпанды бекіту және сабақты қорытындылау.",
+                "kind": "recap",
+                "beats": [
+                    "Қақпан 1: 14·4 = 56 — орташа жылдамдықты алу керек.",
+                    "Қақпан 2: көлбеу = a, аудан = s.",
+                    "v = v0 + at; s = v0t + at²/2.",
+                ],
+                "narration": "Екі қақпан. Біріншісі: соңғы жылдамдықты бірқалыпты қозғалыс формуласына қою: он төрт көбейту төрт — елу алты. Қате: жылдамдық өсіп отыр, орташасын алу керек. Екіншісі: көлбеу мен ауданды шатастыру. Көлбеу — бұл үдеу, аудан — орын ауыстыру. Қорытынды: v тең v нөл плюс a t; s тең v нөл t плюс a t квадраттың жартысы; v-ның t-ға графигі астындағы аудан — орын ауыстыру. График ауданына есептер ҰБТ байқау сынақтарында кездеседі — енді оларды танисың.",
+                "key_equations": [r"v = v_0 + at", r"s = v_0t + at^2/2"],
+                "key_symbols": [],
+                "citation_query": "§3, PDF с. 15–18; ҰБТ спецификациясы",
+                "citations": [BOOK_CITATION, SPECIFICATION_CITATION],
+            },
+        ],
+        "practice": [
+            {
+                "q": "Дене 2 м/с бастапқы жылдамдықпен қозғалады. Оның үдеуі 3 м/с². 4 секундтан кейінгі жылдамдығын табыңыз.",
+                "choices": ["A) 14 м/с", "B) 12 м/с", "C) 9 м/с", "D) 6 м/с"],
+                "answer": "A) 14 м/с",
+                "why": "Үдеу жылдамдықты әр секунд сайын 3 м/с-қа арттырады. Сондықтан v = v₀ + at = 2 + 3·4 = 14 м/с.",
+            },
+            {
+                "q": "Дене 2 м/с бастапқы жылдамдықпен, 3 м/с² үдеумен қозғалады. Бағыты өзгермесе, 4 с-тағы орын ауыстыруын табыңыз.",
+                "choices": ["A) 32 м", "B) 56 м", "C) 24 м", "D) 20 м"],
+                "answer": "A) 32 м",
+                "why": "s = v₀t + at²/2 = 2·4 + 3·16/2 = 8 + 24 = 32 м. 56 м жауабы соңғы жылдамдықты бірқалыпты қозғалыс формуласына қойғанда шығады.",
+            },
+            {
+                "q": "Қандай қозғалыс теңүдемелі деп аталады?",
+                "choices": ["A) Жылдамдық тең уақыт аралықтарында бірдей шамаға өзгереді", "B) Жылдамдық тұрақты", "C) Үдеу уақыт өте келе өзгереді", "D) Тең уақыт аралықтарында жол бірдей"],
+                "answer": "A) Жылдамдық тең уақыт аралықтарында бірдей шамаға өзгереді",
+                "why": "Теңүдемелі қозғалыста жылдамдық тең уақытта бірдей шамаға артады, үдеу тұрақты (Закирова 9, §3). D нұсқасы бірқалыпты қозғалысты сипаттайды.",
+            },
+            {
+                "q": "Жылдамдықтың уақытқа тәуелділік графигіндегі түзудің көлбеуі нені көрсетеді?",
+                "choices": ["A) Үдеуді", "B) Орын ауыстыруды", "C) Жылдамдықты", "D) Уақытты"],
+                "answer": "A) Үдеуді",
+                "why": "v(t) графигінің көлбеуі үдеуге тең: a = Δv/Δt. Орын ауыстыру — график астындағы аудан (Закирова 10, §3).",
+            },
+            {
+                "q": "v(t) графигінде түзу (0 с; 2 м/с) нүктесінен (4 с; 14 м/с) нүктесіне барады. Орын ауыстыруды табыңыз.",
+                "choices": ["A) 32 м", "B) 48 м", "C) 56 м", "D) 24 м"],
+                "answer": "A) 32 м",
+                "why": "Трапеция ауданы: (2 + 14)/2 · 4 = 32 м. 24 м — тіктөртбұрышсыз тек үшбұрыштың ауданы.",
+            },
+        ],
+    },
+    "ru": {
+        "title": "Равноускоренное движение — 5-минутный урок",
+        "topic": ACCELERATED_MOTION_5MIN_ID,
+        "prerequisites": [
+            "Помнить, что скорость связана с пройденным расстоянием и временем.",
+            "Знать единицы секунд и метров в секунду.",
+        ],
+        "objectives": [
+            "Объяснить ускорение через изменение скорости за каждую секунду.",
+            "Вычислить скорость и перемещение при постоянном ускорении.",
+            "Найти путь по графику скорости от времени.",
+        ],
+        "misconception": (
+            "Ускорение не равно самой скорости. Оно показывает, как скорость меняется со временем."
+        ),
+        "chapters": [
+            {
+                "id": "B0", "title": "Крючок и цель",
+                "goal": "Поставить вопрос урока: сколько метров пройдёт машина за 4 с?",
+                "beats": [
+                    "Машина разгоняется с 2 м/с до 14 м/с за 4 с.",
+                    "К концу урока найдёшь ответ двумя способами.",
+                ],
+                "narration": "Машина едет со скоростью два метра в секунду и плавно разгоняется. Через четыре секунды — уже четырнадцать. Сколько метров она прошла? К концу урока ты найдёшь ответ двумя способами.",
+                "key_equations": [], "key_symbols": [],
+                "citation_query": "§3, PDF с. 15–18", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B1", "title": "Что значит «равноускоренно»",
+                "goal": "Ввести «равноускоренно»: равные прибавки скорости за равные времена.",
+                "beats": [
+                    "Равномерное движение: v = s / t.",
+                    "У нас каждую секунду +3 м/с — это a = 3 м/с².",
+                    "Ось Ox направляем по движению.",
+                ],
+                "narration": "Если скорость не меняется — движение равномерное: v равно s делить на t. У нас скорость растёт — но растёт одинаково за каждую секунду. Каждую секунду прибавка три метра в секунду — это и значит, что ускорение равно трём. Такое движение называется равноускоренным. Быстроту роста скорости показывает ускорение: a равно изменение скорости, делённое на время. Единица — метр на секунду в квадрате. Направим ось икс по движению: всё, что вперёд, — со знаком плюс.",
+                "key_equations": [r"a = \Delta v / \Delta t"],
+                "key_symbols": ["a = 3 м/с²", "[a] = м/с²"],
+                "citation_query": "§3, PDF с. 15–16: ускорение", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B2", "title": "Скорость v = v0 + at",
+                "goal": "Применить v = v0 + at и получить 14 м/с.",
+                "beats": [
+                    "Скорость = стартовая + прибавка (a·t).",
+                    "2 + 3·4 = 14 м/с.",
+                    "Проверь единицы: м/с² · с = м/с.",
+                ],
+                "narration": "Скорость в любой момент — это стартовая скорость плюс прибавка. Прибавка — ускорение умножить на время: v равно v нулевое плюс a t. Подставим наши числа: два плюс три умножить на четыре — четырнадцать метров в секунду. Проверь единицы: метр на секунду в квадрате умножить на секунду даёт метр на секунду. Всё сходится.",
+                "key_equations": [r"v = v_0 + at", r"v = 2 + 3\cdot 4 = 14"],
+                "key_symbols": ["v₀ = 2 м/с", "a = 3 м/с²", "t = 4 с", "v = 14 м/с"],
+                "citation_query": "§3, PDF с. 16: скорость", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B3", "title": "Перемещение s = v0t + at²/2",
+                "goal": "Вычислить s = v0t + at²/2 и получить 32 м.",
+                "beats": [
+                    "Перемещение — сдвиг от старта.",
+                    "s = v0t + at²/2: 8 + 24 = 32 м.",
+                    "Первое слагаемое — путь без разгона, второе — добавка разгона.",
+                ],
+                "narration": "Перемещение — это насколько тело сдвинулось от старта. Пока направление не меняется, оно равно пройденному пути. Формула: s равно v нулевое t плюс a t квадрат пополам. Первое слагаемое — что прошли бы без разгона, второе — добавка от разгона. Считаем: два умножить на четыре — восемь, плюс три умножить на шестнадцать пополам — двадцать четыре. Итого тридцать два метра.",
+                "key_equations": [r"s = v_0t + at^2/2", r"s = 2\cdot 4 + (3\cdot 4^2)/2 = 32"],
+                "key_symbols": ["v₀ = 2 м/с", "a = 3 м/с²", "t = 4 с", "s = 32 м"],
+                "citation_query": "§3, PDF с. 16–18: перемещение", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B4", "title": "График v(t)",
+                "goal": "Показать: наклон графика v(t) равен ускорению.",
+                "beats": [
+                    "v = 2 + 3t — прямая: (0 с; 2 м/с) → (4 с; 14 м/с).",
+                    "Чем круче наклон, тем больше a.",
+                    "Наклон v(t) = a.",
+                ],
+                "narration": "Построим график скорости от времени: v равно два плюс три t. Это прямая: в нуле — два, через четыре секунды — четырнадцать. Наклон прямой — это ускорение: чем круче, тем больше a. Запомни: наклон графика v от t равен ускорению.",
+                "key_equations": [r"v = 2 + 3t", r"a = \Delta v / \Delta t"],
+                "key_symbols": ["наклон = a", "a = 3 м/с²"],
+                "citation_query": "§3, PDF с. 16–18: график v(t)", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B5", "title": "Проверка площадью",
+                "goal": "Проверить площадью: трапеция даёт 32 м.",
+                "beats": [
+                    "Площадь под графиком = перемещение.",
+                    "(2 + 14)/2 · 4 = 32 м.",
+                    "Два способа — один ответ.",
+                ],
+                "narration": "А теперь проверка. Площадь под графиком скорости численно равна перемещению. У нас трапеция с основаниями два и четырнадцать и высотой четыре: полусумма оснований на высоту — восемь умножить на четыре — тридцать два метра. Сошлось с формулой. Два способа — один ответ.",
+                "key_equations": [r"s = ((2+14)/2)\cdot 4 = 32"],
+                "key_symbols": ["s = 32 м"],
+                "citation_query": "§3, PDF с. 16–18: проверка площадью", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B6", "title": "Пауза-задача",
+                "goal": "Самостоятельная задача: v0 = 0, a = 2 м/с², t = 5 с → 25 м.",
+                "beats": [
+                    "Поставь видео на паузу и реши сам.",
+                    "s = 0·5 + 2·25/2 = 25 м.",
+                ],
+                "narration": "А теперь ты. Машина стартует с места с ускорением два метра на секунду в квадрате. Сколько она пройдёт за пять секунд? Поставь видео на паузу и реши. Ответ: ноль умножить на пять плюс два умножить на двадцать пять пополам — двадцать пять метров.",
+                "key_equations": [r"s = 0\cdot 5 + (2\cdot 5^2)/2 = 25"],
+                "key_symbols": ["v₀ = 0 м/с", "a = 2 м/с²", "t = 5 с", "s = 25 м"],
+                "citation_query": "§3, PDF с. 20: задачи", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B7", "title": "Ловушки и итог",
+                "goal": "Закрепить две ловушки и подвести итог.",
+                "kind": "recap",
+                "beats": [
+                    "Ловушка 1: 14·4 = 56 — брать надо среднюю скорость.",
+                    "Ловушка 2: наклон = a, площадь = s.",
+                    "v = v0 + at; s = v0t + at²/2.",
+                ],
+                "narration": "Две ловушки. Первая: подставить конечную скорость в формулу равномерного движения: четырнадцать умножить на четыре — пятьдесят шесть. Неверно: скорость-то росла, брать надо среднюю. Вторая: перепутать наклон и площадь. Наклон — это ускорение, площадь — перемещение. Итог: v равно v нулевое плюс a t; s равно v нулевое t плюс a t квадрат пополам; площадь под v от t — перемещение. Задачи на площадь графика встречаются в пробниках ЕНТ — теперь ты их узнаешь.",
+                "key_equations": [r"v = v_0 + at", r"s = v_0t + at^2/2"],
+                "key_symbols": [],
+                "citation_query": "§3, PDF с. 15–18; спецификация ЕНТ",
+                "citations": [BOOK_CITATION, SPECIFICATION_CITATION],
+            },
+        ],
+        "practice": [
+            {
+                "q": "Тело движется с начальной скоростью 2 м/с и ускорением 3 м/с². Найдите скорость через 4 секунды.",
+                "choices": ["A) 14 м/с", "B) 12 м/с", "C) 9 м/с", "D) 6 м/с"],
+                "answer": "A) 14 м/с",
+                "why": "Ускорение каждую секунду увеличивает скорость на 3 м/с. Поэтому v = v₀ + at = 2 + 3·4 = 14 м/с.",
+            },
+            {
+                "q": "Тело движется с начальной скоростью 2 м/с и ускорением 3 м/с². Найдите перемещение за 4 с. Направление движения не меняется.",
+                "choices": ["A) 32 м", "B) 56 м", "C) 24 м", "D) 20 м"],
+                "answer": "A) 32 м",
+                "why": "s = v₀t + at²/2 = 2·4 + 3·16/2 = 8 + 24 = 32 м. Вариант 56 м получается, если подставить конечную скорость в формулу равномерного движения.",
+            },
+            {
+                "q": "Какое движение называется равноускоренным?",
+                "choices": ["A) Скорость за равные промежутки времени меняется одинаково", "B) Скорость постоянна", "C) Ускорение меняется со временем", "D) Путь за равные промежутки времени одинаков"],
+                "answer": "A) Скорость за равные промежутки времени меняется одинаково",
+                "why": "Равноускоренное движение — скорость получает равные прибавки за равные времена при постоянном ускорении (Закирова 9, §3). Вариант D описывает равномерное движение.",
+            },
+            {
+                "q": "Что показывает наклон прямой на графике скорости от времени?",
+                "choices": ["A) Ускорение", "B) Перемещение", "C) Скорость", "D) Время"],
+                "answer": "A) Ускорение",
+                "why": "Наклон v(t) равен ускорению: a = Δv/Δt. Перемещение — это площадь под графиком, а не наклон (Закирова 10, §3).",
+            },
+            {
+                "q": "На графике v(t) прямая идёт от точки (0 с; 2 м/с) до точки (4 с; 14 м/с). Найдите перемещение.",
+                "choices": ["A) 32 м", "B) 48 м", "C) 56 м", "D) 24 м"],
+                "answer": "A) 32 м",
+                "why": "Площадь трапеции: (2 + 14)/2 · 4 = 32 м. Вариант 24 м — только треугольник без прямоугольника.",
+            },
+        ],
+    },
+    "en": {
+        "title": "Uniformly accelerated motion — 5-minute lesson",
+        "topic": ACCELERATED_MOTION_5MIN_ID,
+        "prerequisites": [
+            "Know that speed relates distance to time.",
+            "Recognize seconds and metres per second.",
+        ],
+        "objectives": [
+            "Explain acceleration as the change in velocity each second.",
+            "Find velocity and displacement for constant acceleration.",
+            "Find distance from a velocity–time graph.",
+        ],
+        "misconception": "Acceleration is not the velocity itself. It describes how velocity changes over time.",
+        "chapters": [
+            {
+                "id": "B0", "title": "Hook and goal",
+                "goal": "Pose the lesson question: how far does the car go in 4 s?",
+                "beats": [
+                    "A car speeds up from 2 m/s to 14 m/s in 4 s.",
+                    "By the end you will find the answer two ways.",
+                ],
+                "narration": "A car travels at two metres per second and accelerates smoothly. After four seconds it already does fourteen. How many metres did it cover? By the end of the lesson you will find the answer two ways.",
+                "key_equations": [], "key_symbols": [],
+                "citation_query": "§3, PDF pp. 15–18", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B1", "title": "What “uniformly accelerated” means",
+                "goal": "Define “uniformly accelerated”: equal velocity gains in equal times.",
+                "beats": [
+                    "Uniform motion: v = s / t.",
+                    "Here +3 m/s every second — that is a = 3 m/s².",
+                    "We point the Ox axis along the motion.",
+                ],
+                "narration": "If speed never changes, motion is uniform: v equals s over t. Here speed grows — but grows by the same amount each second. Every second adds three metres per second — that is what an acceleration of three means. Such motion is called uniformly accelerated. Acceleration measures how fast velocity grows: a equals the change in velocity divided by time. Its unit is the metre per second squared. We point the x axis along the motion: everything forward takes the plus sign.",
+                "key_equations": [r"a = \Delta v / \Delta t"],
+                "key_symbols": ["a = 3 m/s²", "[a] = m/s²"],
+                "citation_query": "§3, PDF pp. 15–16: acceleration", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B2", "title": "Velocity v = v₀ + at",
+                "goal": "Apply v = v₀ + at and get 14 m/s.",
+                "beats": [
+                    "Velocity = start + gain (a·t).",
+                    "2 + 3·4 = 14 m/s.",
+                    "Check the units: m/s² · s = m/s.",
+                ],
+                "narration": "Velocity at any moment is the starting velocity plus the gain. The gain is acceleration times time: v equals v naught plus a t. Plug in our numbers: two plus three times four — fourteen metres per second. Check the units: metres per second squared times seconds gives metres per second. It all fits.",
+                "key_equations": [r"v = v_0 + at", r"v = 2 + 3\cdot 4 = 14\,\mathrm{m/s}"],
+                "key_symbols": ["v₀ = 2 m/s", "a = 3 m/s²", "t = 4 s", "v = 14 m/s"],
+                "citation_query": "§3, PDF p. 16: velocity", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B3", "title": "Displacement s = v₀t + at²/2",
+                "goal": "Compute s = v₀t + at²/2 and get 32 m.",
+                "beats": [
+                    "Displacement is the shift from the start.",
+                    "s = v₀t + at²/2: 8 + 24 = 32 m.",
+                    "First term — coasting distance, second — the acceleration boost.",
+                ],
+                "narration": "Displacement is how far the body shifted from the start. While direction stays the same, it equals the distance travelled. The formula: s equals v naught t plus a t squared over two. The first term is what we would cover without accelerating; the second is the boost from acceleration. Let's compute: two times four is eight, plus three times sixteen over two — twenty-four. Thirty-two metres in total.",
+                "key_equations": [r"s = v_0t + at^2/2", r"s = 2\cdot 4 + (3\cdot 4^2)/2 = 32\,\mathrm{m}"],
+                "key_symbols": ["v₀ = 2 m/s", "a = 3 m/s²", "t = 4 s", "s = 32 m"],
+                "citation_query": "§3, PDF pp. 16–18: displacement", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B4", "title": "The v(t) graph",
+                "goal": "Show the slope of the v(t) graph equals the acceleration.",
+                "beats": [
+                    "v = 2 + 3t is a straight line: (0 s; 2 m/s) → (4 s; 14 m/s).",
+                    "The steeper the slope, the larger the a.",
+                    "Slope of v(t) = a.",
+                ],
+                "narration": "Let's plot velocity against time: v equals two plus three t. It is a straight line: two at zero, fourteen after four seconds. The slope of the line is the acceleration: the steeper, the larger the a. Remember: the slope of the v–t graph equals the acceleration.",
+                "key_equations": [r"v = 2 + 3t", r"a = \Delta v / \Delta t"],
+                "key_symbols": ["slope = a", "a = 3 m/s²"],
+                "citation_query": "§3, PDF pp. 16–18: the v(t) graph", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B5", "title": "Check by area",
+                "goal": "Check by area: the trapezoid gives 32 m.",
+                "beats": [
+                    "Area under the graph = displacement.",
+                    "(2 + 14)/2 · 4 = 32 m.",
+                    "Two ways, one answer.",
+                ],
+                "narration": "Now the check. The area under the velocity graph numerically equals the displacement. We have a trapezoid with bases two and fourteen and height four: half the sum of the bases times the height — eight times four — thirty-two metres. It matches the formula. Two ways, one answer.",
+                "key_equations": [r"s = ((2+14)/2)\cdot 4 = 32\,\mathrm{m}"],
+                "key_symbols": ["s = 32 m"],
+                "citation_query": "§3, PDF pp. 16–18: check by area", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B6", "title": "Pause-and-solve task",
+                "goal": "Solo task: v₀ = 0, a = 2 m/s², t = 5 s → 25 m.",
+                "beats": [
+                    "Pause the video and solve it yourself.",
+                    "s = 0·5 + 2·25/2 = 25 m.",
+                ],
+                "narration": "Now you. A car starts from rest with an acceleration of two metres per second squared. How far does it go in five seconds? Pause the video and solve it. Answer: zero times five plus two times twenty-five over two — twenty-five metres.",
+                "key_equations": [r"s = 0\cdot 5 + (2\cdot 5^2)/2 = 25\,\mathrm{m}"],
+                "key_symbols": ["v₀ = 0 m/s", "a = 2 m/s²", "t = 5 s", "s = 25 m"],
+                "citation_query": "§3, PDF p. 20: exercises", "citations": [BOOK_CITATION],
+            },
+            {
+                "id": "B7", "title": "Traps and takeaway",
+                "goal": "Lock in the two traps and wrap up.",
+                "kind": "recap",
+                "beats": [
+                    "Trap 1: 14·4 = 56 — take the average speed.",
+                    "Trap 2: slope = a, area = s.",
+                    "v = v₀ + at; s = v₀t + at²/2.",
+                ],
+                "narration": "Two traps. First: plugging the final speed into the uniform-motion formula: fourteen times four is fifty-six. Wrong: the speed was growing, you must take the average. Second: mixing up slope and area. Slope is acceleration; area is displacement. To sum up: v equals v naught plus a t; s equals v naught t plus a t squared over two; the area under the v–t graph is the displacement. Graph-area problems appear in UNT mocks — now you will recognise them.",
+                "key_equations": [r"v = v_0 + at", r"s = v_0t + at^2/2"],
+                "key_symbols": [],
+                "citation_query": "§3, PDF pp. 15–18; UNT specification",
+                "citations": [BOOK_CITATION, SPECIFICATION_CITATION],
+            },
+        ],
+        "practice": [
+            {
+                "q": "An object starts at 2 m/s and accelerates at 3 m/s². What is its speed after 4 seconds?",
+                "choices": ["A) 14 m/s", "B) 12 m/s", "C) 9 m/s", "D) 6 m/s"],
+                "answer": "A) 14 m/s",
+                "why": "Acceleration adds 3 m/s of speed each second. So v = v₀ + at = 2 + 3·4 = 14 m/s.",
+            },
+            {
+                "q": "An object moves with initial speed 2 m/s and acceleration 3 m/s² without changing direction. Find its displacement in 4 s.",
+                "choices": ["A) 32 m", "B) 56 m", "C) 24 m", "D) 20 m"],
+                "answer": "A) 32 m",
+                "why": "s = v₀t + at²/2 = 2·4 + 3·16/2 = 8 + 24 = 32 m. 56 m comes from plugging the final speed into the uniform-motion formula.",
+            },
+            {
+                "q": "Which motion is called uniformly accelerated?",
+                "choices": ["A) Velocity changes by equal amounts in equal times", "B) Velocity stays constant", "C) Acceleration changes over time", "D) Distance is the same in equal times"],
+                "answer": "A) Velocity changes by equal amounts in equal times",
+                "why": "In uniformly accelerated motion velocity gains equal increments in equal times while acceleration stays constant (Zakirova 9, §3). D describes uniform motion.",
+            },
+            {
+                "q": "What does the slope of the line on a velocity–time graph show?",
+                "choices": ["A) Acceleration", "B) Displacement", "C) Velocity", "D) Time"],
+                "answer": "A) Acceleration",
+                "why": "The slope of v(t) equals acceleration: a = Δv/Δt. Displacement is the area under the graph, not the slope (Zakirova 10, §3).",
+            },
+            {
+                "q": "On a v(t) graph a straight line runs from (0 s; 2 m/s) to (4 s; 14 m/s). Find the displacement.",
+                "choices": ["A) 32 m", "B) 48 m", "C) 56 m", "D) 24 m"],
+                "answer": "A) 32 m",
+                "why": "Trapezoid area: (2 + 14)/2 · 4 = 32 m. 24 m is the triangle alone, without the rectangle.",
+            },
+        ],
+    },
+}
+
+
+def accelerated_motion_5min_plan(language: str = "ru") -> LessonPlan:
+    """Return the v2 5-minute lesson plan (8 prebuilt blocks, H1–H5 practice).
+
+    The topic is the ASCII lesson id on purpose: every language shares one
+    course-progress key, and that key can never collide with the v1 route's
+    per-language topics.
+    """
+    lang = normalize_language(language, "ru")
+    content = _TEXT_5MIN[lang]
+    chapters = [
+        LessonChapter(
+            id=chapter["id"],
+            title=chapter["title"],
+            goal=chapter["goal"],
+            kind=str(chapter.get("kind", "scene")),
+            beats=list(chapter["beats"]),
+            narration=chapter["narration"],
+            key_equations=list(chapter["key_equations"]),
+            citation_query=chapter["citation_query"],
+            citations=list(chapter["citations"]),
+            key_symbols=list(chapter["key_symbols"]),
+        )
+        for chapter in content["chapters"]
+    ]
+    return LessonPlan(
+        title=content["title"],
+        topic=content["topic"],
+        audience="high_school",
+        prerequisites=list(content["prerequisites"]),
+        objectives=list(content["objectives"]),
+        misconception=content["misconception"],
+        chapters=chapters,
+        questions=[LessonQuestion(**item) for item in content["practice"]],
+        model_name=ACCELERATED_MOTION_5MIN_VERSION,
+        language=lang,
+        kazakh_terms=[dict(item) for item in _TEXT[lang]["terms"]],
+    )

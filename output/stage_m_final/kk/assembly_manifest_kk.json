@@ -1,0 +1,59 @@
+{
+  "lang": "kk",
+  "total_s": 299.967,
+  "blocks": {
+    "BlockB0": {
+      "start_s": 0.0,
+      "duration_s": 20.0,
+      "job_id": "d1b301b7ca78a991064ba4d3"
+    },
+    "BlockB1": {
+      "start_s": 20.0,
+      "duration_s": 49.96666666666667,
+      "job_id": "15a6345efc4ec392c40b8d26"
+    },
+    "BlockB2": {
+      "start_s": 69.967,
+      "duration_s": 40.0,
+      "job_id": "2a8f3f425b383730526a7b4d"
+    },
+    "BlockB3": {
+      "start_s": 109.967,
+      "duration_s": 50.0,
+      "job_id": "53a06539ef2b7f758e803af4"
+    },
+    "BlockB4": {
+      "start_s": 159.967,
+      "duration_s": 40.0,
+      "job_id": "5faf918ca2dff612679b406a"
+    },
+    "BlockB5": {
+      "start_s": 199.967,
+      "duration_s": 30.0,
+      "job_id": "b14a13b0b0d5742fa94f6752"
+    },
+    "BlockB6": {
+      "start_s": 229.967,
+      "duration_s": 30.0,
+      "job_id": "1feff37122cd096d8b36d2c1"
+    },
+    "BlockB7": {
+      "start_s": 259.967,
+      "duration_s": 40.0,
+      "job_id": "b29b2aa196b2ca2bf419d492"
+    }
+  },
+  "video": {
+    "codec": "h264",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "frames": 8999
+  },
+  "audio": {
+    "codec": "aac",
+    "sample_rate": 48000,
+    "channels": 2
+  },
+  "cues": 45
+}

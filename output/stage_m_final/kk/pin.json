@@ -1,0 +1,38 @@
+{
+  "lang": "kk",
+  "quality": "h",
+  "profile": {
+    "quality": "h",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "renderer": "cairo"
+  },
+  "profile_notice": null,
+  "timeout_s": 960,
+  "content": {
+    "canonical.json": "7d85de57a9d59d861f718d05e784be520efeb4fca82c7c2faa4af8ca9bc42c84",
+    "lesson_kk.py": "3335e326b87869eaf351445597c7db9c9a844103f8d77eb445e05ceea6689fa8",
+    "fragments.json": "27e5c725c737e36e7de2ac234ac9a3c0ed8d017d5bf02d8ded1cc8a9a9e54cbf",
+    "durations.json": "7bc777c4a1e083b77841ac3cc1ee99e0a7119b92f9b6369cc4adc2881a4bb07a",
+    "mux_plan.json": "a0f32da60b44d148e3d847da6798d31d89f661b0fc92b2c83d9f7735f22d178e",
+    "words.json": "6df78008cb95fdc36c814d411c357cb8f1a0b6a40ef2ded23a476be748df8c1b"
+  },
+  "worker": {
+    "repo": "gopheriv/manim-render-worker",
+    "workflow": "render.yml",
+    "branch": "renders",
+    "workflow_version": "8",
+    "manim_pin": "0.21.0"
+  },
+  "jobs": {
+    "BlockB0": "d1b301b7ca78a991064ba4d3",
+    "BlockB1": "15a6345efc4ec392c40b8d26",
+    "BlockB2": "2a8f3f425b383730526a7b4d",
+    "BlockB3": "53a06539ef2b7f758e803af4",
+    "BlockB4": "5faf918ca2dff612679b406a",
+    "BlockB5": "b14a13b0b0d5742fa94f6752",
+    "BlockB6": "1feff37122cd096d8b36d2c1",
+    "BlockB7": "b29b2aa196b2ca2bf419d492"
+  }
+}

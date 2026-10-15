@@ -1,5 +1,9 @@
 # AetherLab — Phase 2 Error Log
 
+The opening counts below describe the historical 9 October baseline. Current
+15 October work now uses the 260-story canonical workbook; see the dated audit
+sections and `docs/FEATURE_AUDIT_STATUS.md` for current scope and terminal runs.
+
 Testing method: `test_features.py` exercises all 231 catalogued features
 (headless logic, offscreen-Qt interactions, integration paths, and source assertions).
 **Automated result (2026-10-09): 231/231 feature checks passed, 217 pytest cases passed, and strict visual regression passed 7/7.**
@@ -441,6 +445,9 @@ observed live, reproduced, fixed, and covered in `tests/test_bugcheck_regression
 | BUG-97 | P2 generic user-story text | F183–F222 (40 generated stories) | `build_feature_tracker.py` `_story_fields` | Forty stories replaced each feature's specific existing user story with the generic claim that behavior matched the implementation. The concrete legacy story was relegated to a trailing field, so the canonical Story column did not describe the user-visible outcome. Generated stories now lead with the feature's concrete scenario and retain persona, preconditions, steps, and code-grounded expected behavior/source references. |
 | BUG-98 | P1 false algebra verification | F194 / derivation verifier | `aetherlab/services/derivation_verify.py` `_is_nonzero_scaling` | A residual ratio that was a monomial in symbols was accepted as a nonzero multiplier without checking whether those symbols could be zero. For example, `x = y` and `x*y = y**2` differ by factor `y`, which is zero at valid states and adds solutions. The verifier now accepts symbolic scaling only when finite solver values prove every factor nonzero, reports unknown factors as `not_checked`, and rejects a supplied zero factor. Regression in `tests/test_bugcheck_regressions.py::test_bug98_symbolic_scaling_must_be_provably_nonzero`. |
 | BUG-99 | P1 creative lesson silently downgraded | F141 / lesson planning and cache | `aetherlab/services/lesson_planner.py` `plan_lesson`; `lesson_pipeline._PlanCache.get` | A complete model-authored chapter plan was rejected and replaced by a generic domain template whenever any prediction, symbol, or retrieval scaffold was missing, although the JSON schema explicitly permits individual checks to be null. The planner and cache now require renderable authored chapters, keep null optional checks, and discard only malformed non-null checks so the UI can safely skip them. The F141 regression supplies a topic-specific chapter with no checks and proves its title/beats survive. |
+| BUG-269 | P2 stale catalog assertion after launch refactor | F131 | `test_features.py` `t_f131` | The single-profile guard moved Qt startup into `_run_owned_app()` so duplicate launches can exit before QApplication creation. F131 still inspected only `run_app()`, falsely reporting missing taskbar ID/icon wiring after the refactor. The check now inspects the helper that owns those calls; the implementation still sets the explicit Windows AppUserModelID and application icon. |
+| BUG-270 | P2 stale fake-generator adapters in regression suite | F106 / F187 | `tests/test_bugcheck_regressions.py` `_FakeGenerator`; `tests/test_upgrade_missions.py` request-flow test | Scene/runtime generation now forwards the `unt_mode` option, but three test fakes kept the old call signature and caused `TypeError` before the behavior under test ran. The fakes now accept the additional keyword; the request-flow fixture also supplies the `data_dir` used by its fail-soft template path, so a future generator failure remains diagnosable. |
+| BUG-268 | P2 stale scene-lint test stubs | regressions `test_pipeline_repairs_drift_only_when_it_helps` and `test_a_scene_that_misses_its_scheduled_length_is_repaired` | `_blocking_scene_issues` gained UNT-mode and vertical-layout context, but both monkeypatched test lambdas still accepted two arguments. They failed during repair verification before exercising timing behavior. Both stubs now accept optional context arguments. |
 | BUG-100 | P1 aggregate falsely said derivation passed | Derivation verification / scene-spec evidence | `aetherlab/services/derivation_verify.py` `verify_derivation_records` | If a list contained one symbolically valid step plus an unsupported, malformed, or expression-less record, the aggregate counter did not include the unchecked record and could report the whole derivation as `passed`. Every record now contributes to `checked`, `failed`, or `not_checked`; a mixed checked/unchecked set cannot aggregate to `passed`. Regression: `tests/test_upgrade_missions.py::test_mixed_derivation_records_cannot_aggregate_to_passed`. |
 | BUG-101 | P1 preflight missed forwarded invalid constructor keyword | F106 static pre-render validation | `aetherlab/services/scene_validation.py` `lint_constructor_kwargs` | Constructor lint skipped all classes whose `__init__` accepted `**kwargs`, including Manim `TracedPath` whose kwargs flow through `VMobject` into strict `Mobject.__init__`. A live Planck Cloud sample used `TracedPath(time_traced=1.2)`, which Manim 0.21.0 rejects and which consumed preflight/render repair attempts. Lint now follows only source-visible direct `super().__init__(**kwargs)` chains to a strict base and checks the union of accepted keyword names; ambiguous chains remain unchecked. Regression rejects `time_traced` while accepting `dissipating_time` and style kwargs. |
 | BUG-102 | P1 incomplete render-farm observability / unsafe persisted text | F154/F175/F176 | `aetherlab/services/render_backend.py`, `render_ledger.py`, `ui/ledger_panel.py` | The original dashboard feature was marked complete while the cloud workflow still omitted a `completed` event, rate-limit retries were invisible, token-scope errors appeared as generic failures, run/artifact links and job id/FPS were not shown, and several ledger text fields were not consistently scrubbed. Fixed with an explicit `action_required` scope-failure event and sanitized log tail, visible `rate_limited → in_progress` retry events, a `completed` event before artifact retrieval, strict credential-free GitHub Actions URL validation/canonical artifact links, metadata and diagnostics scrubbing, and dashboard details for job id, FPS, and safe clickable links. Stub regressions in `t_f154`, `t_f175`, and `t_f176`; Auto fallback integration remains covered in `t_f155`. |
@@ -976,3 +983,1192 @@ passed **21**, including all equations in three full mock PDFs and renderer
 failure fallback. Final full regression passed **422**, one upstream warning,
 exit 0, in `tmp/solutions-full-final-20261013.log`. Scope, native evidence and
 remaining acceptance are recorded in `docs/FEATURE_AUDIT_STATUS.md`.
+
+## Settings audit on c4ffb34 (14 October 2026)
+
+The worktree changed externally to `codex/stabilize-current-branch`, HEAD
+`c4ffb34`, during the ongoing audit. The current catalog has 250 stories.
+Earlier 633-test/252-story results refer to the prior worktree and are historical,
+not proof for this revision. The current checkpoint's 175 error records are
+preserved. IDs 220–223 continue the cross-revision numbering; their addition
+means 179 documented errors here, not 223 current errors.
+
+| ID | Story | Reproduced issue | Fix and evidence |
+| --- | --- | --- | --- |
+| BUG-220 | F07; related F06/F09 | Invalid UTF-8 in app config, opted-in Qwen config or a legacy env file escaped startup parsing. | Unicode decoding failures now use defaults without rewriting the input. Current-HEAD baseline: three decode failures in `tmp/current-settings-baseline-20261014.log`. |
+| BUG-221 | F07 | A read refusal was treated as an empty config during save; prior settings could be overwritten. | Save requires a readable existing document; a genuinely missing or malformed file still follows the existing recovery policy. The fourth current-HEAD baseline case failed because no PermissionError was raised. |
+| BUG-222 | F10 | Saving Settings or enabling Ollama propagated disk errors; entered Settings values were lost. | Localized failure notices keep the same dialog draft for retry/cancel. Activation is acknowledged only after persistence. All 12 current-HEAD UI cases failed before the fix in `tmp/current-settings-ui-baseline-20261014.log`. |
+| BUG-223 | F11 | Whitespace-only or relative LOCALAPPDATA produced a working-directory-dependent default location. | Invalid values fall back to the user home. Two reproduced fallback cases and 12 fresh-process acceptance cases cover absent/empty/invalid/absolute/Unicode paths and two launch folders. |
+
+Current focused validation: **44 passed** in 12.06 seconds, including recovery,
+UI retry/cancel, defaults and acceptance-policy tests. Seven related catalog
+checks completed exit 0 with unchanged recorded hashes in
+`tmp/current-settings-catalog-20261014/evidence.json`. Two additional policy
+guards were then checked separately; their result is retained in
+`tmp/current-policy-final-20261014.log`. UI checks are offscreen and controlled;
+they do not establish native file-picker or full dialog-layout acceptance.
+
+One earlier test-authoring run inherited provider values and made nine wrong
+post-save assumptions about precedence. Provider values in that failed log
+were redacted; the assertion failures/counts and stack locations remain.
+The current tests explicitly clear inherited provider inputs and mask credential
+comparisons. This fixture mistake is not counted as an app defect.
+
+### Current full-run findings and recovery
+
+The first complete current-revision pytest run finished **470 passed / 1 failed**,
+exit 1, unchanged source hashes, in `tmp/stabilize-settings-full-20261014.log`.
+The failure was the legacy batch render check's dependency on a pre-existing
+MP4 rather than its own output. The complete catalog finished **248/250**, exit 1,
+with unchanged source hashes in `tmp/catalog-stabilize-settings-20261014/`.
+F165 observed workbook/CSV publication in progress; F240 hit a nested Windows
+fixture path too long for its atomic temporary file.
+
+| ID | Story | Current finding | Fix / actual retest |
+| --- | --- | --- | --- |
+| BUG-209 | F215; F240 symptom | Reintroduced in this checkpoint: plain catalog fixture paths embedded long test names and reused previous invocation state. | UUID/index paths retain all assertions and fresh per-call state. Three path/independence regressions pass; the original five teacher-review cases now pass. |
+| BUG-224 | F54 | The legacy batch render test could pass on another run's video and failed with a clean temporary root. Its import-time runner also executed jobs during pytest collection. | A half-second owned scene now renders into a private directory and its new MP4 is decoded. The standalone runner remains available; pytest collection does not invoke its legacy jobs. The exact previously failing test now passes in `tmp/current-batch-render-postfix-20261014.log`. |
+
+The direct tracker CLI initially exposed a package-import mistake introduced
+while integrating complete acceptance evidence. Its import loader now supplies
+the repository root temporarily; two real CLI regressions run from a foreign
+working directory. Together with the three fixture tests they passed **5** in
+`tmp/current-harness-postfix-20261014.log`. This integration mistake is recorded
+as authoring history rather than an additional pre-existing app defect.
+
+`tmp/current-render-teacher-recheck-20261014.log` retains actual passing F54,
+F133 and F240 reruns. The current branch now has 181 distinct documented bug
+IDs: its preserved 175, four settings issues, the reintroduced BUG-209 and
+BUG-224. Broad final reruns will use fresh data roots and follow publication;
+the original failed runs are preserved.
+
+### Final3 validation and watchdog follow-up (14 October 2026)
+
+The permitted current-source regression finished **476 passed**, one upstream
+ChromaDB warning, exit 0, with unchanged source hashes in
+`tmp/stabilize-settings-final3-full-20261014-evidence.json`. The catalog finished
+**248/250**, exit 1, unchanged sources, in
+`tmp/catalog-stabilize-settings-final3-20261014/`. Its two failures were F230 and
+F233: the locale display adapter still embedded long test names in its paths.
+The previous BUG-209 repair had missed this third adapter. A new path matrix
+reproduced that remaining failure (**1 failed / 5 passed**) in
+`tmp/fixture-paths3-baseline-20261014.log`. All three adapters now use compact,
+fresh paths. Original recommendation assertions remain unchanged.
+
+An earlier sandbox run stalled in asyncio socketpair creation, proven by its
+faulthandler stack. Only the identified owned test processes were stopped. Its
+logs remain under the final2 names and are not an application failure baseline.
+F165's separate recheck also found a malformed BUG-209 ID cell in this log; its
+description was moved into the issue cell. No integrity rule was weakened.
+
+| ID | Story | Reproduced issue | Fix and actual validation |
+| --- | --- | --- | --- |
+| BUG-225 | F04 | Import-time log directory/file creation could abort watchdog startup and prevent all recovery on read-only storage. | Logging is configured at main startup and file failures fall back to console logging. Both refusal regressions failed before repair. |
+| BUG-226 | F04 | Ctrl+C during restart backoff escaped with a traceback instead of stopping cleanly. | Backoff catches the interrupt and stops without another child. The original scenario failed before repair. |
+
+The watchdog baseline finished **3 failed / 7 passed** in
+`tmp/watchdog-baseline3-20261014.log`. Its ten cases execute delay growth/cap,
+the 120-second healthy reset, failed child launch, both interrupt locations,
+logging refusals, a real child restart and the actual Windows batch entry point
+from a foreign directory with a Unicode/spaced path. Children are owned exit-code
+fixtures; this does not certify the native application's GUI or crash safety.
+The repaired watchdog/path group passed **16** in
+`tmp/watchdog-paths-postfix-20261014.log`. F04's catalog check now executes these
+behaviours instead of scanning for two words. Its implementation reference also
+resolves to the real watchdog main, rather than the unrelated application main.
+
+Current distinct documented error count: **183**. The broad 476/248 runs precede
+these watchdog/third-adapter changes; subsequent validation is recorded separately.
+
+Final post-fix validation is now terminal: **499 pytest cases passed**, one
+upstream deprecation warning, and **250/250 catalog checks passed**. Both
+returned exit 0 and recorded unchanged HEAD/source hashes. Evidence is retained
+under `tmp/stabilize-settings-final4-full-20261014-evidence.json` and
+`tmp/catalog-stabilize-settings-final4-20261014/evidence.json`. Watchdog logs in
+the current tests use owned temporary locations. The policy/CLI/watchdog/path
+group separately passed **53** after that isolation adjustment.
+
+F04 and F11 now have explicit complete contract evidence. Watchdog acceptance
+binds its ten executed cases, source, batch file and test runner; defaults bind
+twelve fresh-process cases. The other 248 behaviours remain open. The table's
+software FIXED/PASS values are not a claim of complete native/live acceptance.
+
+## Startup and Qwen contract audit (14 October 2026)
+
+The preceding unchanged-source checkpoint passed 499 pytest cases and all 250
+catalog checks. Those checks had only narrow F03/F05/F09 coverage. New actual
+CLI/reader scenarios exposed the following issues on this worktree:
+
+| ID | Story | Reproduced issue | Fix and evidence |
+| --- | --- | --- | --- |
+| BUG-227 | F05 | The optional Qt shim labelled a broken DLL/runtime import as "PyQt6 is not installed", sending the user to the wrong diagnosis. | Missing-package and load/repair errors now have distinct messages, retain the original exception cause, and reach actual CLI exit 2 without a window or traceback. The broken-runtime case failed in the baseline. |
+| BUG-228 | F09 | Non-object Qwen documents still claimed a source; object/list/numeric model values and non-string URLs were stringified, while invalid envKey types prevented the default key lookup. | The reader rejects malformed model/URL provider tuples without carrying their credentials into fallback settings, accepts other usable strings, uses the default env key when needed, and never rewrites its input. Five original schema/field cases failed before repair. |
+
+Baseline: **6 failed / 25 passed**, terminal exit 1, in
+`tmp/startup-contract-baseline-20261014.log`. The initial post-fix startup and
+settings group passed **55**. The expanded startup matrix passed **46** in
+`tmp/startup-matrix-expanded-20261014.log`: eight exact CLI prompt-routing cases,
+five available/missing/broken Qt cases, and 33 Qwen cases covering file/read/
+encoding/schema failures, provider selection, key/path handling, strict opt-in,
+higher-tier settings and unchanged inputs. Tests use fresh processes with owned
+home/config paths and fake keys. F03 executes the real smoke request construction
+with controlled pipeline results; it does not certify solver/cloud behaviour.
+
+Current distinct documented error count: **185**. Broader post-fix runs and
+canonical acceptance publication are tracked separately from the 499 checkpoint.
+
+The combined policy/startup/settings/watchdog/fixture/CLI group subsequently
+passed **144**. Eleven focused catalog checks passed with unchanged sources in
+`tmp/startup-contract-final-focus-20261014-evidence.json`. The preceding focused
+child run also passed all eleven, but its temporary outer helper failed while
+printing an arrow to a legacy-code-page stream after saving the results. The
+helper now configures UTF-8 and the complete repeat returned exit 0. This was
+a reporting-helper error, not an additional application defect.
+
+First broad startup post-fix validation: **569 passed**, one upstream warning, exit 0,
+and **250/250 catalog checks passed**, exit 0. Both runs recorded unchanged
+HEAD/source hashes. Evidence:
+`tmp/startup-contracts-full-20261014-evidence.json` and
+`tmp/catalog-startup-contracts-20261014/evidence.json`. F03/F05/F09 now have
+explicit source-bound contract evidence, alongside F04/F11. The other 245
+behaviours remain unaccepted; a green scoped catalog is not full-goal completion.
+
+A later negative-case review rejected partial recovery of malformed provider
+tuples. The intermediate repair omitted a bad model/URL but could retain its
+credential with defaults. Four stricter cases failed in
+`tmp/startup-provider-tuple-baseline-20261014.log` (**4 failed / 42 passed**).
+The final reader rejects the entire tuple for explicit non-string model/URL
+values. Tests verify neutral full settings and credential-free debug/file logs,
+not merely the absence of one field. The repaired combined group passed **144**
+in `tmp/startup-provider-tuple-final-20261014.log`; eleven focused stories passed
+again in `tmp/startup-provider-tuple-proof-20261014-evidence.json`. Final broad
+validation of this refinement is recorded separately from the first 569 run.
+
+The stricter-policy broad runs are complete: **569 tests passed**, one upstream
+warning, and **250/250 catalog checks passed**, both exit 0 with unchanged
+HEAD/source hashes. Final evidence is
+`tmp/startup-provider-final-full-20261014-evidence.json` and
+`tmp/catalog-startup-provider-final-20261014/evidence.json`. No new application
+issue ID is added for the intermediate incomplete repair; these are stronger
+checks and the final resolution of BUG-228.
+
+## Command-bar and worker lifecycle audit (14 October 2026)
+
+Actual Qt controls and window/worker connections reproduced **9 failed / 14
+passed** in `tmp/commandbar-baseline-20261014.log` (terminal exit 1). The failures
+were grouped by cause, rather than assigning one issue ID per parametrization:
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-229 | F12 | The full question disappeared after a quota-storage refusal (three languages), cancellation or worker failure. | Capture the exact draft before synchronous submission, restore it on rejection/cancel/failure and preserve newer input. Successful submissions still send trimmed text once. |
+| BUG-230 | F17 | Cancelled timeline retained an active pulsing stage; late worker progress/status overwrote cancellation. | A neutral cancelled stage freezes timing/pulse. A window-owned Qt relay accepts data only from the current uncancelled worker and rejects later data after failure/finish. |
+| BUG-231 | F20 | One already-disconnected signal prevented cleanup of remaining connections; an already-deleted QThread raised before a fresh run. | Disconnect each signal independently, handle deleted Qt wrappers in the running check, and deactivate the old relay before wiring a new worker. |
+| BUG-232 | F14/F15 | Inventory text claimed unknown quality flags select Draft and cancellation resets idle immediately, contrary to actual code. | Correct the expected/failure contracts: unknown flags preserve a valid selection; no selected data falls back to Draft; cancellation remains busy until the real QThread.finished. This is an inventory defect, not a newly reproduced application defect. |
+| BUG-233 | F84 | Failure context used raw English stage identifiers and `failed` in Russian/Kazakh interfaces. | Localize known stage labels and the status/toast wrapper; preserve original provider messages, unknown stage identifiers and technical traceback. Actual baseline: 8 failed / 1 passed in `tmp/commandbar-localization-baseline-20261014.log`; initial repaired command-bar group: 40 passed. |
+| BUG-234 | F14 | Native capture showed `Standard` clipped; styled edit-field measurements gave 60 logical pixels for a 61-pixel caption. The offscreen three-locale label-fit regression failed two cases (different installed fallback font metrics). | Replace fixed width 104 with minimum width 120 and AdjustToContents, retaining space for stylesheet padding and the arrow. An intermediate AdjustToContents-only repair still failed 2/3 cases; retain that log as failed evidence. Final three-locale and small-screen retests are recorded separately. |
+
+The initial repaired 23-case group passed in
+`tmp/commandbar-postfix-20261014.log`. An expanded run passed 28 cases but failed
+an offscreen-only focus assertion in the popup test. The same test passed on the
+actual Windows Qt platform in `tmp/commandbar-menu-native-baseline-20261014.log`.
+The test now checks the owned focus target on offscreen and actual keyboard focus
+on Windows; no application focus change was justified by that helper failure.
+The expanded offscreen group then passed **31** cases, terminal exit 0, in
+`tmp/commandbar-final-offscreen-20261014.log`.
+
+The cases exercise Return/Run/Ctrl+Return in kk/ru/en, draft retry/recovery,
+quality handoff to the actual worker constructor, real QThread cancellation
+and cleanup barriers, timeline transitions/reset, duplicate allowance protection,
+independent disconnects, a deleted Qt wrapper, and queued old-worker data. The
+queued-old-worker baseline already passed; it is retained as regression coverage,
+not claimed as an additional reproduced defect. Controlled pipeline data is
+explicitly separate from provider/render/cloud acceptance.
+
+The first broad command-bar run ended **1 failed / 599 passed**, one upstream
+warning, exit 1, with unchanged source hashes in
+`tmp/commandbar-final-full-20261014-evidence.json`. Its menu timer did not observe
+the global active popup in a shared QApplication. Targeting the actual owned
+QMenu retains the real nested event loop and avoids global popup discovery.
+A further shared-context repeat exposed a pending last-window Quit event in the
+test host; its QApplication now explicitly stays alive across test-window closes.
+These are harness lifetime/observation repairs, not silently ignored failures.
+
+The first shared-context render test also failed under a long helper-selected
+TEMP path (`tmp/commandbar-shared-context-20261014.log`); the compact-TEMP repeat
+passed the unchanged render test but still exposed the menu host issue
+(`tmp/commandbar-shared-repeat-20261014.log`). Long-path production rendering is
+not certified by the compact fixture. Final broader evidence is recorded after
+the repaired host repeats, rather than treating either failed run as passing.
+
+Native Windows observation before the last localization/host refinement:
+`tmp/commandbar-native-proof-20261014/evidence.json`, 31 tests passed, 15 owned
+window captures, unchanged source hashes. Six captures were visually inspected:
+ru running/cancelling/cancelled/error, kk cancelled and en error. The cancellation
+state, restored input and available controls were readable; the ru error capture
+exposed BUG-233. This earlier native run does not certify later source changes.
+
+Current distinct documented issue count after this batch: **191**. Final
+regression/catalog results remain separate from the earlier 569-test checkpoint.
+
+The shared-host popup refinement subsequently passed **617 pytest cases** with
+unchanged source hashes (exit 0), recorded in
+`tmp/commandbar-final3-full-20261014-evidence.json`. This precedes the stronger
+83-case native acceptance matrix, 122 policy guard tests, and BUG-234 layout
+follow-up. The label-fit baseline and intermediate repair each failed 2/3
+offscreen cases; final minimum-width/content sizing passed 3/3 in
+`tmp/quality-label-final-20261014.log`. Full renewed catalog/regression results
+are recorded separately; earlier passes are not carried over to changed sources.
+
+## Learn topic ownership and empty cancellation (14 October 2026)
+
+The actual Learn control matrix reproduced **12 failed / 12 passed** in
+`tmp/learn-ui-baseline-20261014.log`, terminal exit 1. The two primitive UI
+observations are also preserved with their source hashes in
+`tmp/next-lesson-ui-probe-20261014/observations.json`. Earlier scratch-helper
+PATH/initial-field assumptions were corrected before recording those
+observations; helper errors are not counted as application defects.
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-235 | F145 | Learn cleared the exact topic after allowance-storage refusal; lesson failure could restore a prior Solve question, and cancellation lost the topic. | Clear before synchronous emission while retaining a lesson-specific draft, restore it on refusal/failure/cancellation, use a separate lesson failure callback, preserve newer input and focus after cleanup. Existing language/quality/voice handoff is retained. |
+| BUG-236 | F150 | Empty cancellation assigned an unusable bundle to `_last_lesson` before choosing a page, always opening the lesson page and replacing a previous valid lesson. | Install the cancelled bundle only when a partial video exists; otherwise retain the prior lesson or return to Empty, clear loading and keep the topic available. Cancellation messages are localized and no longer promise waiting for a whole chapter. |
+
+The first repaired group passed **24** cases in `tmp/learn-ui-fixed-20261014.log`.
+Additional checks exercise rejection after a result but before worker cleanup,
+unchanged allowance, and Learn after a deleted Solve worker. F145/F150 remain
+partial overall: these controlled UI checks do not establish complete lesson
+generation, cloud rendering, media playback, exports or every lifecycle path.
+Current distinct documented issue count is **193**.
+
+### Related lesson-signal and overlapping-run follow-up
+
+Fifteen added three-language cases then failed against the first topic/page
+repair (`tmp/lesson-relay-baseline-20261014.log`, exit 1). The cases also
+reproduced the deleted-QThread guard defect in Learn; that is additional
+coverage of BUG-231, not a new ID for the same cause.
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-237 | F145/F84 | Lesson progress/results replaced a terminal error; cancelled progress replaced cancelling status; queued events from an old lesson replaced a new lesson. | Use a window-owned Qt relay bound to the current lesson worker, reject late/terminal data, disconnect each old signal independently, deactivate the old relay and safely handle deleted lesson wrappers. Cancelled partial bundles still reach the active lesson route. |
+| BUG-238 | F19 | Solve allocated a second worker and consumed another allowance before a lesson worker finished cleanup. | Check both solve and lesson workers before charging or allocating; preserve the current request and UI. |
+
+The repaired **45-case Learn group passed** in
+`tmp/lesson-relay-fixed-20261014.log`. The combined Learn and acceptance-policy
+group passed **167** in `tmp/learn-ui-final-20261014.log`. The native acceptance
+runner now includes both UI modules, actual Learn failure/late-event cases for
+F84 and the cross-workflow guard for F19. F145/F150 remain partial overall.
+Current distinct issue count is **195**. Broader post-fix runs are recorded
+separately from the earlier 719-test and 250-catalog checkpoint.
+
+The first-ever lesson failure also exposed a missing error node when the shared
+stepper was still at stage -1. Three locale checks failed in
+`tmp/lesson-error-stage-baseline-20261014.log`; the shared error handler now
+selects at least stage 0 before freezing the terminal state. This extends
+BUG-230 terminal-state coverage, without assigning another ID to the same
+terminal UI contract. The strengthened late-lesson test checks that node and
+stopped pulse before checking rejection of further data.
+
+## Examples language and visible-test disruption (14 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-239 | F13 | All three selected languages opened the same ten English prompts, including pure mathematics and university-level topics outside the school preparation flow. Actual menu observations are in `tmp/example-locale-probe-20261014/observations.json`; the new school-content contract initially failed all three language cases. | Replace the inventory with ten authored school-physics examples in kk/ru/en; choose the current language on every menu open and keep identical physical conditions and numerical data. Keep full prompt selection, input focus, label truncation and dismissal without starting AI. These are not labelled official UNT items. |
+| BUG-240 | F165 audit workflow | Routine catalog checks forced the Windows Qt platform and opened repeated visible test windows during the user's work. Verified catalog PID 13380 and native pytest child 25528 were stopped. Successive native runs had changed source hashes, causing fresh runs instead of cache reuse. | Require `PHYSLAB_RUN_NATIVE_UI_ACCEPTANCE=1` at both the catalog entry and native runner. Ordinary catalog checks leave native acceptance pending. Seven process-free guard cases cover absent/incorrect opt-in and explicit entry routing. |
+
+The negative content baseline recorded **3 failed / 6 passed** in
+`tmp/examples-localization-baseline-20261014.log`. A subsequent fixture setup
+attempt hit a sandbox temp-directory permission error (7 passed / 3 setup
+errors); it is a harness-environment limitation, not an application failure.
+With an owned workspace temp directory, the final focused group passed
+**10/10** in `tmp/examples-localization-fixed2-20261014.log`. No visible Qt
+window was opened for these checks. Distinct documented issue count: **197**.
+Broader regression and catalog results are recorded separately; source changes
+invalidate the earlier native evidence until an explicitly requested renewal.
+
+### Broader checkpoint and environment replay
+
+The first broader headless run recorded **852 passed / 4 failed** in
+`tmp/examples-headless-full-20261014.log`, pytest exit 1. Its source snapshot
+changed during execution in `manim_runtime.py`, `scene_components/layout.py`
+and `test_composition_overlap.py`; it cannot certify one frozen revision.
+Two readout cases failed while LaTeX could not create a compilation log, and
+the study-document PDF case also failed compilation under the restricted
+environment. The layout case passed on its own against the later source.
+All four replay cases passed with access to installed dependencies:
+`tmp/latex-owned-probe-20261014.log` (**4 passed**). These observations do not
+attribute externally changed layout code to this repair or invent an
+application defect from a sandbox refusal.
+
+The segmented-cache test also used a cached solver named `t` with a different
+configured model, so the cache guard legitimately rejected it and attempted
+provider access using the test's fake key. Its fixture now uses matching
+model metadata, a controlled animation plan and a solver call that fails
+immediately if the cache is not reused. The combined focused menu/opt-in/
+acceptance-policy/segment-cache group passed **133** cases in
+`tmp/examples-guards-focus-fixed-20261014.log`.
+
+The final broad replay passed **856** tests with one upstream ChromaDB
+deprecation warning, exit 0 and no source changes:
+`tmp/examples-headless-final-full-20261014-evidence.json`. This supersedes
+the four-failure changing-source run for software regression only. Complete
+story-level acceptance remains independently tracked in the workbook.
+
+## Shared render-profile inventory correction (14 October 2026)
+
+| ID | Story | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-241 | F55 | The catalog still described automatic hardware-based cinematic selection and asserted `name == constrained`. The new shared resolver maps constrained to standard pixels with below-normal priority. The old check was the sole failure in the 252-story run. | Update the inventory and story to fresh per-call profile resolution. Check standard/30 defaults, constrained priority with FPS 24, cinematic selection, explicit FPS 48, unchanged prior dictionaries, and low/high-memory scheduling without automatic pixel-quality escalation. Application rendering code is preserved. |
+
+`tmp/catalog-examples-headless-final-20261014/evidence.json` records
+**251/252**, exit 1. It explicitly has `merged_into_tracker: false`: rendering,
+backend, preflight and voiceover sources changed externally during execution.
+That run is not current-revision all-story acceptance. The first corrected
+profile/menu/opt-in focus passed **38** tests in
+`tmp/profile-tier-contract-fixed-20261014.log`; the additional memory-priority
+case and final focused story renewal are recorded after execution.
+Distinct documented issue count: **198**.
+
+The final nine-story renewal passed with unchanged sources, exit 0 and merged
+evidence in `tmp/tier-profile-current-focus-20261014-evidence.json`.
+F55 now executes both the legacy-FPS/priority and simulated low/high-memory
+runtime cases; F251 runs all **29** profile tests and F252 all **34** speech
+tests. The final standalone profile/menu/opt-in group passed **39** tests in
+`tmp/tier-final-20261014.log`. Canonical software status is **99 FIXED / 153
+PASS**, with complete story acceptance separately **5 PASS / 247 PARTIAL**.
+The older 856-test freeze predates the later external render/voiceover edits;
+the latest whole-worktree regression and remaining complete journeys are
+still outstanding.
+
+## Lesson result delivery and cleanup controls (14 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-242 | F145, related F15/F150 | `on_lesson_ready()` unconditionally enabled input and Run/Learn/Practice before QThread.finished. Planned/rendered/error/offline/cancelled results advertised idle while the duplicate guard still rejected new work. Lesson cancellation and terminal failure kept Cancel enabled, allowing repeated requests or cancellation after a result. | Present the result while retaining busy controls until the current lesson thread actually finishes. Disable Cancel after cancellation or terminal delivery; make repeated cancellation a no-op. Restore idle and reset Cancel at finished and when starting the next lesson. Preserve draft recovery, allowance, partial-video routing and stale-event protection. |
+
+The expanded matrix reproduced **30 failed / 42 passed** in
+`tmp/lesson-cleanup-baseline-20261014.log`, exit 1. After repair all **72**
+passed in `tmp/lesson-cleanup-fixed-20261014.log`, exit 0. Coverage includes
+seven terminal outcomes in kk/ru/en, unchanged allowance, duplicate Cancel,
+retry-control reset and three genuine QThread result/cleanup barriers.
+Controlled results do not certify provider generation or media playback.
+Distinct documented issue count: **199**. Broad and catalog renewal follow
+their terminal results; the existing complete objective remains open.
+
+## Lesson completion accuracy and media ownership (14 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-243 | F145, related F150 | Planned/incomplete/error bundles used the same English success banner as a completed video. Assembled bundles with a missing/empty file still announced success. A new plan did not clear the previous media source, and invalid set_video requests left old media loaded. | Use kk/ru/en result-specific copy, preserve original planning/offline detail, and reserve success for assembled output with an available nonempty regular file. Clear the player when replacing lesson content or selecting invalid media. Cancellation without an available new video retains the previous lesson/media. File presence does not certify decoding; backend/media acceptance remains separate. |
+
+The first feedback/media matrix failed all **35** cases in
+`tmp/lesson-feedback-baseline-20261014.log`. The first repair replay recorded
+**100 passed / 7 failed** across both lesson modules; all seven failures were
+test comparisons between Windows backslashes and QUrl's forward-slash path
+representation. The comparisons now resolve both Paths; no path semantics
+were changed to satisfy the test. Expanded coverage then passed **40/40** in
+`tmp/lesson-feedback-final-20261014.log`, including a real QMediaPlayer source
+reset, unavailable file metadata, and preservation after empty cancellation.
+Controlled byte fixtures establish routing/source ownership, not playability.
+Distinct documented issue count: **200**.
+
+The completion follow-up found the same misclassification also omitted exact-
+topic recovery for incomplete bundles delivered through `lesson_ready`, and
+left the student on an empty Video tab. An isolated observation set recorded
+**21** draft mismatches and **24** material-tab mismatches with unchanged
+sources: `tmp/lesson-retry-probe-20261014/observations.json`. The strengthened
+matrix then reproduced **28 failed / 19 passed** in
+`tmp/lesson-retry-baseline-20261014.log`. Materials now open on Text, only
+available assembled media opens Video, inconsistent nonassembled video paths
+are ignored, and warning/error bundles recover the exact topic and focus
+after cleanup while preserving newer drafts. The final **47** completion/
+ownership cases passed in `tmp/lesson-retry-fixed-20261014.log`.
+
+An intervening broad freeze passed **925** tests, exit 0 with unchanged sources
+on HEAD `99e14bb`, in `tmp/lesson-ui-latest-full-20261014-evidence.json`. It
+precedes the final retry/Text-tab changes and is not represented as their full
+regression proof. Two reviewed offscreen captures (Russian error, Kazakh
+materials) verified readable localized notices before that final navigation
+follow-up; controlled chapter text/media fixtures are not content/audio QA.
+
+The final offscreen capture set is
+`tmp/lesson-completion-final-offscreen-20261014/evidence.json`: 12 owned
+states, unchanged source hashes. Russian error and Kazakh materials captures
+were visually reviewed for readable notices, Text-tab navigation, recovered
+retry input and absence of the old video. The English chapter text is a
+controlled template, not translation acceptance.
+
+`tmp/actual-offline-lesson-20261014/evidence.json` additionally confirms the
+real LessonWorker/LessonPipeline/no-key notice path in Kazakh and Russian:
+finished worker, restored exact draft, warning/status agreement, Text tab and
+empty player source. Source hashes remained unchanged. Two preliminary
+10-second helper attempts timed out and are retained in their logs; the final
+probe uses an event-pumping loop that yields Python execution and the runtime
+permissions needed by the installed dependencies. English uses a deterministic
+template under this no-key policy and was excluded from the notice probe.
+No product-failure cause is inferred from those preliminary helper timeouts.
+
+The final broad replay of the retry/Text-tab/media fixes passed **932** tests
+with one upstream ChromaDB deprecation warning, exit 0 and unchanged source/
+HEAD snapshots on `99e14bb`:
+`tmp/lesson-ui-retry-final-full-20261014-evidence.json`. Whole-catalog and
+complete-story status remain separate and follow their recorded evidence.
+
+The complete catalog replay then passed **252/252**, exit 0, unchanged source/
+HEAD snapshots and `merged_into_tracker: true`:
+`tmp/catalog-lesson-ui-retry-final-20261014/evidence.json`. The canonical workbook
+retains **99 FIXED / 153 PASS** software checks and **5 complete / 247 partial**
+story acceptance results. This passes software regression and catalog renewal;
+the remaining story-level provider, native UI, cloud and media requirements
+are not inferred from those passing checks.
+
+## Saved render profile and cloud transport (15 October 2026)
+
+The first owned-client/settings/media matrix recorded **10 failed / 2 passed**
+in `tmp/profile-transport-baseline-20261014.log`. No network or local Manim was
+used; one tiny FFmpeg fixture exercised actual YUV420p encoding.
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-244 | F251, related F55 | load_settings supplied adaptive=True even when no override was saved, enabling cinematic FPS degradation. Invalid adaptive text also enabled it, and a 48 FPS fallback was reported as 60→30. | Missing policy inherits the preset; only explicit valid booleans override it. Invalid policy text is ignored and fallback provenance/notice use the actual original FPS. Explicit saved True/False remains supported. |
+| BUG-245 | F249, related F251/F158 | Custom dimensions never reached cloud dispatch, distinct canvases shared a job/cache ID, and download/cache checks ignored requested FPS. OpenGL requests silently used the Cairo cloud worker. | Worker v8 transports even width/height; identities, lookups and ledger use the resolved profile. Media checks require requested dimensions/FPS. The Cairo fallback is explicit. Bundled/shipped workflows remain identical and their real Bash canvas guard is exercised. |
+| BUG-246 | F251 | Odd dimensions passed validation but actual YUV420p encoding failed. | Normalize each dimension to an even in-bounds value and record normalization in source provenance. The encoded fixture now succeeds. |
+| BUG-247 | F249 | Invalid downloaded artifact bytes replaced a prior video before the media gate rejected them. | Download to an isolated staging file, validate, replace atomically only on success and remove failed staging files. The negative file-preservation case failed in `tmp/cloud-atomic-baseline-20261014.log`. |
+
+The first integration replay had **58 passed / 1 failed** because an older
+validation-failure test double did not accept the new profile keywords. Its
+double now accepts kwargs without changing the asserted artifact-invalid
+behaviour. The next integration group passed **62/62** in
+`tmp/profile-transport-fixed2-20261014.log`. Actual API payload, real custom
+960x540/24 FPS encoding/decoding, cached wrong-FPS refusal, lookup/dispatch
+identity and six Bash canvas-preamble cases are covered. The expanded worker
+focus passed **25/25** including existing exact-output/parity checks in
+`tmp/profile-worker-final-20261014.log`.
+
+These are local/owned-client protocol checks. No v8 GitHub job has been
+dispatched by this repair, and general session-cache reuse remains separate
+from the verified cloud artifact identity. Historical v7 delivery evidence is
+not current v8 acceptance. Distinct documented issue count: **204**.
+
+### Subsequent real worker v8 delivery check
+
+One real Cloud-only technical job completed on the configured GitHub worker.
+All 48 frames of its 960×540/24 FPS MP4 decoded, the moving dot crossed the
+canvas, and a second request returned identical bytes with one total dispatch.
+The probe's HEAD and captured sources remained unchanged. Evidence:
+`tmp/live-profile-v8-8f293f4adc/evidence.json`. This silent two-second scene does
+not establish educational quality, narration or native player acceptance.
+
+## Render cache provenance (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-248 | F251, related F145/F252 | Adaptive and fixed policies produced different real FPS for expensive scenes but shared profile, chapter and segment cache identities. Baseline: 4 failed / 2 passed in `tmp/cache-policy-baseline-20261015.log`. | Include adaptive policy in pixel identity. Machine-only limits remain excluded; equivalent inherited/explicit policy still shares an identity. |
+| BUG-249 | F33, related F135/F251 | A cached rendered session with no profile provenance bypassed rendering under a different requested canvas/FPS. The worker and runtime fast path likewise trusted existing files without matching the render profile. Baseline: 1 failed in `tmp/session-profile-baseline-20261015.log` after using an owned temp directory. | Persist the successful requested-profile key in SceneBundle. Pipeline/worker retain solver/RAG/code and detach stale video, silent source, subtitles and narration metadata before rendering. Runtime verifies draft/final provenance and skips duplicate final promotion. Segmented scenes resume the manifest; an unverified segmented output becomes incomplete rather than rendering joined code. Prior physical files are preserved. |
+
+The focused cache replay passed **30/30** in
+`tmp/render-cache-focus-20261015.log`. It covers SQLite round trips, headless and
+worker profile changes (including quality/renderer/backend), unchanged-profile
+reuse, legacy media, actual runtime draft/final routing and nested adaptive
+cache identities. Rendering is controlled at these boundaries; these tests do
+not claim a new live render or native window acceptance.
+
+An expanded first replay recorded 180 passed / 5 failed: three critic fixtures
+and a segmented fixture needed successful render provenance, while a standalone
+LaTeX check lacked the installed runtime permissions. Original assertions are
+retained with provenance supplied by the controlled successful renderer. Full
+isolated replay results follow their terminal evidence. Documented issue count:
+**206**.
+
+The completed isolated replay passed **209/209**, exit 0 with unchanged HEAD
+and source hashes (`tmp/cache-expanded-final-20261015-evidence.json`). The
+expanded cache matrix passed **36/36** including both pipeline/worker segmented
+resume and refusal of unverified segment output. Twelve additional policy cases
+verify that damaged/missing technical-cloud evidence cannot advertise a live
+scope. Eleven affected/startup stories passed and merged with unchanged
+sources (`tmp/cache-profile-focus-20261015-evidence.json`). The canonical
+workbook remains at 252 stories, 100 FIXED / 152 PASS software status and
+5 complete / 247 partial acceptances; all 206 issue IDs are linked.
+
+The subsequent real SQLite/pipeline/Cloud cache probe passed with unchanged
+sources/HEAD (`tmp/live-session-cache-758685d699/evidence.json`): initial
+960×540/24 FPS output decoded all 48 frames, same-profile request skipped
+rendering, changing to 1280×720/30 FPS produced a distinct 60-frame output,
+and its repeat also skipped rendering. Exactly two dispatches/renders occurred;
+solver/RAG/code remained cached and the prior file's hash stayed unchanged.
+The two silent moving-dot scenes use controlled cached analysis/references and
+a controlled planner with preflight disabled. This verifies real media/cache
+integration, not provider, narration, native UI or educational acceptance.
+
+## Tracker attribution and catalog isolation (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-250 | F165, affected F33/F54/F55/F135/F249/F251 | Global symbol matching used a post-processing script's `FPS` constant as the implementation reference for six unrelated render/cache stories, sometimes displacing every declared module. Valid file/line checks did not detect the wrong attribution. Baseline: 2 failed / 1 passed in `tmp/tracker-reference-scope-baseline-20261015.log`. | Restrict symbol lookup to declared implementation files and explicit repository re-exports. Add per-source definition fallbacks; preserve facade-to-CommandBar references. Three attribution regressions pass in `tmp/tracker-reference-scope-fixed-20261015.log`. |
+| BUG-251 | F171 | The candidate fan-out catalog fixture stubbed only `_render_once`; real preflight/LLM repair ran before that stub. The mixed-source catalog logged a rejected provider request despite using controlled media. A no-network reproduction observed four uncontrolled preflight entries (`tmp/fanout-network-baseline-20261015.log`). | Stub the scorer's full `render_scene_with_repair` boundary for keyless and configured-critic cases, preserving variant isolation and exact critic-retry assertions. A guarded regression rejects any preflight or HTTP entry; repaired tracker/isolation group passed 6/6 in `tmp/tracker-network-fixed-20261015.log`. |
+
+The mixed-source complete pytest replay finished 1038 passed / one upstream
+warning, exit 0, but seven source files changed during execution:
+`tmp/cache-provenance-full-20261015-evidence.json`. The corresponding old
+252-story replay finished 249/252 and was not merged: F108/F160 had controlled
+successful-video fixtures lacking the newly required provenance; F165 detected
+artifact/reference drift as sources changed. Their original assertions remain,
+with render provenance now supplied by the successful fixture.
+
+The incoming worktree adds 1440p quality `p` and a local encoder-budget flag.
+The existing profile story includes `p`; new F253 tracks the independently
+configurable encoder queue and boundary handling. Ten focused quality/encoder/
+reference checks passed in `tmp/tracker-encoder-focused-20261015.log`.
+Registered issue count is now **208**; renewed story/catalog/artifact checks are
+required after these changes. Native windows remain disabled.
+
+The complete current targeted group then passed **220/220** with unchanged
+HEAD/sources (`tmp/attribution-expanded-current-20261015-evidence.json`). The
+final source-refinement group passed **17/17**, including exact AST-derived
+PipelineWorker/AetherLabPipeline entry-point links. Thirteen affected/startup
+stories passed and merged (`tmp/attribution-final-preartifact-20261015-evidence.json`).
+Final F165 publication checks passed with unchanged sources and merged results
+in `tmp/attribution-publication-final-20261015-evidence.json`; the canonical
+workbook now has 253 stories, 100 FIXED / 153 PASS software results, 5 complete /
+248 partial acceptances, and all 208 registered issues linked. Intermediate
+CSV/XLSX timestamp precision drift from the audit metadata writer was corrected
+before this passing publication check. Full fresh pytest/catalog replays are
+still pending under audit-final-full-20261015 / catalog-audit-final-20261015.
+
+## Shipped 1440p worker contract (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-252 | F249, related F251 | Incoming quality `p` was added to the bundled worker choices but omitted from .github/workflows/render.yml. The shipped and installer versions differed; the exact-parity regression failed in `tmp/worker-parity-negative-20261015.log`. | Add `p` to the shipped l/m/h/p/k choices, preserving all canvas guards, exact-output selection and the existing v8 render command. |
+
+The new full replay exposed this failure at the parity scenario. Its source
+snapshot will therefore change when the repair is applied; it remains a
+diagnostic replay, not current-tree completion evidence. Registered issue count
+is **209**. Targeted worker/profile checks and regenerated artifact integrity
+must pass before this repair is counted as verified.
+
+The repaired worker/quality/reference group passed **12/12** in
+`tmp/worker-parity-fixed-20261015.log`. F249/F251 then passed with unchanged
+sources and merged results (`tmp/worker-choice-current-20261015-evidence.json`).
+The diagnostic full replay finished **1061 passed / 1 failed**, with only the
+pre-repair parity failure; its source changes were the shipped workflow and
+tracker map. The old catalog recorded **252/253**, with artifact drift at F165,
+and was not merged. These are diagnostic results, not final current-tree proof.
+
+The subsequent real quality-p Cloud job passed at **2560×1440/30 FPS** with
+all **60** frames decoded, measured object motion and an identical-byte cache
+hit after one total dispatch. HEAD and sources were unchanged during the probe:
+`tmp/live-1440p-5a7471e093/evidence.json`. No LLM, educational material, narration
+or native UI playback is certified by this technical scene.
+
+Publication was renewed after this repair: F165 passed with unchanged sources
+and merged results (`tmp/worker-parity-artifact-20261015-evidence.json`), the
+standalone artifact gate passed (`tmp/worker-parity-publication-audit-20261015.json`),
+and 104/104 surfaces map to 253 stories. All **209** registered issues are
+linked. The workbook remains 100 FIXED / 153 PASS software results, separately
+5 complete / 248 partial acceptances. The full post-repair software/catalog
+replays now run as worker-parity-full-20261015 and
+catalog-worker-parity-final-20261015; their terminal results are still required.
+
+## Code-derived encoder story and full acceptance (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-253 | F165, affected F253 | The generic Render template assigned AI/visible-critic prerequisites and UI failure/retry promises to `_manim_render_command()`'s encoder-budget setting. That function only builds a command and handles integer parsing/bounds. The unsupported story fields failed `tmp/encoder-story-negative-20261015.log`. | Use an explicit code-derived F253 story: compatible local CLI/codec, environment input, integer fallback/clamping, preserved command arguments and actual queue/output invariants. Full rendering-error UI stories retain their own contracts. The changed F253 contract invalidates the prior acceptance pointer and requires a new executed matrix. |
+
+Before the acceptance-tool extension, the complete software checkpoint passed
+**1062 pytest checks** and **253/253 catalog checks**, both exit 0 with unchanged
+HEAD/sources. Evidence: `tmp/worker-parity-full-20261015-evidence.json` and
+`tmp/catalog-worker-parity-final-20261015/evidence.json` (merged).
+
+The encoder acceptance runner checks 18 scenarios: 11 environment-input
+classes, profile/cache/OpenGL command arguments and four actual local CLI
+renders. It observes queue limits 1/4/8/fallback-4 and drained jobs, decodes all
+27 frames from each output and requires identical frame order/content. Runtime
+versions/critical source files and generated scene/log/trace/video hashes are
+bound; verification re-decodes the saved output and rejects changed inputs.
+It forces noninteractive output and cannot launch a preview command. The
+schema/guard group passed **148/148** before this final story correction.
+
+The first prototype used a very small control dot that disappeared from a
+strict colour mask after compression in some frames. Queue bounds and frame
+counts already passed; enlarging the controlled fixture resolved the measurement
+error (`tmp/encoder-accept-proto2-20261015.log`), without changing app rendering.
+Registered issue count is **210**. Full objective completion remains unproven.
+
+The corrected F253 contract was executed again: all **18** scenarios passed,
+including four real CLI renders at limits 1/4/8/fallback-4 with drained queues
+and the same complete 27-frame decoded output. The six-story startup/encoder
+replay had unchanged sources and merged results:
+`tmp/encoder-code-contract-final-20261015-evidence.json`. The final contract/
+schema group passed **149/149**; artifact/story verification passed with stable
+inputs in `tmp/encoder-code-publication-resume-20261015-evidence.json`.
+Independent artifact integrity passed in
+`tmp/encoder-contract-publication-audit-20261015.json`. The workbook remains
+253 stories and 100 FIXED / 153 PASS software results; full acceptance is now
+6 complete / 247 partial. All 210 registered issues are linked. This closes
+the local encoder command/queue story, not the overall audit.
+
+## Cleared student responses retained stale points (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-254 | F226, related F233/F238 | A learner could answer a multiple-choice or matching question, navigate back, clear every control, then save, close or finish. The screen was blank but `_answers` retained the earlier tuple because capture ignored `None`. The old response could be restored or graded. | One capture method replaces every editable response, including `None`, at navigation, autosave, close, Check and finish. Checked answers and pending/completed results remain committed. Partial matching tuples retain their partial credit. |
+
+The original offscreen reproduction failed **60/60** cases before the repair:
+`tmp/practice-clear-negative-20261015.log`. It exercised real Qt controls and
+the actual storage/scoring implementation in kk/ru/en, two question kinds,
+practice/timed modes and five exit/save/navigation routes. This exposes a gap
+in the earlier **1087-pass** full suite and **253/253** catalog, both completed
+with stable sources before this repair (`tmp/encoder-contract-full-20261015-evidence.json`
+and `tmp/catalog-encoder-contract-final-20261015/evidence.json`). Those earlier
+passes do not certify cleared-answer behaviour.
+
+The first repaired matrix passed **171/171**. The extended regression group
+then passed **272/272**, including **183** new answer-capture cases. It adds
+actual mistake-review mode, reopened attempts, pending-result retry, checked
+answers, partial matching credit, six full 40-question/90-minute mocks graded
+48/50 after clearing one two-point response, and six actual Windows read-only
+snapshot failures followed by successful retries. Evidence:
+`tmp/answer-capture-first-20261015.log` and
+`tmp/answer-capture-extended-20261015.log`.
+
+Practice-mode multi/matching cases exercise the generic component directly;
+the current 2500 topic exercises are single-choice. Mock multi/matching items
+are reachable in timed mocks and mistake review. Native confirmation and math
+typesetting are controlled boundaries in the new matrix; no visible windows,
+camera, provider or cloud jobs are launched. Formula/layout acceptance retains
+its independent scope. Registered issue count is now **211**. The three catalog
+stories execute the parametrized matrix through pytest/JUnit rather than
+calling decorated test functions without their fixtures.
+
+Six further actual expiry/PDF journeys passed in
+`tmp/answer-expiry-pdf-20261015.log`: the timer callback scores cleared
+responses 0/3, history and review agree, and the real UI export method generates
+six A4 PDFs with identical totals, localized unanswered labels and equation
+images. The file chooser and message dialogs are controlled to keep this
+offscreen. One Kazakh report first page was inspected visually. This probe
+does not claim native export-dialog or all-page visual acceptance.
+
+The full post-fix regression completed **1270 passed**, exit 0, with one upstream
+ChromaDB deprecation warning, unchanged HEAD and no source changes during the
+run (`tmp/answer-capture-full-20261015-evidence.json`). The separate complete
+catalog replay passed **253/253**, exit 0, with unchanged sources/HEAD and
+merged results (`tmp/catalog-answer-capture-final-20261015/evidence.json`).
+Extra expiry/PDF execution, source and output hashes are bound in
+`tmp/answer-expiry-pdf-20261015-evidence.json`.
+
+Final F165 publication passed with unchanged sources and merged results in
+`tmp/answer-capture-publication-20261015-evidence.json`. The regenerated
+canonical XLSX/CSV pass independent integrity in
+`tmp/answer-capture-final-artifact-audit-20261015.json`: all 253 stories/results/
+checks agree and all 211 issue IDs are linked. Changed rows and summary were
+rendered/reviewed. Complete user-story acceptance remains 6/253; the remaining
+247 are explicitly partial. Ruff F checks and CRLF-aware whitespace checks
+passed. A read-only Ruff F/I check also reported two import-order style findings
+in the new test module; those cosmetic edits were deferred to preserve the
+frozen full-regression/catalog snapshot. No functional failure was suppressed.
+
+## Saved-attempt decisions at both setup actions (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-255 | F227, related F226/F238 | Review mistakes called `_begin_session()` directly. With an interrupted practice, mock or mistake-review attempt, the setup button replaced the saved answers without Resume/Start again/Cancel. The pre-repair three-language matrix failed 27/27 (`tmp/review-resume-negative-20261015.log`). | Both setup actions use `_resolve_saved_attempt()`. Resume restores the existing mode/language/identity, Cancel preserves bytes, and explicit replacement proceeds to the requested new activity. An empty/unavailable mistake queue never replaces a saved attempt. |
+| BUG-256 | F238, related F227 | `clear_active_session()` intentionally swallows unlink errors for best-effort cleanup after a committed result. Start again relied on an exception and opened a new session even when a read-only Windows snapshot remained. Six actual read-only cases failed (`tmp/snapshot-restart-negative-20261015.log`). | After explicit replacement, verify the saved attempt is absent before starting. An unlink or verification-read refusal leaves setup and displays a distinct localized restart error with retry. Keep best-effort post-commit cleanup and its deduplication semantics. |
+
+The first BUG-255 repaired group passed **219/219** in
+`tmp/review-resume-first-20261015.log`. The extended diagnostic group reported
+**255 passed / 6 failed** because a new test indexed attempt_id on a deliberately
+legacy seeded history record without that optional key. Corrected that fixture
+to use `get`; it is not a product defect. A later broad focused run was cancelled
+after its old disposal integration test opened Review mistakes twice but did
+not answer the newly required confirmation on the second opening. Evidence:
+`tmp/session-guard-focused-cancellation-20261015.json`. Only the owned offscreen
+pytest process was terminated. The disposal fixture now explicitly resumes,
+asserts one confirmation, preserves the same attempt ID and still verifies
+both dialogs are disposed. The cancelled run is not a completed pass.
+
+The final code-derived F226/F227/F238 stories now state concrete setup,
+answer, history and recovery steps. The catalog's shared pytest/JUnit adapter
+executes **255** cases: 189 answer/scoring/export cases plus 66 setup-decision
+cases. The six real expiry/PDF cases from the prior probe are now permanent
+regressions. Eleven targeted story/startup/encoder checks passed with unchanged
+HEAD/sources and merged results in
+`tmp/session-guard-stories-20261015-evidence.json`. The new two-module matrix
+executed there includes actual Windows read-only file failures, verification
+interruption, cancellation, invalid bank IDs, saved-language resume and pending
+result retry. Message/file-picker choices are controlled; no native app windows
+or cameras are launched. Registered issue count is **213**. The full objective
+remains open. The earlier two import-order style findings are now corrected;
+Ruff F/I checks pass for both new test modules and ExamPracticeDialog.
+
+The full post-repair software regression completed **1342 passed**, exit 0,
+with unchanged sources/HEAD and one upstream ChromaDB warning:
+`tmp/session-guard-full-20261015-evidence.json`. The separate catalog replay
+is still running. A new independent topic-notation probe has uncovered three
+additional failures outside that suite (`tmp/topic-notation-expanded-negative-20261015.log`),
+so this checkpoint is not proof that every educational solution is correct.
+
+The source-frozen setup catalog then completed **253/253**, exit 0, unchanged
+HEAD/sources and merged results:
+`tmp/catalog-session-guard-final-20261015/evidence.json`.
+
+## Correct mathematical notation in generated worked steps (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-257 | F233, related F232/F228 | In two f-strings, `10^{-3}` / `10^{-1}` consumed braces as Python interpolation. The stored LaTeX became `10^-3` / `10^-1`; actual mathtext put the trailing digit on the baseline. A successful render did not prove the equation was correct. | Escape literal exponent braces in magnetic-force/photon substitutions. Check every generated worked step for ungrouped negative powers, independently recompute numeric values/units and typeset the corrected first/last examples. |
+| BUG-258 | F233, related F232/F228 | The generator took the left side of the nanometre unit identity as the unknown. For a supplied size other than 1 nm it generated a false equality such as 1 nm = 100 nm in metres. | Use length `l` in the substitution/result while retaining the valid 1 nm = 10^-9 m conversion rule. Keep all question inputs, choices, keys, IDs and review/source metadata unchanged. |
+
+Both the initial three-case probe and the expanded probe failed the three
+mathematical-contract cases before repair. The expanded probe also passed nine
+numeric/typesetting checks: `tmp/topic-notation-expanded-negative-20261015.log`.
+The real defective equation image is
+`tmp/topic-notation-expanded-negative-cases-20261015/test_first_and_last_worked_ste0/step-1.png`.
+Thus the earlier 1342-pass checkpoint had a confirmed content-coverage gap.
+
+The first repaired group passed **12/12** in
+`tmp/topic-notation-fixed-20261015.log`. The permanent module adds an all-2500
+step scan (13 cases total). Numeric checks independently reconstruct 300
+magnetic/photon/nanometre answers with Decimal from the English supplied data,
+then verify the rounded value and units in all three language choice sets and
+the final LaTeX value. Six render cases save 18 actual equation images without
+fallback. The generator catalog runs only the seven non-rendering cases; the
+worked-solution catalog runs all 13, preserving optional-Qt separation.
+
+An exact three-replacement byte edit preserved source newlines. The canonical
+JSON hash of every field except explanation/solution_latex is unchanged for
+all **2500** questions:
+`tmp/topic-notation-preservation-20261015.json`. This includes all prompts,
+choices, correct indices, language data and pending review/source metadata.
+No teacher approval or official-question status was invented. Registered issue
+count is now **215**. Full objective completion remains unproven.
+
+The final notation/explanation/result/bank group passed **50/50** in
+`tmp/topic-notation-final-20261015.log`. A fresh process forbidding both Qt
+bindings passed the seven generator/key cases with no Qt modules imported:
+`tmp/topic-generator-no-qt-20261015.json`. Twelve targeted story/startup/encoder
+checks passed with stable inputs and merged results in
+`tmp/topic-notation-stories-20261015-evidence.json`. The full post-functional-fix
+suite completed **1355 passed**, exit 0, one upstream ChromaDB warning and
+unchanged HEAD/sources (`tmp/topic-notation-full-20261015-evidence.json`). The
+catalog is still running. Subsequent work is limited to correcting inaccurate
+video-failure wording on four non-video story boundaries; application source
+will remain unchanged during that metadata correction.
+
+The notation catalog then completed **253/253**, exit 0, unchanged HEAD/sources
+and merged results (`tmp/catalog-topic-notation-final-20261015/evidence.json`).
+
+### BUG-253 follow-up: non-video failure descriptions
+
+The generic render selector also assigned missing/corrupt-video handling to
+F190 research-PDF fallback, F220 study-document PDF, F233 equation review and
+F247 language updates. Their four contract cases failed in
+`tmp/feature-failure-story-negative-20261015.log`. Explicit stories now describe
+the actual PDF backend chain/source-only result, deterministic document authoring
+and healing, readable-math fallback/early finish and locale/source-label fallback.
+This is the same existing BUG-253 metadata defect, not four invented application
+bugs. The permanent contract/reference group passed **7/7** in
+`tmp/boundary-story-fixed-20261015.log`.
+
+After the completed 1355-pass application run, only the tracker generator, its
+F165 harness adapter and two new metadata contract tests changed. All app,
+watchdog and workflow source hashes remain identical to that tested snapshot:
+`tmp/boundary-only-delta-20261015.json`. Those two new tests were checked
+separately; a full 1357-case run is not claimed. The ten-story final replay
+passed with unchanged sources and merged results in
+`tmp/boundary-stories-final-20261015-evidence.json`. F165 publication then passed
+with unchanged sources and merged results in
+`tmp/boundary-publication-final-20261015-evidence.json`. After the final timestamp
+refresh, independent integrity passes in
+`tmp/boundary-publication-final-audit-20261015.json`: 253 rows/stories/results/
+checks align and all **215** issue IDs are linked. Changed rows were rendered
+and reviewed; dates remain typed, and formula-error, Ruff F/I and whitespace
+checks pass. The separate full-completion gate explicitly rejects completion
+for 247 open acceptances (`tmp/boundary-completion-gate-20261015.json`). Complete
+story acceptance remains **6/253**. No native app windows were opened/closed.
+
+## Displayed-condition keys, database preservation and duplicate launch (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-259 | F232 | AC conditions explicitly supply sqrt(2) approximately 1.414, but keys used the exact square root. Independent Decimal checks found 62 keys outside four-significant-digit rounding tolerance. | Use the stated 1.414 in calculation and substitution in every language. |
+| BUG-260 | F232 | Repeated electrostatic/relativity inputs were displayed to four significant digits while calculations/substitutions used hidden five-digit values. Independent checks found 32 electrostatic and 13 relativity failures. | Normalize template inputs through the displayed numeric representation before calculation and substitution. Preserve prompts, IDs, key positions and review labels. |
+| BUG-261 | F254 | The SQLite sync deleted all rows outside the current bank and overwrote foreign rows with colliding IDs. | Validate an explicit managed-ID manifest and record ownership. Preserve unknown/custom rows; retire only previously managed removed IDs, retaining notes. Refuse collisions atomically. |
+| BUG-262 | F254 | INSERT OR REPLACE removed/reinserted question and metadata rows, erasing custom columns and cascading child notes. | UPSERT only source-controlled fields; preserve row identity, custom columns and foreign-key children. |
+| BUG-263 | F254 | A fresh database without physics_pages failed even though textbook indexing is optional for exercise synchronization. | Allow an absent corpus with empty reference candidates. Errors in an existing corpus still fail with rollback. |
+| BUG-264 | F254 | Candidate deduplication merged distinct physical books with identical filenames/page numbers. | Identify candidates by source path, filename and page, with deterministic ordering and explicit unreviewed labels. |
+| BUG-265 | F255; related F01/F04 | The user reported repeated windows. Read-only inspection found two PhysLab GUI processes plus an enabled Windows logon watchdog task; the GUI had no single-profile launch guard. Logs showed two launches, not a proven infinite crash loop. | Acquire a process-aware QLockFile before MainWindow import/QApplication construction. A duplicate exits 0, stopping its watchdog. Hold through the event loop, release on all exits, recover dead-process locks and distinguish storage errors. Preserve independent profiles. |
+
+The initial all-topic numeric probe failed three topic cases (107 bad keys) and
+passed 23 checks: `tmp/all-topic-keys-negative-20261015.log`. The initial four
+ownership/annotation/fresh-database probes and separate candidate-identity probe
+also failed. Current acceptance executes **40 generator/API cases** (all 2500
+conditions/keys/units in kk/ru/en) and **29 SQLite cases**, including real CLI,
+read-only retry, corrupt manifests, legacy migration, mid-write rollback and
+an actual process crash with hot-journal recovery. Teacher/curriculum/language
+approval is outside this software contract. Source-bound acceptance is stored
+through the canonical evidence validator, not inferred from counts alone.
+
+The expanded bank/runtime/policy/launch group passed **116/116** in
+`tmp/bank-launch-final-20261015.log`. The launch module initially failed all
+12 missing-guard cases; the completed module has **14 passing cases**, including
+the actual duplicate CLI with MainWindow imports forbidden. The startup/launch
+group passed **60/60** in `tmp/gui-instance-startup-final-20261015.log`.
+The policy fixtures do not constitute production acceptance. One intermediate
+policy run failed because its test tried inserting NULL into a NOT NULL
+metadata column; the fixture now explicitly constructs a nullable legacy table.
+The corrected 102-case bank/policy run passed. No visible windows were opened.
+
+Only 230 generated records changed choices/explanation/solution fields; the
+other 22 topics and all displayed conditions, IDs, answer positions and review
+metadata are preserved (`tmp/topic-condition-preservation-20261015.json`).
+The configured live SQLite database was backed up with SQLite's backup API,
+then all **2500** payloads were synchronized and compared to the current bank.
+The preflight also identified the documented legacy BUG-127 hydrostatic bank;
+its exact old generator was reconstructed before allowing replacement.
+Integrity/foreign-key checks pass, and schema, row IDs and every unrelated table
+hash are unchanged. Evidence and recoverable backup:
+`tmp/live-bank-repair-20261015-11a9fe45/evidence.json`. The first preflight
+attempts stopped before any write on unknown legacy data or unsupported rowid
+ordering; these were diagnostic-script repairs, not new product defects.
+
+A subsequent ten-story probe was not merged: settings.py and render_profile.py
+changed concurrently during execution, causing F253 to reject stale input
+certification (`tmp/bank-startup-current-20261015-evidence.json`). The changes
+were preserved. The prior stable F232/F254 execution passed in
+`tmp/practice-bank-contract-current-20261015-evidence.json`; its evidence must
+be renewed after later catalog/story edits before publication.
+
+The launch repair applies to future launches of the updated code. Existing
+unguarded GUI processes cannot adopt it and were not closed/restarted. The
+Windows scheduled task was not modified. Complete acceptance of the whole
+application remains open; green software checks do not close untested stories.
+
+### BUG-265 follow-up: malformed locks and resource-safe replay
+
+Two real empty/malformed-lock probes found that QLockFile reports LockFailedError
+for unreadable ownership too. The first guard silently claimed an existing GUI.
+Both cases failed in `tmp/gui-corrupt-lock-negative-20261015.log`. The guard now
+reads ownership before diagnosing a duplicate, retries once if the owner released
+during inspection, and otherwise reports the exact unreadable launch-lock path.
+It preserves the file. The completed guard module has **17** cases, including
+the release race. The final serial bank/policy/startup/guard group passed
+**165/165**, exit 0 with unchanged HEAD/sources:
+`tmp/bank-launch-serial-final-20261015-evidence.json`.
+
+The simultaneous broad regression/catalog and extra render transport probes
+exhausted Windows commit resources (WinError 1450 / pagefile-too-small DLL load /
+ONNX MemoryError); one observation PowerShell also stack-overflowed. The extra
+223-case group recorded **219 pass / 4 failure**, with process creation failures
+in the real render/worker tests. The full regression terminated with code
+3221226505 without a complete pytest summary, and the catalog terminated on
+MemoryError without final merge evidence. The acceptance retry likewise died
+before its results file existed. These are failed/incomplete diagnostics,
+not passing replays or newly established application bugs. Sources also changed
+during the broad run (incoming renderer edits plus the guard follow-up).
+
+Only the already-recorded current results remain published; the mixed/interrupted
+runs were not merged. The verified-owned pytest PID was checked before any
+cleanup action and was already terminal, so no process was killed. User windows
+and other applications were untouched. All later resource-intensive checks are
+run sequentially. A new complete current-tree regression/catalog replay remains
+required; the full goal is not declared complete.
+
+The final nine-story serial acceptance replay passed with unchanged HEAD/sources
+and merged results (`tmp/bank-launch-serial-contracts-20261015-evidence.json`).
+The isolated profile/transport retry then passed **58/58**, including all four
+previous process-creation failures, with unchanged HEAD/sources:
+`tmp/render-profile-serial-retry-20261015-evidence.json`. This supports the
+resource-exhaustion diagnosis for that intermediate group, while the required
+fresh full application replay remains open.
+
+## Incoming UNT scene policy: scaffold truth and conditional letters (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-266 | F256 | The newly added topic-agnostic UNT storyboard inserted v=v0+at, 12 m and answer B even for a circuit prompt, and described generated practice as an official task without provenance. The model response could also self-declare a verified source status. | Remove task-specific equations/numbers/keys from the scaffold. Preserve the five legacy act names/weights while visible labels and directing/codegen instructions identify unverified practice. The directing result is stamped practice_scaffold_unverified independently of model claims. Supplied problem/solution data remain in the actual request. |
+| BUG-267 | F256 | UNT prompts and gates demanded a letter for every numeric task although no choices/key were supplied. The old global A-E regex also accepted ampere unit A as an answer letter. | Make letters conditional on supplied choices/key. Generic numeric tasks require a supplied numeric answer with units. A structured caller may opt into the stricter labelled-letter check, which does not accept a trailing unit A. |
+
+The expanded negative probe failed **5/21** cases and passed 16, with unchanged
+HEAD/sources (`tmp/unt-scene-policy-expanded-negative-20261015-evidence.json`).
+The current module covers four duration-scaled five-act/eight-beat schedules,
+source-neutral scaffolding, actual directing request capture with a controlled
+client, refusal of model self-certification, numeric/choice task gates,
+chapter/config/portrait rules and nine UNT/cinematic duration boundaries.
+The initial repaired policy/segmentation group passed **40/40**, unchanged
+HEAD/sources (`tmp/unt-scene-policy-current-20261015-evidence.json`).
+
+The wider first run recorded 94 pass / 1 failure using a legacy controlled
+_generate_remote fixture that did not accept the new unt_mode keyword. The
+fixture was updated in the shared tree while that process still held its old
+imported copy. Its source snapshot changed and that run is not a certification
+of the current tree (`tmp/unt-scene-policy-final-20261015-evidence.json`).
+One earlier command selected a nonexistent test_scene_validation.py and ran
+no tests; it is not counted as a result. A fresh wider replay is required.
+
+These policies and textual gates do not verify model compliance, every physical
+unit, the actual rendered layout, official-source authenticity or complete
+cloud video/audio playback. F256 remains separate from final pedagogical/media
+acceptance; the existing eight complete contracts are not expanded by inference.
+
+The fresh wider replay passed **95/95**, exit 0 with unchanged HEAD/sources:
+`tmp/unt-policy-current-regression-20261015-evidence.json`. The final ten-story
+acceptance/startup/launch/UNT replay also passed with unchanged sources and
+merged results (`tmp/unt-bank-launch-contracts-final-20261015-evidence.json`).
+There are now **256** inventoried stories and **224** linked issue IDs.
+
+F256 visual citation review also caught the existing BUG-250 attribution pattern:
+unqualified storyboard() selected SceneCandidate.storyboard (line 49) instead of
+the runtime duration policy. Its new source-scope case failed before repair
+(`tmp/unt-citation-negative-20261015-evidence.json`: 4 pass / 1 failure, stable
+sources). The story now names SceneGenerator.storyboard and the actual duration/
+repair helpers explicitly. This is a follow-up to the existing metadata issue,
+not another invented application defect.
+
+The corrected reference/CLI/UNT group passed **29/29**, exit 0 with unchanged
+HEAD/sources (`tmp/unt-citation-final-20261015-evidence.json`). The runtime
+citation now points to _duration_contract_delta rather than the unrelated
+SceneCandidate field. No additional teaching approval is inferred.
+
+## Concurrent issue-ID collision and catalog-adapter follow-ups (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-271 | F165 | Parallel edits reused BUG-266/267 for unrelated fixture defects. Two Python dictionary keys silently replaced the previously registered UNT feature links, and the standalone audit deduplicated issue rows into a set. Newly documented BUG-268 was also unlinked. | Preserve the original UNT IDs, assign the colliding fixture records unique BUG-269/270 IDs, link BUG-268, and make the audit reject both duplicate issue-table definitions and duplicate literal mapping keys. |
+| BUG-272 | F165 | The tracker acceptance verifier required `phase4_status == PASS` for every story, but the phase-4 field exists only on the newer catalog rows. A fresh full catalog pass dropped that field on legacy rows, so all eight current, source-bound acceptance matrices were downgraded to PARTIAL despite still verifying successfully. | Treat an absent phase field as legacy schema; continue rejecting every explicit non-PASS phase. Add a regression proving legacy rows can retain acceptance only when their current catalog result, contract, complete scenario matrix and source hashes all pass. |
+| BUG-273 | F165 | The first compatibility adjustment treated an explicit JSON `null` phase field as absent, which could allow a completed evidence matrix to bypass an intentionally unset phase. | Check whether the field is present separately from its value: absent legacy fields are compatible; every present value other than `PASS` blocks acceptance. `test_explicit_null_phase_is_not_a_legacy_absent_field` locks this distinction. |
+| BUG-274 | F06 | The tracker described the LLM timeout ceiling as 900 seconds and stale policy prose implied an explicit timeout could be raised to a hidden model floor, while runtime supports 5–1800 seconds and treats an explicit value as authoritative. | Align the story and policy docstring with the 5–1800 second clamp, per-pathway defaults, and explicit-timeout behavior. The F06 matrix checks actual boundaries and settings propagation. |
+| BUG-275 | F10 | Settings could name Ollama from a saved preset, model label or loose URL substring even when the resolved endpoint was different. | Classify the resolved endpoint by parsed scheme/hostname/port, including OpenAI's default endpoint; never infer endpoint identity from the model/preset or expose keys. `tests/test_provider_origin_labels.py` covers the matrix. |
+
+Both new integrity cases failed before repair; three existing CLI cases passed,
+with stable HEAD/sources (`tmp/issue-registry-collision-negative-20261015-evidence.json`).
+BUG-269 is the launch-refactor catalog adapter, BUG-270 is the UNT keyword fake
+adapter, and BUG-268 is the voice-timing lint stub. Their actual fixture/code
+changes were preserved. Historical outputs containing the colliding numbers
+remain diagnostic evidence; the canonical registry now assigns unique meanings.
+These are harness/metadata issues rather than additional physical-content
+defects. Targeted current retests and publication are required before closing
+their software status.
+
+## Settings persistence and acceptance follow-up (15 October 2026)
+
+| ID | Stories | Reproduced issue | Repair |
+| --- | --- | --- | --- |
+| BUG-276 | F08 | `provider_source` omitted URL-only environment overrides and legacy DASHSCOPE/model/URL fields; a saved Ollama preset could obscure higher-tier saved values. The expanded matrix failed on the real legacy-file source; a second focused case failed on preset priority. | Preserve independent per-field precedence, summarize the highest tier actually used, and keep exact `api_key_source` separate. No credential/endpoint/model values are changed by the label repair. |
+| BUG-277 | F165, F06–F08 | The incoming settings acceptance runner discarded its JUnit report, trusted listed PASS checks and hashed the generated CSV contract. The verifier could therefore accept a matrix without checking its executed cases or runtime. | Bind current code-derived contracts, retain exact-node JUnit/log/hook artifacts, verify their hashes, modules, failures/skips, command and runtime, and apply the same verification on cache reuse. Run without Qt imports or network. |
+| BUG-278 | F10 | After BUG-275's endpoint-identity fix, the catalog still demanded DashScope for the owned `dashscope.example` URL. The targeted catalog recorded F06/F07/F08 PASS and F10 FAIL with unchanged sources. | Correct the fixture expectation to a generic compatible endpoint; continue asserting the Qwen model and exact key source. The independent provider matrix covers real hostnames and misleading substrings. |
+
+Negative evidence: `tmp/settings-expanded-negative-20261015-evidence.json`
+(20 pass / 1 failure), `tmp/provider-tier-label-negative-20261015-evidence.json`
+(the preset case failed), and
+`tmp/settings-expanded-acceptance-20261015-evidence.json` (three story passes,
+one stale fixture failure). After BUG-276 the settings/persistence/provider/UI
+group passed **83/83**, with unchanged HEAD/sources:
+`tmp/settings-expanded-fixed-20261015-evidence.json`. Policy hardening passed
+**179/179**, including synthetic rejection fixtures that are never used as
+production acceptance: `tmp/settings-evidence-policy-final-20261015-evidence.json`.
+
+The reviewed backend matrices execute 17 F06 cases, 26 F07 cases and 18 F08
+cases. F07 includes real fresh-process reload, abrupt process termination,
+Windows read-only and share-delete refusals, four staged-write failures and
+threaded merges. It does not claim cross-process concurrent merging or native
+Settings-dialog acceptance; those UI journeys remain F10. Current complete
+replay and publication results are recorded separately below when terminal.
+
+## Incoming Spider integration (15 October 2026)
+
+The attempted complete regression run finished **1629 pass / 1 failure** in
+668.46 seconds. Five files changed during the run as the shared worktree gained
+Spider. This is diagnostic evidence, not a current-tree clean pass:
+`tmp/settings-complete-full-serial-20261015-evidence.json`. Its failure found
+raw model temperatures in the incoming service. No application was opened,
+closed, restarted or photographed by this audit.
+
+| ID | Stories | Observed defect | Repair / remaining scope |
+| --- | --- | --- | --- |
+| BUG-279 | F257 | Incoming synchronous Spider called async completions without awaiting; raw 0.1 temperatures bypassed model policy. | Preserve the concurrent contributor's awaited/closing adapter; derive pathway and temperature from the actual selected vision or repair model. |
+| BUG-280 | F257 | Empty, invalid, missing or string-valued has_error diagnoses became a clean-screen result. | Require a boolean; reject truncated replies. Controlled malformed replies must fail without changes. |
+| BUG-281 | F258 | Only +++ file headers were validated. Extra deletion, binary, mode or rename sections could escape the list of backed-up/compiled targets. | Validate every diff section and matching source/destination headers before mutation; refuse unsupported operations and duplicate/traversal targets. |
+| BUG-282 | F258 | Backup folders used only second-resolution timestamps, allowing two repairs to reuse and overwrite a backup. | Add a unique operation suffix. An actual temporary Git test freezes the timestamp and verifies two distinct original backups and syntax rollback. |
+| BUG-283 | F259 | The UI discarded BackgroundTask's cancellation event. The service could continue into source lookup/repair after cancellation. | Forward the event; check before scanning and between diagnosis/source/repair steps. Interruption during an already running Git command and complete app shutdown recovery remain open. |
+| BUG-284 | F259 | Any unrepaired result displayed the localized no-visible-error status, including a diagnosed error without a safe repair. | Show its actual summary; three offscreen locale cases verify no false clean status. Complete result localization remains open. |
+| BUG-285 | F260, F257 | Ruff, ripgrep and Git calls omitted CREATE_NO_WINDOW policy and could flash consoles repeatedly during Watch/crawl. | Use the existing subprocess_kwargs policy for all four tool boundaries. Controlled Ruff verifies the Windows creation flag; no native scan was run. |
+
+Initial owned probes recorded 14 failures and unawaited-coroutine warnings
+(`tmp/spider-incoming-negative-20261015-evidence.json`). One was a fixture
+problem: Git inherited the enclosing repository and skipped a nested scratch
+patch. The corrected fixture initializes its own temporary repository; that
+initial scratch failure is not claimed as a production patch failure.
+The corrected Spider group plus model-policy regression passed **22/22**,
+unchanged HEAD/sources (`tmp/spider-all-contracts-20261015-evidence.json`).
+The controlled tests send no user screenshots or network requests and never
+apply model patches to the actual project. F257–F260 inventory the incoming
+features; all remain partial story acceptance. Syntax-only repair checking is
+not runtime correctness. Timed-exam isolation, long-running Git interruption,
+actual providers, native layout/Watch and real Ruff failure recovery are still
+required. BUG-278 additionally reproduced the old F128 preset-source assertion
+(`tmp/provider-preset-adapter-negative-20261015-evidence.json`); the adapter now
+checks the saved-model source separately from the effective Ollama endpoint.
+
+BUG-281 follow-up: checking complete `diff --git` blocks still missed a trailing
+traditional unified section with no `diff --git` line. An actual temporary Git
+repository reproduced deletion of an unrelated owned file while the function
+reported only the permitted Python target. Evidence includes the exact service
+hash: `tmp/spider-traditional-git-negative-20261015.json`. Validation now counts
+all source/destination headers throughout each block, before any backup or Git
+mutation. The same owned-repository probe now rejects the patch and preserves
+the unrelated file (`tmp/spider-traditional-git-fixed-20261015.json`). The
+existing regression cases include this variant without changing their count.
+No real project file was used as the deletion target. This necessary repair
+changed source during the catalogue replay; its eventual output must remain
+diagnostic and cannot be promoted as a stable whole-tree replay.
+
+New Spider row review also replaced the broad generic offscreen-widget scope
+with each row's actual owned-probe note and specific remaining verification.
+The patch story now cites `_patch_paths`, `_apply_patch` and the subprocess
+policy directly. This does not add native GUI evidence.
+
+| ID | Stories | Observed defect | Repair |
+| --- | --- | --- | --- |
+| BUG-286 | F133, F257, F260 | The diagnostic catalogue completed 259/260 and found four Spider text subprocess calls without explicit UTF-8/replacement decoding. Locale-dependent decoding could break Kazakh/Cyrillic source paths and diagnostics. | Set encoding/errors consistently on Ruff, ripgrep and both Git calls. A real ripgrep probe uses an owned Kazakh directory and source text; option-looking search terms remain literal. |
+
+`tmp/catalog-spider-settings-20261015/evidence.json` records terminal exit 1,
+F133 as the sole failure and the three files changed during that run. Its
+results were not merged. The explicit decoding check is rerun after repair;
+the preceding 259 passes do not certify the changed complete source tree.
+
+The final affected settings/Spider/acceptance-policy/provider/reference group
+passes **231/231**, with unchanged HEAD/sources:
+`tmp/spider-settings-scope-current-20261015-evidence.json`. The preceding
+230-pass/1-failure run was a new test-fixture error: the fixture supplied a
+one-row catalogue to an API that updates the entire defect registry. It now
+uses an owned copy of the complete list; this was not an application defect.
+The final source-reference test verifies the actual validator/apply and
+subprocess-helper definitions, and the scope test rejects invented widget or
+signal execution for callback-only probes.
+
+| ID | Stories | Observed defect | Repair |
+| --- | --- | --- | --- |
+| BUG-287 | F259, F257 | A source-only edit was described as fixing the visible live error while the running UI still held imported old code; Watch kept scanning that old state and could propose repeated repairs. | Pause Watch on a successful source patch and explicitly say that restart is required in kk/ru/en. Do not restart the user's app automatically. |
+
+The three callback-locale cases failed before repair with unchanged sources
+(`tmp/spider-source-restart-feedback-negative-20261015-evidence.json`). This
+fix clarifies source versus running state; it does not certify the generated
+patch as a correct runtime fix or reload the user's application.
+
+Current publication: **18/18** affected stories passed with unchanged sources
+(`tmp/spider-current-contract-publication-20261015-evidence.json`). After the
+last feedback repair, **29/29** Spider/reference checks and F133/F257–F260 pass
+again, source-stable. F165 was rerun after export and passes. The canonical
+workbook contains 260 stories, 110 FIXED / 150 PASS scoped results and
+11 complete / 249 partial acceptances. All 244 unique issues are linked. Final
+integrity and surface audits pass; the full-behaviour gate correctly remains
+closed. Complete regression/catalogue replay on the final tree remains to be
+confirmed by the new serial run; earlier broad diagnostic failures are retained.
+
+## Teacher chronology, nine-item rail and numeric plot contracts (15 October 2026)
+
+The final serial full regression reached a terminal **1652 pass / 2 failures**
+in 438.32 s, with unchanged HEAD/sources
+(`tmp/spider-final-full-serial-20261015-evidence.json`). The controller stopped
+before starting its catalogue stage. The failures were a clock-sensitive
+teacher-review fixture and the new ninth sidebar item's short-window layout.
+
+| ID | Stories | Reproduced problem | Repair |
+| --- | --- | --- | --- |
+| BUG-288 | F240 | The fixture expected two real-time attempts in a fixed order, failing when their timestamps crossed a second. | Use fixed, distinct completion instants while retaining all school/privacy/event assertions. This was a test defect. |
+| BUG-289 | F240 | Actual ISO timestamp strings with different offsets were ordered lexically rather than chronologically; equal instants depended on input order. | Normalize instants to UTC for sorting, assume UTC for legacy naive values, break ties by name/class and preserve the original display strings. |
+| BUG-290 | F75 | Nine initially tall buttons raised the layout's minimum height above the density threshold, so the short rail could not enter dense mode or shrink again after expansion. | Bootstrap density, remove the circular height constraint and fit 40px tight rows/header spacing. Test compact/expanded rails in kk/ru/en through repeated 900/460/640/460 sizes and the ninth button's emitted index. |
+| BUG-291 | F27 | Allowed NumPy functions accepted arbitrary arity; `sin(t,t)` used the second argument as an output array and mutated the shared grid. Bare function values also compiled and failed later. | Require exactly one function argument and reject bare function objects before evaluation. |
+| BUG-292 | F27 | Runtime fields could replace functions/undeclared constants, and unused invalid values broke unrelated curves. | Bind only used declared numeric parameters; protect functions/t, ignore extra fields, retain declared physics-coefficient overrides and report missing/invalid parameters as ExprError. |
+| BUG-293 | F28, F29 | Huge integer literals, endpoints and marker values escaped numeric validation as raw OverflowError; computed complex output escaped as TypeError. | Convert these failures to explicit ExprError while retaining supported real inf/nan domain behaviour. |
+| BUG-294 | F29 | Invalid falsy parametric x values, including numeric zero, became x=t in both payload forms. | Preserve only missing/None/empty-string defaults; invalid non-string expressions cannot silently change the curve. String "0" still creates a vertical trajectory. |
+| BUG-295 | F28 | A capped range beginning at a huge float could round its upper bound back onto its lower bound, yielding a zero-span plot. | Reject a capped interval that cannot be represented as finite ascending bounds. |
+| BUG-296 | F259 | An undocumented `AETHERLAB_SPIDER_CRAWL=1` launch flag automatically opened Spider and began crawling the project, contrary to the explicit opt-in story. | Remove the hidden startup hook. Keep the dock and crawl available through their explicit UI actions, and verify that the legacy environment variable no longer changes startup. |
+| BUG-297 | F230/F259 | In a native Kazakh session, the dashboard was translated but the persistent startup status said “PhysLab ready · No API key”; provider, Ollama and Spider-ready status copy also had English-only paths. | Localize provider-ready, settings-saved, local-Ollama and explicit Spider-ready status messages in kk/ru/en. Retranslate the active provider-ready status when the learner switches language; verify startup remains Spider-closed even with the legacy flag. |
+| BUG-298 | F230 | The new Ollama status regression test inherited the workstation's provider/model environment. `_enable_ollama()` correctly reloaded the configured MiniMax model, so the test failed while expecting its synthetic `qwen-local` model. | Clear provider, model and endpoint environment aliases inside the isolated test profile. Keep workstation settings untouched; rerun the localized status interaction for kk/ru/en. |
+
+The teacher/rail negative run recorded **2 failures / 3 pass** with unchanged
+sources (`tmp/teacher-offset-negative-20261015-evidence.json`). After repair,
+the teacher/layout/school-recovery group passes **26/26**
+(`tmp/teacher-sidebar-fixed-20261015-evidence.json`). The pure numeric
+investigation is retained in `tmp/plot-contract-investigation-20261015.json`;
+it never uses user data, Qt or network. Its initial formal matrix recorded
+**8 failures / 8 pass**, source-stable
+(`tmp/plot-contract-negative-20261015-evidence.json`). All **16 groups** pass
+after repair (`tmp/plot-contract-fixed-20261015-evidence.json`). These groups
+contain independent scalar-math oracles, every allowed function/arity/operator,
+AST/length limits, namespaces/shapes, an actual bounded power subprocess and
+legacy/multi-curve/range/fill/marker checks. A wider affected group including
+synthetic acceptance policy cases passes **218/218**, source-stable
+(`tmp/plot-matrix-policy-20261015-evidence.json`).
+
+F27/F28/F29 acceptance is confined to the pure compiler/payload software
+contracts. It does not certify native canvas layout, student lesson correctness
+or all downstream rendering. Real execution/JUnit, NumPy binary/version,
+Python/runtime, current story and source bindings are required before promotion.
+
+The final affected group passes **225/225**, unchanged HEAD/sources
+(`tmp/plot-teacher-sidebar-current-20261015-evidence.json`); selected F/I lint
+also passes. The 23 current affected story probes pass and were merged only
+after their source-stability check
+(`tmp/plot-current-contracts-final-20261015-evidence.json`). Final oracle
+coverage explicitly requires a scalar oracle for every allowed function and
+constant, includes signed/zero samples and identity-result isolation. This
+plot/policy group passes **68/68**, source-stable
+(`tmp/plot-oracle-coverage-final-20261015-evidence.json`). The three actual
+isolated plot matrices are rerun after this coverage expansion; broad
+regression/catalogue replay on the resulting final tree is still required.
+
+A second old two-argument lint stub was then reproduced in
+test_a_scene_that_misses_its_scheduled_length_is_repaired: the current adapter
+group recorded **93 pass / 1 failure**, unchanged sources. Its context-compatible
+repair was preserved from the shared tree. The complete current registry/
+reference/voice-timing/bugcheck group now passes **94/94**, exit 0 with unchanged
+HEAD/sources (`tmp/registry-adapters-final-20261015-evidence.json`). Duplicate
+definitions are absent and all **228** issue IDs have unique meanings. The
+earlier 224-ID counts preceded this collision reconciliation.
+
+## Spider startup opt-in correction (15 October 2026)
+
+BUG-296 was reproduced from the current launch command: its PowerShell parent
+sets `AETHERLAB_SPIDER_CRAWL=1` before running `python -m aetherlab`. The app
+then revealed the Spider dock after startup and began a source crawl. Process
+inspection found one PhysLab GUI process and no watchdog restart loop; the
+extra panel came from a hidden startup hook, outside F259's explicit opt-in
+story. The hook is removed, and F259 now says Spider starts closed and opens
+through navigation. The running app was not restarted, so this takes effect
+the next time PhysLab launches.
+
+The focused launcher regression passes **19/19** offscreen. The current F259
+story probe passes five Spider feedback/cancellation cases plus two startup
+and dock opt-in cases with unchanged source hashes during execution:
+`tmp/spider-startup-final-ui-20261015-evidence.json`. These checks use fake or
+offscreen windows and do not capture a screen or contact a provider.
+
+### Acceptance harness count mismatch (15 October 2026)
+
+The first 260-story replay marked F255 FAIL because its wrapper still required
+pytest to print `17 passed`, while the shared launch test file now collected
+19 cases after two Spider startup checks were added. Pytest reported 19 passed;
+no launch-lock assertion failed. F255 now excludes those Spider-only cases,
+which F259 runs explicitly. The retest passes all 17 F255 launch cases and
+all 7 F259 checks with unchanged source hashes:
+`tmp/instance-guard-retest-current-20261015-evidence.json`. The initial catalog
+result remains preserved at `tmp/all-story-catalog-current-20261015/evidence.json`.
+
+## Kazakh/Russian startup status mismatch (15 October 2026)
+
+A native isolated launch showed the Kazakh dashboard with the English status
+“PhysLab ready · No API key.” The same status copy was hard-coded in provider
+setup and Spider-ready paths. BUG-297 adds localized status text and retranslates
+the current provider-ready message when the selected language changes. The F230
+story now includes the main-window status surface and its test. Focused offscreen
+coverage passes for startup and explicit Spider opening in kk/ru/en; the same
+three-language interaction is included in the F230 replay.
+
+The first extended run of that interaction exposed BUG-298: the test supplied a
+synthetic Ollama model but let the workstation provider environment override
+the isolated profile after `_enable_ollama()` reloaded settings. The test now
+clears provider/model/endpoint aliases before constructing each isolated
+profile. The focused interaction passes with the test's selected local model.
